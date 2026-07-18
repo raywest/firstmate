@@ -708,7 +708,7 @@ SH
 }
 
 test_arm_waits_for_peer_beacon_after_child_stands_down() {
-  local dir state fakebin armout peer beater identity armpid status i
+  local dir state fakebin armout peer identity armpid status i
   dir=$(make_case arm-peer-startup-race)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -722,20 +722,27 @@ test_arm_waits_for_peer_beacon_after_child_stands_down() {
   printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
   printf '%s\n' "$WATCH" > "$state/.watch.lock/watcher-path"
   printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
-  (
-    sleep 1
-    touch "$state/.last-watcher-beat"
-  ) &
-  beater=$!
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=1 FM_ARM_ATTACH_POLL=0.1 "$WATCH_ARM" > "$armout" &
   armpid=$!
+  # Synchronize on the owned child declining the live peer lock before making
+  # the peer healthy. Sleeping for the same one-second budget as the arm made
+  # this regression fixture race the confirmation deadline under full-suite
+  # load, rather than testing the intended successor-handshake boundary.
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: already running pid $peer" "$state"/.watch-arm-output.* 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: already running pid $peer" "$state"/.watch-arm-output.* 2>/dev/null \
+    || fail "arm child did not stand down behind the peer watcher"
+  touch "$state/.last-watcher-beat"
   i=0
   while [ "$i" -lt 80 ]; do
     grep -qF "watcher: attached pid=$peer" "$armout" 2>/dev/null && break
     sleep 0.1
     i=$((i + 1))
   done
-  wait "$beater" 2>/dev/null || true
   grep -qF "watcher: attached pid=$peer" "$armout" || fail "arm did not wait for and attach to the peer watcher: $(cat "$armout")"
   ! grep -qF 'watcher: FAILED' "$armout" || fail "arm falsely reported FAILED during peer startup race"
   is_live_non_zombie "$armpid" || fail "arm exited while the peer was still healthy"
