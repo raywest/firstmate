@@ -114,6 +114,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
@@ -200,6 +202,9 @@ fi
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
+KIMI_CONFIG_LOCK=
+KIMI_CONFIG_LOCK_HELD=0
+KIMI_CONFIG_SNAPSHOT=
 
 parse_orca_worktree_result() {
   local raw=$1 rest
@@ -220,6 +225,14 @@ parse_orca_worktree_result() {
 
 orca_spawn_abort_cleanup() {
   local status=$?
+  if [ -n "$KIMI_CONFIG_SNAPSHOT" ]; then
+    mv -f "$KIMI_CONFIG_SNAPSHOT" "$KIMI_CONFIG" 2>/dev/null || rm -f "$KIMI_CONFIG_SNAPSHOT"
+    KIMI_CONFIG_SNAPSHOT=
+  fi
+  if [ "$KIMI_CONFIG_LOCK_HELD" -eq 1 ]; then
+    fm_lock_release "$KIMI_CONFIG_LOCK"
+    KIMI_CONFIG_LOCK_HELD=0
+  fi
   [ "$ORCA_ABORT_CLEANUP" = 1 ] || return "$status"
   ORCA_ABORT_CLEANUP=0
   if [ -n "${ORCA_TERMINAL:-}" ]; then
@@ -375,12 +388,14 @@ launch_template() {
 case "$ARG3" in
   *' '*)  # raw launch command (unverified-adapter escape hatch)
     LAUNCH=$ARG3
+    LAUNCH_SOURCE=raw
     HARNESS=""
     for word in $LAUNCH; do
       case "$word" in [A-Za-z_]*=*) continue ;; *) HARNESS=$(basename "$word"); break ;; esac
     done
     ;;
   '')
+    LAUNCH_SOURCE=template
     # No explicit harness: resolve from config. A secondmate AGENT launches on the
     # secondmate harness (config/secondmate-harness -> config/crew-harness -> own);
     # every other kind uses the crew harness only when no dispatch profile file is
@@ -403,6 +418,7 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: no launch template for harness '$HARNESS' (from $harness_src or detection); pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
   *)
+    LAUNCH_SOURCE=template
     HARNESS=$ARG3
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
@@ -414,18 +430,20 @@ esac
 # turn-end hook were validated against tmux bracketed paste and a live crewmate
 # supervision cycle, nothing else. Refuse loudly instead of launching a shape
 # no evidence covers (harness-adapters skill, kimi section).
-case "$HARNESS" in
-  kimi*)
-    if [ "$KIND" = secondmate ]; then
-      echo "error: kimi is verified for crewmate/scout duty only; a kimi --secondmate launch is unverified. Pick a verified secondmate harness (claude|codex|opencode|pi|grok)." >&2
-      exit 1
-    fi
-    if [ "$BACKEND" != tmux ]; then
-      echo "error: kimi spawns are verified on the tmux backend only (post-launch brief delivery uses tmux bracketed paste); backend=$BACKEND is unverified for kimi." >&2
-      exit 1
-    fi
-    ;;
-esac
+if [ "$LAUNCH_SOURCE" = template ]; then
+  case "$HARNESS" in
+    kimi*)
+      if [ "$KIND" = secondmate ]; then
+        echo "error: kimi is verified for crewmate/scout duty only; a kimi --secondmate launch is unverified. Pick a verified secondmate harness (claude|codex|opencode|pi|grok)." >&2
+        exit 1
+      fi
+      if [ "$BACKEND" != tmux ]; then
+        echo "error: kimi spawns are verified on the tmux backend only (post-launch brief delivery uses tmux bracketed paste); backend=$BACKEND is unverified for kimi." >&2
+        exit 1
+      fi
+      ;;
+  esac
+fi
 
 KIMI_HOME_DIR=
 KIMI_CONFIG=
@@ -544,6 +562,26 @@ effort_flag_for_harness() {
 
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+acquire_kimi_config_lock() {
+  local attempt=0
+  while [ "$attempt" -lt 100 ]; do
+    if fm_lock_try_acquire "$KIMI_CONFIG_LOCK"; then
+      KIMI_CONFIG_LOCK_HELD=1
+      return 0
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  echo "error: kimi config.toml turn-end hook lock remained held for 5s; spawn aborted" >&2
+  return 1
+}
+
+release_kimi_config_lock() {
+  [ "$KIMI_CONFIG_LOCK_HELD" -eq 1 ] || return 0
+  fm_lock_release "$KIMI_CONFIG_LOCK"
+  KIMI_CONFIG_LOCK_HELD=0
 }
 
 resolved_existing_dir() {
@@ -1142,20 +1180,31 @@ touch "$t" 2>/dev/null || true
 exit 0
 EOF
       chmod +x "$KIMI_HOOKS_DIR/fm-turn-end.sh"
+      KIMI_CONFIG_LOCK="$KIMI_CONFIG.fm-prehook.lock"
+      acquire_kimi_config_lock || exit 1
       if ! grep -qF "hooks/fm-turn-end.sh" "$KIMI_CONFIG"; then
-        cp "$KIMI_CONFIG" "$KIMI_CONFIG.fm-prehook-backup"
+        KIMI_CONFIG_SNAPSHOT=$(mktemp "$KIMI_CONFIG.fm-prehook.XXXXXXXXXXXX")
+        if ! cp "$KIMI_CONFIG" "$KIMI_CONFIG_SNAPSHOT"; then
+          rm -f "$KIMI_CONFIG_SNAPSHOT"
+          KIMI_CONFIG_SNAPSHOT=
+          exit 1
+        fi
         {
           printf '\n# firstmate-owned turn-end hook: a token-guarded no-op for every kimi\n'
           printf '# session firstmate did not launch (see fm-turn-end.sh next to config.toml).\n'
           printf '[[hooks]]\nevent = "Stop"\ncommand = "bash %s"\ntimeout = 5\n' "$(shell_quote "$KIMI_HOOKS_DIR/fm-turn-end.sh")"
         } >> "$KIMI_CONFIG"
         if ! kimi doctor >/dev/null 2>&1; then
-          mv "$KIMI_CONFIG.fm-prehook-backup" "$KIMI_CONFIG"
+          mv "$KIMI_CONFIG_SNAPSHOT" "$KIMI_CONFIG"
+          KIMI_CONFIG_SNAPSHOT=
+          release_kimi_config_lock
           echo "error: kimi rejected config.toml after the firstmate turn-end hook append; config restored from backup, spawn aborted" >&2
           exit 1
         fi
-        rm -f "$KIMI_CONFIG.fm-prehook-backup"
+        rm -f "$KIMI_CONFIG_SNAPSHOT"
+        KIMI_CONFIG_SNAPSHOT=
       fi
+      release_kimi_config_lock
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
       exclude_path '.fm-kimi-turnend'
       ;;

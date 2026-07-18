@@ -93,6 +93,18 @@ run_kimi_spawn() {
     "$SPAWN" "$id" "$proj" kimi "$@" 2>&1
 }
 
+run_raw_kimi_spawn() {
+  local home=$1 proj=$2 wt=$3 fakebin=$4 kimi_home=$5 id=$6
+  shift 6
+  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_FAKE_TMUX_LOG="${FM_FAKE_TMUX_LOG:-/dev/null}" \
+    KIMI_CODE_HOME="$kimi_home" PATH="$fakebin:$PATH" \
+    "$SPAWN" "$id" "$proj" "$@" 2>&1
+}
+
 test_kimi_preflight_refuses_before_task_resources() {
   local rec case_dir home proj wt fakebin kimi_home id out status log
   rec=$(make_spawn_case preflight-cli)
@@ -306,6 +318,84 @@ EOF
   pass "kimi spawn on a non-tmux backend is refused loudly"
 }
 
+test_raw_kimi_scope_gates_are_exempt() {
+  local rec case_dir home proj wt fakebin kimi_home id out status
+  rec=$(make_spawn_case raw-scope)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  out=$(run_raw_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" "kimi --yolo")
+  status=$?
+  expect_code 0 "$status" "a raw kimi launch should retain kimi hook and brief behavior: $out"
+  assert_contains "$out" "spawned $id harness=kimi" "raw kimi launch did not report success"
+  assert_grep 'hooks/fm-turn-end.sh' "$kimi_home/config.toml" "raw kimi launch did not install the turn-end hook"
+
+  rec=$(make_spawn_case raw-secondmate)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
+    KIMI_CODE_HOME="$kimi_home" PATH="$fakebin:$PATH" \
+    "$SPAWN" "$id" "kimi --yolo" --secondmate 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "raw kimi --secondmate should proceed to normal secondmate validation"
+  assert_contains "$out" "no firstmate home supplied or registered" "raw kimi --secondmate did not reach normal validation"
+  assert_not_contains "$out" "crewmate/scout duty only" "raw kimi --secondmate hit the template-only scope gate"
+
+  rec=$(make_spawn_case raw-backend)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  out=$(run_raw_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" "kimi --yolo" --backend zellij)
+  status=$?
+  [ "$status" -ne 0 ] || fail "raw kimi on zellij should reach normal backend handling"
+  assert_not_contains "$out" "tmux backend only" "raw kimi on zellij hit the template-only scope gate"
+  assert_contains "$out" "backend=zellij selected" "raw kimi on zellij did not reach backend handling"
+  pass "raw kimi launches bypass template-only scope gates"
+}
+
+test_kimi_config_lock_waits_and_reclaims_stale_locks() {
+  local rec case_dir home proj wt fakebin kimi_home id lock out_file pid status dead
+  rec=$(make_spawn_case config-lock-held)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  lock="$kimi_home/config.toml.fm-prehook.lock"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" . "$ROOT/bin/fm-wake-lib.sh"
+  fm_lock_try_acquire "$lock" || fail "could not hold the kimi config lock"
+  out_file="$case_dir/locked.out"
+  run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" > "$out_file" &
+  pid=$!
+  sleep 0.2
+  assert_no_grep 'hooks/fm-turn-end.sh' "$kimi_home/config.toml" "kimi wrote config.toml while its lock was held"
+  fm_lock_release "$lock"
+  wait "$pid"
+  status=$?
+  expect_code 0 "$status" "kimi spawn should continue after the config lock releases: $(cat "$out_file")"
+  assert_absent "$lock" "kimi config lock was left after a successful append"
+
+  rec=$(make_spawn_case config-lock-stale)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  lock="$kimi_home/config.toml.fm-prehook.lock"
+  dead=999999
+  while kill -0 "$dead" 2>/dev/null; do
+    dead=$((dead + 1))
+  done
+  mkdir "$lock"
+  printf '%s\n' "$dead" > "$lock/pid"
+  touch -t 200001010000 "$lock"
+  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
+  status=$?
+  expect_code 0 "$status" "kimi spawn should reclaim a stale config lock: $out"
+  assert_absent "$lock" "kimi stale config lock was not reclaimed and released"
+  pass "kimi config append waits for live locks and reclaims stale locks"
+}
+
 test_kimi_hook_survives_shellcheck_shape() {
   local rec case_dir home proj wt fakebin kimi_home id out status
   rec=$(make_spawn_case hookshape)
@@ -328,4 +418,6 @@ test_kimi_teardown_removes_pointer_and_token
 test_kimi_unverified_brief_submission_aborts
 test_kimi_secondmate_spawn_is_refused
 test_kimi_non_tmux_backend_is_refused
+test_raw_kimi_scope_gates_are_exempt
+test_kimi_config_lock_waits_and_reclaims_stale_locks
 test_kimi_hook_survives_shellcheck_shape
