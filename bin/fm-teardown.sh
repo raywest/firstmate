@@ -189,10 +189,12 @@ remove_grok_turnend_auth() {
 }
 
 remove_kimi_turnend_auth() {
-  local state_dir=$1 id=$2 token hooks_dir
+  local state_dir=$1 id=$2 token hooks_dir kimi_home
   token=$(cat "$state_dir/$id.kimi-turnend-token" 2>/dev/null || true)
   case "$token" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
-  hooks_dir="${KIMI_CODE_HOME:-$HOME/.kimi-code}/hooks/fm-turn-end.d"
+  kimi_home=$(fm_meta_get "$state_dir/$id.meta" kimi_home)
+  [ -n "$kimi_home" ] || kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+  hooks_dir="$kimi_home/hooks/fm-turn-end.d"
   rm -f "$hooks_dir/$token"
 }
 

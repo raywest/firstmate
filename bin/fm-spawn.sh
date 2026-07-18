@@ -427,6 +427,23 @@ case "$HARNESS" in
     ;;
 esac
 
+KIMI_HOME_DIR=
+KIMI_CONFIG=
+case "$HARNESS" in
+  kimi*)
+    KIMI_HOME_DIR="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+    KIMI_CONFIG="$KIMI_HOME_DIR/config.toml"
+    if ! command -v kimi >/dev/null 2>&1; then
+      echo "error: kimi is not on PATH; install kimi-code before dispatching kimi crewmates" >&2
+      exit 1
+    fi
+    if [ ! -f "$KIMI_CONFIG" ]; then
+      echo "error: kimi is not initialized (no config.toml at $KIMI_CONFIG); run kimi once and authenticate before dispatching kimi crewmates" >&2
+      exit 1
+    fi
+    ;;
+esac
+
 # config/secondmate-harness may carry optional model/effort tokens alongside the
 # harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
 # --secondmate spawn and no explicit per-spawn harness/raw launch was supplied, so
@@ -912,6 +929,66 @@ fi
 TASK_TMP="/tmp/fm-$ID"
 mkdir -p "$TASK_TMP/gotmp"
 
+SECONDMATE_PROJECTS=
+if [ "$KIND" = secondmate ]; then
+  MODE=secondmate
+  YOLO=off
+  SECONDMATE_PROJECTS=$(secondmate_registry_value "$ID" projects || true)
+else
+  PROJ_NAME=$(basename "$PROJ_ABS")
+  read -r MODE YOLO <<EOF
+$("$FM_ROOT/bin/fm-project-mode.sh" "$PROJ_NAME")
+EOF
+fi
+
+META_WINDOW=$T
+[ "$BACKEND" = orca ] && META_WINDOW=$W
+write_task_meta() {
+  {
+    echo "window=$META_WINDOW"
+    echo "worktree=$WT"
+    echo "project=$PROJ_ABS"
+    echo "harness=$HARNESS"
+    echo "kind=$KIND"
+    echo "mode=$MODE"
+    echo "yolo=$YOLO"
+    echo "tasktmp=$TASK_TMP"
+    echo "model=${MODEL:-default}"
+    echo "effort=${EFFORT:-default}"
+    case "$HARNESS" in
+      kimi*) echo "kimi_home=$KIMI_HOME_DIR" ;;
+    esac
+    [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
+    if [ "$BACKEND" = herdr ]; then
+      echo "herdr_session=$HERDR_SES"
+      echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
+      echo "herdr_tab_id=$HERDR_TAB_ID"
+      echo "herdr_pane_id=$HERDR_PANE_ID"
+    fi
+    if [ "$BACKEND" = zellij ]; then
+      echo "zellij_session=$ZELLIJ_SES"
+      echo "zellij_tab_id=$ZELLIJ_TAB_ID"
+      echo "zellij_pane_id=$ZELLIJ_PANE_ID"
+    fi
+    if [ "$BACKEND" = orca ]; then
+      echo "orca_worktree_id=$ORCA_WORKTREE_ID"
+      echo "terminal=$ORCA_TERMINAL"
+    fi
+    if [ "$BACKEND" = cmux ]; then
+      echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
+      echo "cmux_surface_id=$CMUX_SURFACE_ID"
+    fi
+    if [ "$KIND" = secondmate ]; then
+      echo "home=$PROJ_ABS"
+      echo "projects=$SECONDMATE_PROJECTS"
+    fi
+  } > "$STATE/$ID.meta"
+}
+
+case "$HARNESS" in
+  kimi*) write_task_meta ;;
+esac
+
 # Per-harness turn-end hook: a file that touches state/<id>.turn-ended when the
 # agent finishes a turn. Worktree-resident hooks are kept out of git's view so
 # they never block teardown's dirty check or leak into a commit.
@@ -1031,16 +1108,6 @@ EOF
       # session's project dir from the Stop payload's cwd (falling back to its
       # own cwd, which kimi sets to the same dir) - kimi exposes no workspace
       # env var to hooks (verified: no kimi-added env at all).
-      KIMI_HOME_DIR="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
-      KIMI_CONFIG="$KIMI_HOME_DIR/config.toml"
-      if ! command -v kimi >/dev/null 2>&1; then
-        echo "error: kimi is not on PATH; install kimi-code before dispatching kimi crewmates" >&2
-        exit 1
-      fi
-      if [ ! -f "$KIMI_CONFIG" ]; then
-        echo "error: kimi is not initialized (no config.toml at $KIMI_CONFIG); run kimi once and authenticate before dispatching kimi crewmates" >&2
-        exit 1
-      fi
       KIMI_HOOKS_DIR="$KIMI_HOME_DIR/hooks"
       KIMI_AUTH_DIR="$KIMI_HOOKS_DIR/fm-turn-end.d"
       mkdir -p "$KIMI_AUTH_DIR"
@@ -1095,63 +1162,10 @@ EOF
   esac
 fi
 
-# Per-project delivery mode + yolo flag (bin/fm-project-mode.sh; the project-management skill and AGENTS.md task lifecycle).
-# Recorded in meta so fm-teardown's safety check and the validate/merge stages can
-# branch on them. Mode governs ship tasks; a scout's deliverable is a report, not a
-# merge, so scout teardown ignores mode.
-SECONDMATE_PROJECTS=
-if [ "$KIND" = secondmate ]; then
-  MODE=secondmate
-  YOLO=off
-  SECONDMATE_PROJECTS=$(secondmate_registry_value "$ID" projects || true)
-else
-  PROJ_NAME=$(basename "$PROJ_ABS")
-  read -r MODE YOLO <<EOF
-$("$FM_ROOT/bin/fm-project-mode.sh" "$PROJ_NAME")
-EOF
-fi
-
-META_WINDOW=$T
-[ "$BACKEND" = orca ] && META_WINDOW=$W
-{
-  echo "window=$META_WINDOW"
-  echo "worktree=$WT"
-  echo "project=$PROJ_ABS"
-  echo "harness=$HARNESS"
-  echo "kind=$KIND"
-  echo "mode=$MODE"
-  echo "yolo=$YOLO"
-  echo "tasktmp=$TASK_TMP"
-  echo "model=${MODEL:-default}"
-  echo "effort=${EFFORT:-default}"
-  # backend= is written only for a non-default (non-tmux) backend, so the
-  # default path's meta stays byte-identical (absent backend= means tmux;
-  # data/fm-backend-design-d7's P1 compatibility contract).
-  [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
-  if [ "$BACKEND" = herdr ]; then
-    echo "herdr_session=$HERDR_SES"
-    echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
-    echo "herdr_tab_id=$HERDR_TAB_ID"
-    echo "herdr_pane_id=$HERDR_PANE_ID"
-  fi
-  if [ "$BACKEND" = zellij ]; then
-    echo "zellij_session=$ZELLIJ_SES"
-    echo "zellij_tab_id=$ZELLIJ_TAB_ID"
-    echo "zellij_pane_id=$ZELLIJ_PANE_ID"
-  fi
-  if [ "$BACKEND" = orca ]; then
-    echo "orca_worktree_id=$ORCA_WORKTREE_ID"
-    echo "terminal=$ORCA_TERMINAL"
-  fi
-  if [ "$BACKEND" = cmux ]; then
-    echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
-    echo "cmux_surface_id=$CMUX_SURFACE_ID"
-  fi
-  if [ "$KIND" = secondmate ]; then
-    echo "home=$PROJ_ABS"
-    echo "projects=$SECONDMATE_PROJECTS"
-  fi
-} > "$STATE/$ID.meta"
+case "$HARNESS" in
+  kimi*) ;;
+  *) write_task_meta ;;
+esac
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
@@ -1172,7 +1186,7 @@ if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
 fi
-# kimi: the hook block above resolved ${KIMI_CODE_HOME:-$HOME/.kimi-code} for the
+# kimi: the preflight above resolved ${KIMI_CODE_HOME:-$HOME/.kimi-code} for the
 # config append and token registry, so when the operator has KIMI_CODE_HOME set,
 # the launched kimi must read the SAME home or it will load a config without the
 # firstmate hook entry (and its hook process would resolve a different registry).
@@ -1220,8 +1234,8 @@ deliver_kimi_brief() {  # <target> <brief-path>
   tmux paste-buffer -p -d -b "fm-brief-$ID" -t "$target" || { echo "error: could not paste the brief into window $target" >&2; return 1; }
   sleep 1
   verdict=$(fm_tmux_submit_enter_core "$target" 5 1)
-  if [ "$verdict" = pending ]; then
-    echo "error: the pasted brief did not submit (composer still holds text); inspect window $target" >&2
+  if [ "$verdict" != empty ]; then
+    echo "error: kimi brief submission could not be verified (last verdict: ${verdict:-unknown}); inspect window $target" >&2
     return 1
   fi
   return 0
