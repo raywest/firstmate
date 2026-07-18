@@ -33,8 +33,10 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok)
-#   overrides it for this spawn (either kind). A non-flag string containing
+#   /updatefirstmate, restart). A bare adapter name
+#   (claude|codex|opencode|pi|grok|kimi) overrides it for this spawn (either
+#   kind); kimi is crewmate/scout-only on the tmux backend and a kimi
+#   --secondmate or non-tmux spawn is refused. A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters.
 #   config/secondmate-harness may also carry an optional model and effort as extra
@@ -76,6 +78,12 @@
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
+# kimi uses a firstmate-owned guarded script under
+# ${KIMI_CODE_HOME:-$HOME/.kimi-code}/hooks plus one idempotent, doctor-validated
+# [[hooks]] Stop append to kimi's config.toml, a gitignored .fm-kimi-turnend
+# worktree pointer, and a state token; kimi's brief is delivered post-launch by
+# bracketed paste because kimi rejects a positional prompt (crewmate/scout on
+# tmux only).
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> window=<backend-target> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
@@ -84,7 +92,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,86p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -287,7 +295,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|grok)
+    ''|claude|codex|opencode|pi|grok|kimi)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -348,6 +356,18 @@ launch_template() {
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
     grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
+    # kimi (kimi-code TUI): REJECTS a positional prompt ("unknown command ...",
+    # verified 0.27.0), and -p is non-interactive print mode, so the brief cannot
+    # ride the launch command. The launch opens the bare TUI with --yolo (verified
+    # fully unattended tool execution, no permission gate); the brief is then
+    # delivered post-launch by deliver_kimi_brief below via tmux bracketed paste,
+    # which kimi's composer holds as one multi-line message until Enter (verified).
+    # No effort flag exists on 0.27.0 (--effort/--thinking/--reasoning-effort are
+    # all "unknown option"), so effort is record-only in meta - no __EFFORTFLAG__.
+    # kimi's turn-end signal is a Stop-event [[hooks]] entry installed below
+    # (guarded global hook + per-task pointer, the grok pattern). Verified for
+    # crewmate/scout duty on the tmux backend only; --secondmate is refused.
+    kimi) printf '%s' 'kimi --yolo __MODELFLAG__' ;;
     *) return 1 ;;
   esac
 }
@@ -385,6 +405,25 @@ case "$ARG3" in
   *)
     HARNESS=$ARG3
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
+    ;;
+esac
+
+# kimi scope gates (fail closed): kimi is verified for crewmate/scout duty on the
+# tmux backend only. A kimi secondmate launch and a kimi launch on any other
+# backend are unverified paths - the post-launch brief delivery and the guarded
+# turn-end hook were validated against tmux bracketed paste and a live crewmate
+# supervision cycle, nothing else. Refuse loudly instead of launching a shape
+# no evidence covers (harness-adapters skill, kimi section).
+case "$HARNESS" in
+  kimi*)
+    if [ "$KIND" = secondmate ]; then
+      echo "error: kimi is verified for crewmate/scout duty only; a kimi --secondmate launch is unverified. Pick a verified secondmate harness (claude|codex|opencode|pi|grok)." >&2
+      exit 1
+    fi
+    if [ "$BACKEND" != tmux ]; then
+      echo "error: kimi spawns are verified on the tmux backend only (post-launch brief delivery uses tmux bracketed paste); backend=$BACKEND is unverified for kimi." >&2
+      exit 1
+    fi
     ;;
 esac
 
@@ -435,7 +474,9 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|grok)
+    claude|codex|opencode|pi|grok|kimi)
+      # kimi: --model <alias> verified on 0.27.0 (the long form of -m; a bad
+      # alias fails loudly with config.invalid before any launch).
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -477,6 +518,10 @@ effort_flag_for_harness() {
     # opencode's interactive `opencode --prompt` launch has a verified --model
     # flag but no verified effort flag. Its `opencode run --variant` flag belongs
     # to a different, non-interactive launch mode, so fm-spawn does not pass it.
+    # kimi has NO effort flag at all on 0.27.0 (--effort, --thinking, and
+    # --reasoning-effort are all rejected as "unknown option"); a requested effort
+    # is recorded in meta but no flag is emitted (the record-only pattern above).
+    # kimi's own per-model default_effort in config.toml governs the launch.
   esac
 }
 
@@ -967,6 +1012,86 @@ EOF
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
       exclude_path '.fm-grok-turnend'
       ;;
+    kimi*)
+      # kimi fires a Stop hook at every completed turn (verified 0.27.0, incl.
+      # -p mode; it does NOT fire on interrupt - the Interrupt event does). Hooks
+      # load ONLY from $KIMI_CODE_HOME/config.toml's [[hooks]] array: there is no
+      # hooks directory and the project-local .kimi-code/local.toml schema is
+      # locked to [workspace], so a per-worktree hook file is impossible. The
+      # grok pattern adapts: a single firstmate-owned guarded script lives at
+      # $KIMI_CODE_HOME/hooks/fm-turn-end.sh (the docs' own convention for user
+      # hook scripts), token-guarded through the fm-turn-end.d registry plus a
+      # per-task .fm-kimi-turnend worktree pointer, a no-op for every
+      # non-firstmate kimi session. One [[hooks]] Stop entry referencing that
+      # script is appended ONCE to config.toml - an additive edit to a file
+      # kimi's docs designate for hand-editing, validated with `kimi doctor`
+      # (exit 1 on invalid, verified) and restored from backup on failure, so a
+      # bad append can never brick the captain's kimi. kimi was never observed
+      # rewriting config.toml, so the entry is durable. The hook script reads the
+      # session's project dir from the Stop payload's cwd (falling back to its
+      # own cwd, which kimi sets to the same dir) - kimi exposes no workspace
+      # env var to hooks (verified: no kimi-added env at all).
+      KIMI_HOME_DIR="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+      KIMI_CONFIG="$KIMI_HOME_DIR/config.toml"
+      if ! command -v kimi >/dev/null 2>&1; then
+        echo "error: kimi is not on PATH; install kimi-code before dispatching kimi crewmates" >&2
+        exit 1
+      fi
+      if [ ! -f "$KIMI_CONFIG" ]; then
+        echo "error: kimi is not initialized (no config.toml at $KIMI_CONFIG); run kimi once and authenticate before dispatching kimi crewmates" >&2
+        exit 1
+      fi
+      KIMI_HOOKS_DIR="$KIMI_HOME_DIR/hooks"
+      KIMI_AUTH_DIR="$KIMI_HOOKS_DIR/fm-turn-end.d"
+      mkdir -p "$KIMI_AUTH_DIR"
+      old_umask=$(umask)
+      umask 077
+      auth_file=$(mktemp "$KIMI_AUTH_DIR/fm.XXXXXXXXXXXX")
+      umask "$old_umask"
+      printf '%s\n' "$TURNEND" > "$auth_file"
+      printf '%s\n' "${auth_file##*/}" > "$STATE/$ID.kimi-turnend-token"
+      cat > "$KIMI_HOOKS_DIR/fm-turn-end.sh" <<'EOF'
+#!/usr/bin/env bash
+# Firstmate turn-end signal for kimi crewmates; written by fm-spawn.
+# Guarded no-op for every non-firstmate kimi session: it acts only when the
+# session's project dir holds a .fm-kimi-turnend token pointer that matches the
+# firstmate-owned registry in fm-turn-end.d/. Always exits 0 (kimi Stop hooks
+# block on exit 2; this hook must never block a turn).
+set -u
+auth_dir="${KIMI_CODE_HOME:-$HOME/.kimi-code}/hooks/fm-turn-end.d"
+payload=$(cat 2>/dev/null || true)
+workspace=$(printf '%s' "$payload" | sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p')
+[ -n "$workspace" ] || workspace=$(pwd -P)
+p="$workspace/.fm-kimi-turnend"
+[ -f "$p" ] || exit 0
+first=
+IFS= read -r -n 256 first < "$p" 2>/dev/null || [ -n "$first" ] || exit 0
+case "$first" in token=*) token=${first#token=} ;; *) exit 0 ;; esac
+case "$token" in fm.????????????) : ;; *) exit 0 ;; esac
+case "$token" in *[!A-Za-z0-9._-]*) exit 0 ;; esac
+t=$(cat "$auth_dir/$token" 2>/dev/null) || exit 0
+case "$t" in /*.turn-ended) : ;; *) exit 0 ;; esac
+touch "$t" 2>/dev/null || true
+exit 0
+EOF
+      chmod +x "$KIMI_HOOKS_DIR/fm-turn-end.sh"
+      if ! grep -qF "hooks/fm-turn-end.sh" "$KIMI_CONFIG"; then
+        cp "$KIMI_CONFIG" "$KIMI_CONFIG.fm-prehook-backup"
+        {
+          printf '\n# firstmate-owned turn-end hook: a token-guarded no-op for every kimi\n'
+          printf '# session firstmate did not launch (see fm-turn-end.sh next to config.toml).\n'
+          printf '[[hooks]]\nevent = "Stop"\ncommand = "bash %s"\ntimeout = 5\n' "$(shell_quote "$KIMI_HOOKS_DIR/fm-turn-end.sh")"
+        } >> "$KIMI_CONFIG"
+        if ! kimi doctor >/dev/null 2>&1; then
+          mv "$KIMI_CONFIG.fm-prehook-backup" "$KIMI_CONFIG"
+          echo "error: kimi rejected config.toml after the firstmate turn-end hook append; config restored from backup, spawn aborted" >&2
+          exit 1
+        fi
+        rm -f "$KIMI_CONFIG.fm-prehook-backup"
+      fi
+      printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
+      exclude_path '.fm-kimi-turnend'
+      ;;
   esac
 fi
 
@@ -1047,6 +1172,19 @@ if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
 fi
+# kimi: the hook block above resolved ${KIMI_CODE_HOME:-$HOME/.kimi-code} for the
+# config append and token registry, so when the operator has KIMI_CODE_HOME set,
+# the launched kimi must read the SAME home or it will load a config without the
+# firstmate hook entry (and its hook process would resolve a different registry).
+# Propagate it into the pane launch; unset means both sides already agree on
+# ~/.kimi-code and nothing is prefixed.
+case "$HARNESS" in
+  kimi*)
+    if [ -n "${KIMI_CODE_HOME:-}" ]; then
+      LAUNCH="KIMI_CODE_HOME=$(shell_quote "$KIMI_CODE_HOME") $LAUNCH"
+    fi
+    ;;
+esac
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
@@ -1055,5 +1193,41 @@ sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
 spawn_send_key "$T" Enter
+
+# kimi post-launch brief delivery: kimi rejects a positional prompt (verified
+# 0.27.0), so the brief could not ride the launch command above. Wait for the
+# TUI's composer to render (the shared composer classifier reads kimi's idle
+# bordered "| > |" box as empty, verified), then hand the multi-line brief over
+# as ONE message via tmux bracketed paste - kimi's composer holds pasted
+# newlines unsubmitted (verified) - and submit with the verify-and-retry Enter
+# from fm-tmux-lib.sh. Bounded and fail-loud: a composer that never appears or
+# a paste that never submits aborts with the window to inspect (the most likely
+# cause of a never-appearing composer is a first-run dialog, e.g. kimi's
+# migrate-from-kimi-cli wizard on a fresh KIMI_CODE_HOME - harness-adapters
+# skill, kimi section). Scoped to the tmux backend by the kimi gates above.
+deliver_kimi_brief() {  # <target> <brief-path>
+  local target=$1 brief=$2 state='' verdict
+  for _ in $(seq 1 45); do
+    state=$(fm_tmux_composer_state "$target")
+    [ "$state" = empty ] && break
+    sleep 1
+  done
+  if [ "$state" != empty ]; then
+    echo "error: kimi composer did not become ready within 45s (last state: ${state:-unreadable}); brief NOT delivered - inspect window $target" >&2
+    return 1
+  fi
+  tmux load-buffer -b "fm-brief-$ID" "$brief" || { echo "error: could not stage the brief into a tmux paste buffer" >&2; return 1; }
+  tmux paste-buffer -p -d -b "fm-brief-$ID" -t "$target" || { echo "error: could not paste the brief into window $target" >&2; return 1; }
+  sleep 1
+  verdict=$(fm_tmux_submit_enter_core "$target" 5 1)
+  if [ "$verdict" = pending ]; then
+    echo "error: the pasted brief did not submit (composer still holds text); inspect window $target" >&2
+    return 1
+  fi
+  return 0
+}
+case "$HARNESS" in
+  kimi*) deliver_kimi_brief "$T" "$BRIEF" || exit 1 ;;
+esac
 
 echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO window=$META_WINDOW worktree=$WT"
