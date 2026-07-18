@@ -125,6 +125,20 @@ EOF
   pass "kimi preflight refuses missing CLI and config before task resources"
 }
 
+test_kimi_creates_missing_state_before_metadata() {
+  local rec case_dir home proj wt fakebin kimi_home id out status
+  rec=$(make_spawn_case missing-state)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  rm -rf "$home/state"
+  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
+  status=$?
+  expect_code 0 "$status" "kimi spawn should create a missing state directory: $out"
+  assert_present "$home/state/$id.meta" "kimi spawn did not persist metadata in a new state directory"
+  pass "kimi creates the state directory before writing metadata"
+}
+
 test_kimi_hook_requires_registered_token() {
   local rec case_dir home proj wt fakebin kimi_home id out status hook token target evil evil_target
   rec=$(make_spawn_case hook-auth)
@@ -306,6 +320,7 @@ EOF
 }
 
 test_kimi_preflight_refuses_before_task_resources
+test_kimi_creates_missing_state_before_metadata
 test_kimi_hook_requires_registered_token
 test_kimi_config_append_is_idempotent_and_brief_is_pasted
 test_kimi_doctor_failure_restores_config_and_aborts
