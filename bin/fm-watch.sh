@@ -369,8 +369,8 @@ pause_state_class() {  # <window> <task>
   fi
   class=$(crew_absorb_class "$task")
   case "$class" in
-    paused) date +%s > "$recheck_file" ;;
-    *) rm -f "$recheck_file" ;;
+    working) rm -f "$recheck_file" ;;
+    *) date +%s > "$recheck_file" ;;
   esac
   printf '%s' "$class"
 }
