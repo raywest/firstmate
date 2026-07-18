@@ -157,6 +157,11 @@ function classifyArmClose(stdout, stderr, code, signal) {
 
 function observeArmOutput(stdout, stderr, settleReadiness) {
   const combined = `${stdout}\n${stderr}`;
+  if (combined.split(/\r?\n/).some((line) => /^(signal:|stale:|check:|heartbeat($|:))/.test(line))) {
+    setArmStatus("wake");
+    settleReadiness("wake");
+    return;
+  }
   if (combined.split(/\r?\n/).some((line) => /^watcher: (?:started|attached)\b/.test(line))) {
     setArmStatus("armed");
     settleReadiness("armed");

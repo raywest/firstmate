@@ -1169,11 +1169,13 @@ EOF
 }
 
 test_opencode_pre_ready_actionable_close_preserves_its_successor() {
-  local plugin repo home log stop out status
+  local plugin repo home log release retired stop out status
   plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
   repo="$TMP_ROOT/opencode-pre-ready-actionable-root"
   home="$TMP_ROOT/opencode-pre-ready-actionable-home"
   log="$TMP_ROOT/opencode-pre-ready-actionable.log"
+  release="$TMP_ROOT/opencode-pre-ready-actionable.release"
+  retired="$TMP_ROOT/opencode-pre-ready-actionable.retired"
   stop="$TMP_ROOT/opencode-pre-ready-actionable.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
@@ -1190,6 +1192,8 @@ if [ "$count" -eq 1 ]; then
 fi
 if [ "$count" -eq 2 ]; then
   printf 'signal: pre-ready successor wake\n'
+  trap 'printf "retired\\n" > "${FM_PRE_READY_RETIRED_FILE:?}"; exit 0' TERM INT
+  while [ ! -e "$FM_PRE_READY_RELEASE_FILE" ]; do sleep 0.02; done
   exit 0
 fi
 printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
@@ -1197,7 +1201,7 @@ trap 'exit 0' TERM INT
 while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" FM_OPENCODE_ARM_READY_TIMEOUT_MS=100 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 FM_WATCH_REARM_RETRY_LIMIT=2 node 2>&1 <<'EOF'
+  out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" FM_PRE_READY_RELEASE_FILE="$release" FM_PRE_READY_RETIRED_FILE="$retired" FM_STOP_FILE="$stop" FM_OPENCODE_ARM_READY_TIMEOUT_MS=100 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 FM_WATCH_REARM_RETRY_LIMIT=2 node 2>&1 <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -1221,15 +1225,23 @@ for (let i = 0; i < 500; i += 1) {
   const rows = existsSync(process.env.FM_ARM_LOG)
     ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
     : [];
-  if (rows.length >= 3 && prompts.some((message) => message.includes("pre-ready successor wake"))) break;
+  if (rows.length >= 2 && prompts.some((message) => message.includes("original wake"))) break;
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
-if (rows.length !== 3) throw new Error(`pre-ready close terminated or replaced its successor: ${rows.join(" | ")}`);
-if (!prompts.some((message) => message.includes("pre-ready successor wake"))) throw new Error(`pre-ready actionable wake was not delivered: ${prompts.join(" | ")}`);
-await new Promise((resolve) => setTimeout(resolve, 100));
+if (rows.length !== 2) throw new Error(`pre-ready successor was replaced before its close: ${rows.join(" | ")}`);
+if (!prompts.some((message) => message.includes("original wake"))) throw new Error(`original actionable wake was not delivered: ${prompts.join(" | ")}`);
+await new Promise((resolve) => setTimeout(resolve, 150));
+if (existsSync(process.env.FM_PRE_READY_RETIRED_FILE)) throw new Error("pre-ready actionable successor was retired before its close");
+writeFileSync(process.env.FM_PRE_READY_RELEASE_FILE, "release\n");
+for (let i = 0; i < 500; i += 1) {
+  const successorRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+  if (successorRows.length >= 3 && prompts.some((message) => message.includes("pre-ready successor wake"))) break;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
 const stableRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
-if (stableRows.length !== 3) throw new Error(`pre-ready successor was retired by another recovery (${stableRows.length} arms)`);
+if (stableRows.length !== 3) throw new Error(`pre-ready close did not create exactly one successor: ${stableRows.join(" | ")}`);
+if (!prompts.some((message) => message.includes("pre-ready successor wake"))) throw new Error(`pre-ready actionable wake was not delivered: ${prompts.join(" | ")}`);
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 EOF
 )
