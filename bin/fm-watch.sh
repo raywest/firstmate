@@ -945,19 +945,32 @@ EOF
                 handle_paused_stale "$w" "$task" "$h"
                 ;;
               *)
-                surface_nonterminal_stale "$w" "$h"
+                # A non-working, non-paused verdict can be a stale/misattributed
+                # no-mistakes run-step (e.g. an aborted run's terminal outcome)
+                # outranking a LATER paused: declaration in the log - fm-crew-state.sh's
+                # run-step precedence predates the pause. Trust the crew's own current
+                # status-log word over that verdict; only definitive working evidence
+                # should break a declared pause.
+                if status_is_paused "$(last_status_line "$STATE/$task.status")"; then
+                  handle_paused_stale "$w" "$task" "$h"
+                else
+                  surface_nonterminal_stale "$w" "$h"
+                fi
                 ;;
             esac
           else
             task=$(window_to_task "$w" "$STATE")
             if [ -e "$pf" ] || status_is_paused "$(last_status_line "$STATE/$task.status")"; then
+              # Only definitive working evidence should break a declared pause here -
+              # any other verdict (including a stale/misattributed run-step outcome
+              # that outranks the crew's own later paused: line) stays in the paused
+              # treatment instead of re-deriving a first-sight surface every recheck.
               case "$(pause_state_class "$w" "$task")" in
-                paused)  handle_paused_stale "$w" "$task" "$h" ;;
                 working) clear_pause_state "$w"
                          printf '%s' "$h" > "$sf"
                          wedge_timer_check "$w" "$ssf" "non-terminal stale (provably working after a declared pause)" "$ewf"
                          triage_log "absorbed non-terminal stale (provably working): $w" ;;
-                *)       surface_nonterminal_stale "$w" "$h" ;;
+                *)       handle_paused_stale "$w" "$task" "$h" ;;
               esac
             else
               wedge_timer_check "$w" "$ssf" "non-terminal stale" "$ewf"
@@ -978,8 +991,8 @@ EOF
       task=$(window_to_task "$w" "$STATE")
       if ! afk_present && status_is_paused "$(last_status_line "$STATE/$task.status")" && ! window_is_busy "$w" "$tail40"; then
         case "$(pause_state_class "$w" "$task")" in
-          paused) handle_paused_stale "$w" "$task" "$h" ;;
-          *)      clear_pause_tracking "$w" ;;
+          working) clear_pause_tracking "$w" ;;
+          *)       handle_paused_stale "$w" "$task" "$h" ;;
         esac
       else
         [ -e "$pf" ] && clear_pause_tracking "$w"
