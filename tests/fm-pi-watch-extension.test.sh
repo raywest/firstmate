@@ -1150,6 +1150,77 @@ EOF
   pass "OpenCode watcher plugin starts one successor before wake prompt delivery settles"
 }
 
+test_opencode_pre_ready_actionable_close_preserves_its_successor() {
+  local plugin repo home log stop out status
+  plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
+  repo="$TMP_ROOT/opencode-pre-ready-actionable-root"
+  home="$TMP_ROOT/opencode-pre-ready-actionable-home"
+  log="$TMP_ROOT/opencode-pre-ready-actionable.log"
+  stop="$TMP_ROOT/opencode-pre-ready-actionable.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  git init -q "$repo"
+  : > "$repo/AGENTS.md"
+  : > "$home/state/task.meta"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+if [ "$count" -eq 1 ]; then
+  printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+  printf 'signal: original wake\n'
+  exit 0
+fi
+if [ "$count" -eq 2 ]; then
+  printf 'signal: pre-ready successor wake\n'
+  exit 0
+fi
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" FM_OPENCODE_ARM_READY_TIMEOUT_MS=100 FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 FM_WATCH_REARM_RETRY_LIMIT=2 node 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const prompts = [];
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      prompts.push(request.body.parts[0].text);
+    },
+  },
+};
+const hooks = await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
+for (let i = 0; i < 500; i += 1) {
+  const rows = existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+    : [];
+  if (rows.length >= 3 && prompts.some((message) => message.includes("pre-ready successor wake"))) break;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+if (rows.length !== 3) throw new Error(`pre-ready close terminated or replaced its successor: ${rows.join(" | ")}`);
+if (!prompts.some((message) => message.includes("pre-ready successor wake"))) throw new Error(`pre-ready actionable wake was not delivered: ${prompts.join(" | ")}`);
+await new Promise((resolve) => setTimeout(resolve, 100));
+const stableRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+if (stableRows.length !== 3) throw new Error(`pre-ready successor was retired by another recovery (${stableRows.length} arms)`);
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "OpenCode must retire the pre-ready arm, not its actionable successor"
+  [ -z "$out" ] || fail "OpenCode pre-ready actionable test printed output: $out"
+  pass "OpenCode pre-ready actionable close preserves its successor"
+}
+
 test_opencode_hung_successor_falls_back_to_typed_wake() {
   local plugin repo home log out status
   plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
@@ -1716,6 +1787,7 @@ test_opencode_primary_watch_plugin_sources_effective_config
 test_opencode_primary_watch_plugin_requires_session_lock
 test_opencode_watch_arm_coordinator_respects_primary_scope
 test_opencode_primary_watch_plugin_rearms_after_wake
+test_opencode_pre_ready_actionable_close_preserves_its_successor
 test_opencode_hung_successor_falls_back_to_typed_wake
 test_opencode_unretired_successor_falls_back_without_retry
 test_opencode_late_unretired_close_resumes_supervision

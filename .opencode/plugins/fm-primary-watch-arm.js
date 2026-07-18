@@ -241,10 +241,10 @@ function restorationFailure(status) {
 async function restoreAfterActionableClose(paths, sessionID, client, predecessorArmPid) {
   let failure = "";
   for (let attempt = 0; attempt <= REARM_RETRY_LIMIT; attempt += 1) {
-    const status = await ensureArm(paths, sessionID, client, predecessorArmPid);
+    const { status, armChild } = await ensureArm(paths, sessionID, client, predecessorArmPid, true);
     if (status === "armed") return "";
     failure = restorationFailure(status);
-    if (!(await retireArm(child))) {
+    if (!(await retireArm(armChild))) {
       setArmStatus("failed");
       return `${failure}\nwatcher: FAILED - OpenCode could not restore watcher continuity because the unready successor arm did not exit within ${ARM_RETIRE_TIMEOUT_MS}ms`;
     }
@@ -371,7 +371,11 @@ async function beginArm(paths, sessionID, client, predecessorArmPid) {
   return "spawned";
 }
 
-async function ensureArm(paths, sessionID, client, predecessorArmPid = "") {
+function armAttempt(status, armChild, includeArmChild) {
+  return includeArmChild ? { status, armChild } : status;
+}
+
+async function ensureArm(paths, sessionID, client, predecessorArmPid = "", includeArmChild = false) {
   let launchStatus = "";
   if (!launchInFlight) {
     const launch = beginArm(paths, sessionID, client, predecessorArmPid);
@@ -385,10 +389,11 @@ async function ensureArm(paths, sessionID, client, predecessorArmPid = "") {
     launchStatus = await launchInFlight;
   }
   if (!child) {
-    if (launchStatus !== "spawned" && launchStatus !== "existing") return launchStatus;
-    return readyStatus() || "idle";
+    if (launchStatus !== "spawned" && launchStatus !== "existing") return armAttempt(launchStatus, null, includeArmChild);
+    return armAttempt(readyStatus() || "idle", null, includeArmChild);
   }
-  return waitForArmReady();
+  const armChild = child;
+  return armAttempt(await waitForArmReady(), armChild, includeArmChild);
 }
 
 export const FmPrimaryWatchArm = async ({ client, directory, worktree }) => {
