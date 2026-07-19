@@ -22,6 +22,12 @@ mark_pr_check_migration_complete() {
   chmod 0600 "$state/.pr-check-migration-scan-v1" "$state/.pr-check-migration-v1"
 }
 
+cleanup_term_resistant_peer() {
+  local peer=$1
+  kill -KILL "$peer" 2>/dev/null || true
+  wait "$peer" 2>/dev/null || true
+}
+
 
 test_singleton_start() {
   local dir state fakebin out1 out2 pid1 pid2 live i
@@ -456,8 +462,8 @@ test_watch_restart_reports_healthy_peer_without_attaching() {
     sleep 0.02
     i=$((i + 1))
   done
-  [ -s "$ready" ] || fail "peer did not confirm its SIGTERM handler was installed"
-  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || fail "could not identify peer pid"
+  [ -s "$ready" ] || { cleanup_term_resistant_peer "$peer"; fail "peer did not confirm its SIGTERM handler was installed"; }
+  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || { cleanup_term_resistant_peer "$peer"; fail "could not identify peer pid"; }
   mkdir "$state/.watch.lock"
   printf '%s\n' "$peer" > "$state/.watch.lock/pid"
   printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
@@ -468,12 +474,11 @@ test_watch_restart_reports_healthy_peer_without_attaching() {
   armpid=$!
   wait_for_exit "$armpid" 80
   status=$?
-  [ "$status" -eq 0 ] || fail "restart did not exit zero after reporting healthy peer (status $status): $(cat "$out")"
-  grep -qF "watcher: healthy pid=$peer" "$out" || fail "restart did not report the healthy peer: $(cat "$out")"
-  ! grep -qF 'watcher: attached' "$out" || fail "restart attached to a peer watcher instead of preserving restart ownership contract"
-  is_live_non_zombie "$peer" || fail "restart killed a TERM-resistant peer unexpectedly"
-  kill -KILL "$peer" 2>/dev/null || true
-  wait "$peer" 2>/dev/null || true
+  [ "$status" -eq 0 ] || { cleanup_term_resistant_peer "$peer"; fail "restart did not exit zero after reporting healthy peer (status $status): $(cat "$out")"; }
+  grep -qF "watcher: healthy pid=$peer" "$out" || { cleanup_term_resistant_peer "$peer"; fail "restart did not report the healthy peer: $(cat "$out")"; }
+  ! grep -qF 'watcher: attached' "$out" || { cleanup_term_resistant_peer "$peer"; fail "restart attached to a peer watcher instead of preserving restart ownership contract"; }
+  is_live_non_zombie "$peer" || { cleanup_term_resistant_peer "$peer"; fail "restart killed a TERM-resistant peer unexpectedly"; }
+  cleanup_term_resistant_peer "$peer"
   pass "watch restart reports a healthy peer without attaching to it"
 }
 
