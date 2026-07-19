@@ -35,10 +35,10 @@
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
 #   /updatefirstmate, restart). A bare adapter name
 #   (claude|codex|opencode|pi|grok|kimi) overrides it for this spawn (either
-#   kind); kimi is crewmate/scout-only on the tmux backend and a kimi
-#   --secondmate or non-tmux spawn is refused. A non-flag string containing
-#   whitespace is treated as a RAW launch command - the escape hatch for verifying
-#   new adapters.
+#   kind); the kimi template is crewmate/scout-only on the tmux backend and a
+#   kimi-template --secondmate or non-tmux spawn is refused. A non-flag string
+#   containing whitespace is treated as a RAW launch command - the escape hatch
+#   for verifying new adapters, intentionally outside adapter scope gates.
 #   config/secondmate-harness may also carry an optional model and effort as extra
 #   whitespace-separated tokens ("<harness> [<model>] [<effort>]"). For a
 #   --secondmate spawn, those tokens apply only when this spawn also resolves its
@@ -423,11 +423,13 @@ case "$ARG3" in
 esac
 
 # kimi scope gates (fail closed): kimi is verified for crewmate/scout duty on the
-# tmux backend only. A kimi secondmate launch and a kimi launch on any other
-# backend are unverified paths - the post-launch brief delivery and the guarded
-# turn-end hook were validated against tmux bracketed paste and a live crewmate
-# supervision cycle, nothing else. Refuse loudly instead of launching a shape
-# no evidence covers (harness-adapters skill, kimi section).
+# tmux backend only. A Kimi template secondmate launch and a Kimi template launch
+# on any other backend are unverified paths - the post-launch brief delivery and
+# the guarded turn-end hook were validated against tmux bracketed paste and a live
+# crewmate supervision cycle, nothing else. Refuse loudly instead of launching a
+# shape no evidence covers (harness-adapters skill, kimi section). This is
+# deliberately template-only: raw launch commands remain the adapter-verification
+# escape hatch.
 if [ "$LAUNCH_SOURCE" = template ]; then
   case "$HARNESS" in
     kimi*)
@@ -1269,7 +1271,9 @@ spawn_send_key "$T" Enter
 # a paste that never submits aborts with the window to inspect (the most likely
 # cause of a never-appearing composer is a first-run dialog, e.g. kimi's
 # migrate-from-kimi-cli wizard on a fresh KIMI_CODE_HOME - harness-adapters
-# skill, kimi section). Scoped to the tmux backend by the kimi gates above.
+# skill, kimi section). Template launches are scoped to the tmux backend by the
+# kimi gates above; raw launch commands deliberately remain the verification escape
+# hatch and are not scope-gated here.
 deliver_kimi_brief() {  # <target> <brief-path>
   local target=$1 brief=$2 state='' verdict
   for _ in $(seq 1 45); do

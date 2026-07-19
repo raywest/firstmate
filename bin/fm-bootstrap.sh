@@ -401,8 +401,8 @@ secondmate_liveness_sweep() {
     verdict=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null) || verdict="unknown"
     # kimi is deliberately absent: it is verified for crewmate/scout duty only,
     # so a kind=secondmate meta naming kimi is already an unverified shape and a
-    # dead reading for it must not trigger the kill-and-respawn path (fm-spawn
-    # refuses a kimi --secondmate respawn anyway; harness-adapters skill).
+    # dead reading for it must not trigger the kill-and-respawn path (fm-spawn's
+    # Kimi template refuses a --secondmate respawn anyway; harness-adapters skill).
     case "$harness" in
       claude|codex|opencode|pi|grok) ;;
       *) [ "$verdict" = dead ] && verdict=unknown ;;

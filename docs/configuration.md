@@ -163,7 +163,8 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 ## Harness support
 
 claude, codex, opencode, pi, and grok are empirically verified across their documented primary and crew roles.
-`kimi` is empirically verified only for crewmate/scout dispatch on tmux; it is not a primary or secondmate harness, and `fm-spawn` refuses every other Kimi launch shape.
+`kimi` is empirically verified only for crewmate/scout dispatch on tmux; it is not a primary or secondmate harness, and `fm-spawn` refuses every other Kimi template launch shape.
+`bin/fm-spawn.sh`'s header owns the raw launch-command exception to those template gates.
 Before dispatching Kimi, initialize and authenticate it so `$KIMI_CODE_HOME/config.toml` exists; the doctor-validated hook setup and matching launch environment are owned by the harness-adapters skill.
 New harnesses are verified through a supervised trial task before joining their supported scope.
 The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).

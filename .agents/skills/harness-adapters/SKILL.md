@@ -31,7 +31,7 @@ The primary-session watcher wake protocols are rendered from `docs/supervision-p
 The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
 
 Never dispatch a crewmate or secondmate on an unverified adapter.
-`kimi` is verified for CREWMATE and SCOUT duty on the tmux backend only: `fm-spawn` refuses a kimi `--secondmate` launch and a kimi launch on any non-tmux backend, and kimi has no verified primary-session adapter (no turn-end guard, watcher protocol, pre-arm hook, session-start nudge, or `fm-lock` holder detection).
+`kimi` is verified for CREWMATE and SCOUT duty on the tmux backend only: `fm-spawn` refuses a Kimi template `--secondmate` launch and a Kimi template launch on any non-tmux backend, and kimi has no verified primary-session adapter (no turn-end guard, watcher protocol, pre-arm hook, session-start nudge, or `fm-lock` holder detection).
 If `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, tell the captain under `AGENTS.md` section 9 that the requested worker runtime is not verified yet, use firstmate's own verified runtime for current work, and ask only whether to verify the requested runtime before future use.
 Do not pause current work for that future-verification choice, and never launch an unverified adapter.
 If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record the mechanics in `fm-spawn`, the busy signature in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed `FM_COMPOSER_IDLE_RE` empty-composer override plus any novel bare agent prompt glyph in `bin/fm-composer-lib.sh`'s shared composer classifier (the one fleet-wide owner of the empty/dead-shell/pending decision, so a new harness's own idle composer is not misread as a dead shell), the tmux agent-process liveness classification in `bin/backends/tmux.sh` when the harness can launch a secondmate, and the verified knowledge here.
@@ -295,7 +295,8 @@ Grok's primary watcher protocol is Claude-shaped background-notify around `bin/f
 
 Kimi Code CLI (`kimi`), Moonshot's TUI coding agent, authenticated through a Moonshot subscription.
 Scope: crewmate and scout dispatch on the tmux backend only.
-`fm-spawn` refuses a kimi `--secondmate` launch and a kimi launch on any non-tmux backend, kimi is deliberately absent from `bin/backends/tmux.sh`'s agent-liveness allowlist and the bootstrap secondmate-liveness harness case, and no primary-session adapter (turn-end guard, watcher protocol, pre-arm hook, session-start nudge, `fm-lock` holder detection) exists.
+`fm-spawn` refuses a Kimi template `--secondmate` launch and a Kimi template launch on any non-tmux backend, kimi is deliberately absent from `bin/backends/tmux.sh`'s agent-liveness allowlist and the bootstrap secondmate-liveness harness case, and no primary-session adapter (turn-end guard, watcher protocol, pre-arm hook, session-start nudge, `fm-lock` holder detection) exists.
+`bin/fm-spawn.sh`'s header owns the raw launch-command exception to these template gates.
 Verifying any of those shapes is new empirical work, not a config flip.
 
 | Fact | Value |
