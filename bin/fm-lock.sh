@@ -14,7 +14,9 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 LOCK="$STATE/.lock"
 mkdir -p "$STATE"
 
-# Known harness command names; extend when a new adapter is verified.
+# Known primary/secondmate harness command names.
+# Kimi is intentionally absent because it is verified only for tmux crewmate/scout
+# duty and cannot hold a firstmate-session lock.
 HARNESS_RE='claude|codex|opencode|grok|^pi$'
 
 harness_pid() {
