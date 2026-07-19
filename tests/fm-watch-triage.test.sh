@@ -612,6 +612,66 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   pass "a declared pause is absorbed on first sight, then re-surfaced as a recheck past the threshold, never wedge-escalated"
 }
 
+# Live 2026-07-18 incident: a done-and-then-declared-paused crew (a merged/CI-green
+# PR awaiting the captain's merge decision) refired a bare "stale: <window>" wake on
+# EVERY freshly-armed watcher, even though .stale-<key> already held the current pane
+# hash - the guard that is supposed to make a distinct hash surface at most once. Root
+# cause: once this hash is already classified (repeat sight) and the crew's own status
+# log still says paused:, the watcher re-derives the verdict via crew_absorb_class on
+# every recheck; a stale/misattributed no-mistakes run-step (e.g. an aborted run whose
+# terminal outcome predates the later paused: line) can report state: failed, which
+# crew_absorb_class maps to "none" - and the old code treated any non-paused verdict as
+# a first-sight surface, which also deleted the .paused-<key> flag, guaranteeing the
+# very same misfire on the next poll/restart forever. Fixed: only a definitive working
+# verdict may break a declared pause; any other verdict (including this misattributed
+# one) stays in the paused/long-recheck-cadence treatment. This models two independent
+# watcher runs (not two polls of one process) since the reported bug was specifically
+# about EACH FRESH watcher re-surfacing.
+test_nonterminal_stale_paused_survives_misattributed_run_step_across_restarts() {
+  local dir state fakebin out capture_file reads_file reads window key pane_hash sig pid run
+  dir=$(make_case paused-misattributed-run-step); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; reads_file="$dir/crew-state-reads"; window="default:fm-mergewait"
+  printf 'idle pane, no busy footer' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/mergewait.meta"
+  printf 'done: PR https://x/y/pull/1 checks green\npaused: PR awaiting captain merge decision\n' \
+    > "$state/mergewait.status"
+  sig=$(seen_sig "$state/mergewait.status"); printf '%s' "$sig" > "$state/.seen-mergewait_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle pane, no busy footer")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '2\n' > "$state/.count-$key"
+  # This exact hash is ALREADY classified - the state the live bug reported: the
+  # suppressor is correctly set, yet the bug refired anyway.
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  # A stale/misattributed run-step outcome, not paused and not working - the live
+  # aborted-run misclassification that outranked the crew's own paused: declaration.
+  export FM_FAKE_CREW_STATE='state: failed · source: run-step · run cancelled'
+  export FM_FAKE_CREW_STATE_READS="$reads_file"
+
+  for run in 1 2 3; do
+    : > "$out"
+    : > "$reads_file"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=3600 \
+      FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+    pid=$!
+    if ! wait_live "$pid" 20; then
+      wait "$pid"
+      fail "fresh watcher restart #$run refired on an already-classified paused hash: $(cat "$out")"
+    fi
+    [ ! -s "$out" ] || fail "fresh watcher restart #$run printed a wake reason: $(cat "$out")"
+    reads=$(wc -l < "$reads_file" | tr -d '[:space:]')
+    [ "$reads" -le 1 ] || fail "fresh watcher restart #$run re-read a non-working declared pause $reads times instead of throttling it"
+    reap "$pid"
+  done
+  [ ! -s "$state/.wake-queue" ] || fail "an already-classified paused hash enqueued a wake across restarts"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] \
+    || fail "the stale suppressor moved off the unchanged pane hash"
+  [ -e "$state/.paused-$key" ] || fail "the paused flag was never recorded, so future restarts stay unguarded"
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_STATE_READS
+  pass "a done-then-declared-paused crew's already-classified hash survives repeated watcher restarts without refiring, even under a misattributed run-step verdict"
+}
+
 test_secondmate_paused_resurfaces_in_normal_mode() {
   local dir state fakebin out capture_file statusf window key pane_hash sig pid back
   dir=$(make_case secondmate-paused-resurface); state="$dir/state"; fakebin="$dir/fakebin"
@@ -1138,6 +1198,7 @@ test_wedge_escalation_marks_demand_deep_inspection_after_threshold
 test_wedge_escalation_resets_when_pane_becomes_active
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
+test_nonterminal_stale_paused_survives_misattributed_run_step_across_restarts
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
 test_secondmate_unpause_clears_pause_tracking
