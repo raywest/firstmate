@@ -13,11 +13,14 @@
 #                                        config/secondmate-harness, or empty when absent.
 #        fm-harness.sh secondmate-effort   print the optional EFFORT token from
 #                                        config/secondmate-harness, or empty when absent.
-# config/secondmate-harness format: a single line "<harness> [<model>] [<effort>]",
+#        fm-harness.sh secondmate-harness-profile
+#                                        print the optional HARNESS_PROFILE token from
+#                                        config/secondmate-harness, or empty when absent.
+# config/secondmate-harness format: a single line "<harness> [<model>] [<effort>] [<harness_profile>]",
 # whitespace-separated. A bare "<harness>" (today's format) behaves exactly as before:
-# harness only, no model/effort. Only the first non-empty, non-comment line is parsed.
-# Model/effort come ONLY from this file - config/crew-harness stays a bare adapter
-# name and is never parsed for a model.
+# harness only, no model/effort/harness_profile. Only the first non-empty, non-comment
+# line is parsed. Model, effort, and harness_profile come ONLY from this file -
+# config/crew-harness stays a bare adapter name and is never parsed for those axes.
 # Detection layers: verified environment markers first, then process ancestry.
 # Record each newly verified env marker here.
 set -u
@@ -98,7 +101,8 @@ secondmate_line() {
   done < "$CONFIG/secondmate-harness"
 }
 
-# Print the 1-based whitespace-separated token (1=harness, 2=model, 3=effort) of
+# Print the 1-based whitespace-separated token (1=harness, 2=model, 3=effort,
+# 4=harness_profile) of
 # the resolved secondmate_line, or nothing if the line or that field is absent.
 secondmate_field() {
   local idx=$1 line
@@ -110,6 +114,7 @@ secondmate_field() {
     1) printf '%s\n' "${1:-}" ;;
     2) printf '%s\n' "${2:-}" ;;
     3) printf '%s\n' "${3:-}" ;;
+    4) printf '%s\n' "${4:-}" ;;
   esac
 }
 
@@ -144,10 +149,20 @@ resolve_secondmate_effort() {
   secondmate_field 3
 }
 
+# Print the optional harness-profile token (4th field) from
+# config/secondmate-harness, the same way.
+resolve_secondmate_harness_profile() {
+  local sm
+  sm=$(secondmate_field 1)
+  [ -n "$sm" ] && [ "$sm" != "default" ] || return 0
+  secondmate_field 4
+}
+
 case "${1:-}" in
   crew) resolve_crew ;;
   secondmate) resolve_secondmate ;;
   secondmate-model) resolve_secondmate_model ;;
   secondmate-effort) resolve_secondmate_effort ;;
+  secondmate-harness-profile) resolve_secondmate_harness_profile ;;
   *) detect_own ;;
 esac

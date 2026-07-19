@@ -660,6 +660,8 @@ crew_dispatch_validate() {
   fi
   err=$(jq -r '
     def verified($h): ["claude","codex","opencode","pi","grok","kimi"] | index($h);
+    def plain_profile_name:
+      if type == "string" then test("^[A-Za-z0-9_-]+$") else false end;
     def effort_ok($h; $e):
       if $e == null then true
       elif ($e | type) != "string" then false
@@ -693,12 +695,14 @@ crew_dispatch_validate() {
     elif [(.rules // [])[]? | use_profiles(.use?)[]? | select(type != "object")] | length > 0 then "each use profile must be an object"
     elif [(.rules // [])[]? | use_profiles(.use?)[]? | select((.harness? | type) != "string" or (.harness | length) == 0)] | length > 0 then "each use profile needs harness"
     elif [(.rules // [])[]? | use_profiles(.use?)[]? | select(has("harness_profile") and ((.harness_profile? | type) != "string" or (.harness_profile | length) == 0))] | length > 0 then "each use profile harness_profile must be a non-empty string when present"
+    elif [(.rules // [])[]? | use_profiles(.use?)[]? | select(has("harness_profile") and (.harness_profile | plain_profile_name | not))] | length > 0 then "each use profile harness_profile must be a plain name (letters, digits, dash, underscore only) when present"
     elif [(.rules // [])[]? | select(has("select") and ((.select? | type) != "string" or (.select | length) == 0))] | length > 0 then "select must be a non-empty string"
     elif [(.rules // [])[]? | .select? // empty | select(. != "quota-balanced")] | length > 0 then
       "unknown select: " + ([ (.rules // [])[]? | .select? // empty | select(. != "quota-balanced") ] | unique | join(", "))
     elif has("default") and (.default | type) != "object" then "default must be an object"
     elif has("default") and ((.default.harness? | type) != "string" or (.default.harness | length) == 0) then "default needs harness when present"
     elif has("default") and (.default | has("harness_profile")) and ((.default.harness_profile? | type) != "string" or (.default.harness_profile | length) == 0) then "default harness_profile must be a non-empty string when present"
+    elif has("default") and (.default | has("harness_profile")) and (.default.harness_profile | plain_profile_name | not) then "default harness_profile must be a plain name (letters, digits, dash, underscore only) when present"
     else
       ([(.rules // [])[]? | use_profiles(.use?)[]?.harness] + [.default?.harness?]
         | map(select(. != null))

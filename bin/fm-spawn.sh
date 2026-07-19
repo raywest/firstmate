@@ -51,14 +51,14 @@
 #   kimi-template --secondmate or non-tmux spawn is refused. A non-flag string
 #   containing whitespace is treated as a RAW launch command - the escape hatch
 #   for verifying new adapters, intentionally outside adapter scope gates.
-#   config/secondmate-harness may also carry an optional model and effort as extra
-#   whitespace-separated tokens ("<harness> [<model>] [<effort>]"). For a
-#   --secondmate spawn, those tokens apply only when this spawn also resolves its
-#   harness from config/secondmate-harness. An explicit per-spawn --harness,
-#   positional harness arg, or raw launch command starts with clean model/effort
-#   defaults unless the caller also passes explicit --model/--effort flags. When
-#   the file governs the spawn, its model/effort tokens are re-resolved on every
-#   respawn exactly like the harness axis, and explicit --model/--effort flags
+#   config/secondmate-harness may also carry optional model, effort, and
+#   harness-profile tokens ("<harness> [<model>] [<effort>] [<harness_profile>]").
+#   For a --secondmate spawn, those tokens apply only when this spawn also resolves
+#   its harness from config/secondmate-harness. An explicit per-spawn --harness,
+#   positional harness arg, or raw launch command starts with clean model/effort/
+#   harness-profile defaults unless the caller also passes explicit axis flags. When
+#   the file governs the spawn, its tokens are re-resolved on every respawn exactly
+#   like the harness axis, and explicit --model/--effort/--harness-profile flags
 #   still win over the file's tokens.
 #   A --secondmate spawn also propagates the primary's declared inherited local
 #   material, so the secondmate's OWN crewmates inherit primary config and the
@@ -183,22 +183,12 @@ done
 [ "$HARNESS_SET" -eq 0 ] || [ -n "$HARNESS_ARG" ] || { echo "error: --harness requires a non-empty value" >&2; exit 1; }
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
+[ "$HARNESS_PROFILE_SET" -eq 0 ] || [ -n "$HARNESS_PROFILE" ] || { echo "error: --harness-profile requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
-# --harness-profile must be a plain name: codex's own --profile flag resolves it to
-# ${CODEX_HOME:-$HOME/.codex}/<name>.config.toml and rejects a path outright
-# ("pass a plain name such as `work`", verified on codex-cli 0.144.1), so firstmate
-# enforces the same shape before ever reaching codex.
-if [ "$HARNESS_PROFILE_SET" -eq 1 ]; then
-  case "$HARNESS_PROFILE" in
-    '') echo "error: --harness-profile requires a non-empty value" >&2; exit 1 ;;
-    *[!A-Za-z0-9_-]*) echo "error: --harness-profile must be a plain name (letters, digits, dash, underscore only); codex's own --profile flag rejects a path" >&2; exit 1 ;;
-  esac
-fi
-
 # Backend selection (data/fm-backend-design-d7): explicit --backend, else
 # FM_BACKEND env, else config/backend, else runtime auto-detection, else
 # default tmux (fm_backend_name). fm_backend_validate_spawn refuses unknown or
@@ -474,6 +464,42 @@ if [ "$LAUNCH_SOURCE" = template ]; then
   esac
 fi
 
+# config/secondmate-harness may carry optional model, effort, and harness-profile
+# tokens alongside the harness ("<harness> [<model>] [<effort>] [<harness_profile>]").
+# They apply only when this is a --secondmate spawn and no explicit per-spawn
+# harness/raw launch was supplied, so the harness itself came from the secondmate
+# config fallback chain. Resolving here on every spawn makes every pin durable
+# across respawns. Explicit --model/--effort/--harness-profile flags still win.
+if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
+  if [ "$MODEL_SET" -eq 0 ]; then
+    SM_MODEL=$("$SCRIPT_DIR/fm-harness.sh" secondmate-model)
+    [ -z "$SM_MODEL" ] || MODEL=$SM_MODEL
+  fi
+  if [ "$EFFORT_SET" -eq 0 ]; then
+    SM_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort)
+    if [ -n "$SM_EFFORT" ]; then
+      case "$SM_EFFORT" in
+        low|medium|high|xhigh|max) EFFORT=$SM_EFFORT ;;
+        *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max; ignoring" >&2 ;;
+      esac
+    fi
+  fi
+  if [ "$HARNESS_PROFILE_SET" -eq 0 ]; then
+    SM_HARNESS_PROFILE=$("$SCRIPT_DIR/fm-harness.sh" secondmate-harness-profile)
+    [ -z "$SM_HARNESS_PROFILE" ] || HARNESS_PROFILE=$SM_HARNESS_PROFILE
+  fi
+fi
+
+# --harness-profile must be a plain name: codex's own --profile flag resolves it to
+# ${CODEX_HOME:-$HOME/.codex}/<name>.config.toml and rejects a path outright
+# ("pass a plain name such as `work`", verified on codex-cli 0.144.1), so firstmate
+# enforces the same shape before ever reaching codex.
+if [ -n "$HARNESS_PROFILE" ]; then
+  case "$HARNESS_PROFILE" in
+    *[!A-Za-z0-9_-]*) echo "error: --harness-profile must be a plain name (letters, digits, dash, underscore only); codex's own --profile flag rejects a path" >&2; exit 1 ;;
+  esac
+fi
+
 # --harness-profile scope gate (fail closed): codex is the only harness whose
 # installed CLI has a provider-config layering flag (-p/--profile), so a
 # --harness-profile paired with any other harness is refused loudly rather than
@@ -482,7 +508,7 @@ fi
 # templates below), so pairing --harness-profile with a raw command would silently
 # drop it; refuse that combination too instead of launching without the requested
 # provider config.
-if [ "$HARNESS_PROFILE_SET" -eq 1 ]; then
+if [ -n "$HARNESS_PROFILE" ]; then
   if [ "$LAUNCH_SOURCE" = raw ]; then
     echo "error: --harness-profile is not supported with a raw launch command; embed codex's --profile flag directly in the raw command instead" >&2
     exit 1
@@ -515,28 +541,6 @@ case "$HARNESS" in
     fi
     ;;
 esac
-
-# config/secondmate-harness may carry optional model/effort tokens alongside the
-# harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
-# --secondmate spawn and no explicit per-spawn harness/raw launch was supplied, so
-# the harness itself came from the secondmate config fallback chain. Resolving
-# here on every spawn makes the pin durable across respawns. Precedence: explicit
-# --model/--effort flags still win over the file's tokens.
-if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
-  if [ "$MODEL_SET" -eq 0 ]; then
-    SM_MODEL=$("$SCRIPT_DIR/fm-harness.sh" secondmate-model)
-    [ -z "$SM_MODEL" ] || MODEL=$SM_MODEL
-  fi
-  if [ "$EFFORT_SET" -eq 0 ]; then
-    SM_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort)
-    if [ -n "$SM_EFFORT" ]; then
-      case "$SM_EFFORT" in
-        low|medium|high|xhigh|max) EFFORT=$SM_EFFORT ;;
-        *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max; ignoring" >&2 ;;
-      esac
-    fi
-  fi
-fi
 
 secondmate_registry_value() {
   local id=$1 key=$2 reg line value

@@ -20,7 +20,7 @@
 #     in the subhome with the persistent charter and cleared operational overrides
 #   - a bare `fm-<id>` send targets the window recorded in THIS home's meta
 #   - backlog items move verbatim into the subhome and leave the main backlog
-#   - recovery respawns from the durable registry + persistent home
+#   - recovery respawns from the durable registry + persistent home with its standing profile pin
 #   - teardown removes meta and the registry route only after removing the home
 set -u
 
@@ -41,7 +41,9 @@ BETA_ORIGIN=
 
 # --- shared world + seed ----------------------------------------------------
 setup_world() {
-  mkdir -p "$HOME_DIR/projects" "$HOME_DIR/data" "$HOME_DIR/state"
+  mkdir -p "$HOME_DIR/projects" "$HOME_DIR/data" "$HOME_DIR/state" "$HOME_DIR/config" "$HOME_DIR/codex-home"
+  printf 'codex gpt-5 high glm\n' > "$HOME_DIR/config/secondmate-harness"
+  printf 'model_provider = "openrouter"\n' > "$HOME_DIR/codex-home/glm.config.toml"
   fm_git_init_commit "$HOME_DIR/projects/alpha"
   fm_git_init_commit "$HOME_DIR/projects/beta"
   fm_git_init_commit "$HOME_DIR/projects/gamma"
@@ -112,21 +114,23 @@ phase_seed() {
 
 phase_spawn() {
   : > "$LOG"
-  PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_CONFIG_OVERRIDE="$HOME_DIR/parent-config" \
+  PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_CONFIG_OVERRIDE="$HOME_DIR/config" CODEX_HOME="$HOME_DIR/codex-home" \
     FM_FAKE_TMUX_LOG="$LOG" FM_FAKE_TMUX_CAPTURE="$PANE" \
-    "$ROOT/bin/fm-spawn.sh" design "$SUB" codex --secondmate >/dev/null \
+    "$ROOT/bin/fm-spawn.sh" design "$SUB" --secondmate >/dev/null \
     || fail "secondmate spawn failed"
 
   local meta="$HOME_DIR/state/design.meta"
   assert_grep 'kind=secondmate' "$meta" "spawn meta did not record kind=secondmate"
   assert_grep "home=$SUB_ABS" "$meta" "spawn meta did not record the subhome"
   assert_grep 'projects=alpha, beta, gamma' "$meta" "spawn meta did not record the project list"
+  assert_grep 'harness_profile=glm' "$meta" "spawn meta did not record the standing harness profile"
   # Launch ran in the subhome, with the persistent charter and cleared overrides,
   # and never ran a project-style treehouse get.
   assert_grep "FM_HOME='$SUB_ABS'" "$LOG" "secondmate launch did not set FM_HOME to the subhome"
   assert_grep 'FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE=' "$LOG" "launch did not clear operational overrides"
   assert_grep 'FM_CONFIG_OVERRIDE=' "$LOG" "launch did not clear the config override"
   assert_grep "$SUB_ABS/data/charter.md" "$LOG" "launch did not use the persistent charter"
+  assert_grep -- "--profile 'glm'" "$LOG" "launch did not use the standing codex harness profile"
   assert_no_grep 'notify=' "$LOG" "secondmate codex launch included the parent turn-end notify hook"
   assert_no_grep 'turn-ended' "$LOG" "secondmate codex launch referenced a parent turn-ended signal"
   assert_no_grep 'treehouse get' "$LOG" "secondmate spawn ran a project treehouse get"
@@ -198,14 +202,18 @@ phase_recovery() {
   # Simulate a restart: drop the live meta, then respawn from the registry +
   # persistent home (no explicit home argument).
   rm -f "$HOME_DIR/state/design.meta"
-  PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_FAKE_TMUX_LOG="$LOG" FM_FAKE_TMUX_CAPTURE="$PANE" \
-    "$ROOT/bin/fm-spawn.sh" design "echo relaunch" --secondmate >/dev/null 2>&1 \
+  : > "$LOG"
+  PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" CODEX_HOME="$HOME_DIR/codex-home" \
+    FM_FAKE_TMUX_LOG="$LOG" FM_FAKE_TMUX_CAPTURE="$PANE" \
+    "$ROOT/bin/fm-spawn.sh" design --secondmate >/dev/null 2>&1 \
     || fail "recovery respawn failed"
   local meta="$HOME_DIR/state/design.meta"
   assert_grep "home=$SUB_ABS" "$meta" "respawn did not preserve the persistent home from the registry"
   assert_grep 'projects=alpha, beta, gamma' "$meta" "respawn did not preserve the project list from the registry"
   assert_grep 'window=firstmate:fm-design' "$meta" "respawn did not reconstruct the direct-report window"
-  pass "recovery: respawns from the durable registry and persistent home"
+  assert_grep 'harness_profile=glm' "$meta" "respawn did not restore the standing harness profile"
+  assert_grep -- "--profile 'glm'" "$LOG" "respawn did not launch with the standing codex profile"
+  pass "recovery: respawns from the durable registry and persistent home with its standing profile pin"
 }
 
 phase_teardown() {

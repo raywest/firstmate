@@ -174,13 +174,13 @@ Primary-session watcher wake protocols are rendered at session start by [`bin/fm
 Claude and Grok use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
 When it is absent or contains `default`, crewmates mirror the firstmate's own harness.
-`config/secondmate-harness` is a separate local, gitignored file containing the adapter the primary uses to launch secondmate agents, optionally followed by model and effort tokens on the same line.
-The first non-empty, non-comment line is parsed as `<harness> [<model>] [<effort>]`.
-A bare `<harness>` preserves the previous behavior: harness only, with no model or effort launch flag.
-When the harness token is absent or `default`, secondmate launch falls back through `config/crew-harness` and then the primary's own harness, and no model or effort is read from that file.
-`fm-harness.sh secondmate-model` and `fm-harness.sh secondmate-effort` expose only the optional tokens from `config/secondmate-harness`; `config/crew-harness` remains a bare adapter-name file.
+`config/secondmate-harness` is a separate local, gitignored file containing the adapter the primary uses to launch secondmate agents, optionally followed by model, effort, and codex-only harness-profile tokens on the same line.
+The first non-empty, non-comment line is parsed as `<harness> [<model>] [<effort>] [<harness_profile>]`.
+A bare `<harness>` preserves the previous behavior: harness only, with no model, effort, or harness-profile launch flag.
+When the harness token is absent or `default`, secondmate launch falls back through `config/crew-harness` and then the primary's own harness, and no model, effort, or harness-profile token is read from that file.
+`fm-harness.sh secondmate-model`, `fm-harness.sh secondmate-effort`, and `fm-harness.sh secondmate-harness-profile` expose only the optional tokens from `config/secondmate-harness`; `config/crew-harness` remains a bare adapter-name file.
 An explicit harness argument to `fm-spawn.sh` still overrides either config file for that spawn only.
-An explicit `--model` or `--effort` overrides the matching token from `config/secondmate-harness`; an explicit harness or raw launch command starts with clean model and effort defaults unless those flags are also passed.
+An explicit `--model`, `--effort`, or `--harness-profile` overrides the matching token from `config/secondmate-harness`; an explicit harness or raw launch command starts with clean model, effort, and harness-profile defaults unless those flags are also passed.
 When `config/crew-dispatch.json` exists, crewmate and scout spawns require an explicit resolved harness instead of automatically falling back to `config/crew-harness`.
 The inherited-local-material contract is owned by `secondmate-provisioning`; for harness behavior, its propagated config items make a secondmate's own crewmates, dispatch profiles, and backlog backend use the primary values.
 `config/secondmate-harness` is not inherited because secondmates do not launch secondmates.
@@ -190,10 +190,10 @@ For Pi secondmate launches, `fm-spawn.sh` starts Pi with `-e` pointed at the sec
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
-The shell scripts do not match those rules; firstmate chooses the best matching rule with judgment, resolves that rule directly or through a supported selector, and passes only concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`.
+The shell scripts do not match those rules; firstmate chooses the best matching rule with judgment, resolves that rule directly or through a supported selector, and passes only concrete `--harness`, `--model`, `--effort`, and `--harness-profile` flags to `fm-spawn.sh`.
 When the file exists, `fm-spawn.sh` enforces that contract by refusing crewmate and scout spawns that lack an explicit harness (`--harness`, a positional adapter, or a raw launch command).
 Batch spawns satisfy the same requirement with a shared `--harness`.
-Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model and effort tokens.
+Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model, effort, and harness-profile tokens.
 This section is the single owner of the canonical schema and its per-field semantics; `AGENTS.md` section 4 keeps only the dispatch procedure and points here.
 
 ```json
@@ -218,7 +218,7 @@ Per rule, `when` and `use` are required.
 `select` is optional and currently supports `quota-balanced`.
 Absent `select` means use the first array element, or the only object in the single-object form; the first array element is the deterministic tie-break and the ultimate fallback.
 `default` is optional.
-An omitted model or effort means the selected harness uses its own default for that axis.
+An omitted model, effort, or harness_profile means the selected harness uses its own default for that axis.
 If a selected profile carries an effort value the chosen harness does not accept, `fm-spawn.sh` records the requested `effort=` in task meta for traceability but omits the launch flag, and bootstrap reports the invalid harness/effort pair as a `CREW_DISPATCH` diagnostic when it is visible in the file.
 `harness_profile` is a codex-only provider-config override: a plain name (never a path) that `fm-spawn.sh` passes to codex's own `-p/--profile <name>` flag, which layers `${CODEX_HOME:-$HOME/.codex}/<name>.config.toml` on top of codex's base config (verified on codex-cli 0.144.1; there is no `--config-file <path>` flag, and `--profile` rejects a path outright).
 It is how a dispatch rule selects a provider-swapped codex variant, such as GLM 5.2 via OpenRouter, without the raw-launch escape hatch; see the harness-adapters skill's codex section for the standing GLM audition rules.
@@ -227,7 +227,7 @@ It is how a dispatch rule selects a provider-swapped codex variant, such as GLM 
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
 When the file exists, bootstrap validates it with `jq`.
 Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json` plus one `BOOTSTRAP_INFO:` fact per rule and default profile.
-Malformed JSON, an unverified harness, a malformed array profile, an unknown `select`, an effort value unsupported by that harness, a `harness_profile` on a non-codex profile, or a `harness_profile` whose config file does not exist under `${CODEX_HOME:-$HOME/.codex}` is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
+Malformed JSON, an unverified harness, a malformed array profile, an unknown `select`, an effort value unsupported by that harness, a malformed `harness_profile`, a `harness_profile` on a non-codex profile, or a `harness_profile` whose config file does not exist under `${CODEX_HOME:-$HOME/.codex}` is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 If no dispatch rule fits, firstmate uses the dispatch profile `default` when present, then falls back to `config/crew-harness`.
 Because the spawn backstop is gated by file presence, any fallback path after a missing match, validation error, or missing `jq` still passes a resolved harness explicitly until the file is fixed or removed.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.

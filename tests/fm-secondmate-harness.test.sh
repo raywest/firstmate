@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests for the secondmate-vs-crewmate harness split, the optional model/effort
-# tokens config/secondmate-harness carries alongside the harness, and the
+# Tests for the secondmate-vs-crewmate harness split, the optional model/effort/
+# harness-profile tokens config/secondmate-harness carries alongside the harness, and the
 # primary->secondmate inherited local-material propagation.
 #
 # Three capabilities are under test:
@@ -20,14 +20,12 @@
 #      secondmate spawn, on the bootstrap secondmate sweep, and by config push).
 #      config/secondmate-harness is deliberately NOT inherited (secondmates do
 #      not spawn secondmates).
-#   C) Model/effort pin. config/secondmate-harness may carry optional model and
-#      effort tokens after the harness ("<harness> [<model>] [<effort>]"), read by
-#      fm-harness.sh secondmate-model / secondmate-effort. A bare harness-only
-#      line (today's format) yields empty model/effort - full backward-compat.
-#      fm-spawn.sh populates MODEL/EFFORT from those tokens for a --secondmate
-#      spawn only when the harness also resolves from that file, so the pin is
-#      durable across every respawn while explicit per-spawn harness/model/effort
-#      flags still win.
+#   C) Launch-axis pins. config/secondmate-harness may carry optional model,
+#      effort, and harness-profile tokens after the harness, read by fm-harness.sh.
+#      A bare harness-only line (today's format) yields empty launch-axis values -
+#      full backward-compat. fm-spawn.sh populates those values for a --secondmate
+#      spawn only when the harness also resolves from that file, so the pins are
+#      durable across every respawn while explicit per-spawn axis flags still win.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -112,6 +110,27 @@ extra whitespace between tokens is tolerated^grok   grok-4    xhigh^grok^grok-4^
 leading/trailing blank lines and a comment are skipped^# a comment\n\nclaude opus low\n^claude^opus^low
 ROWS
   pass "C1 fm-harness.sh secondmate-model/secondmate-effort resolve the optional tokens; bare harness stays empty (backward-compat)"
+}
+
+test_secondmate_harness_profile_token() {
+  local label line expected case_dir cfg got n
+  n=0
+  while IFS='^' read -r label line expected; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    case_dir="$TMP_ROOT/profile-tokens-$n"
+    cfg="$case_dir/config"
+    mkdir -p "$cfg"
+    [ "$line" = ABSENT ] || printf '%b\n' "$line" > "$cfg/secondmate-harness"
+    got=$(CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh" secondmate-harness-profile)
+    [ "$got" = "$expected" ] || fail "$label: harness profile resolved '$got', expected '$expected'"
+  done <<'ROWS'
+absent file has no harness profile^ABSENT^
+bare harness has no harness profile^codex^
+fourth token resolves as harness profile^codex gpt-5 high glm^glm
+default harness ignores harness profile^default gpt-5 high glm^
+ROWS
+  pass "C1b fm-harness.sh secondmate-harness-profile resolves the fourth optional token"
 }
 
 # ===========================================================================
@@ -457,7 +476,7 @@ spawn_secondmate_capture() {
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$world/home" \
     FM_STATE_OVERRIDE="$world/home/state" FM_DATA_OVERRIDE="$world/home/data" \
     FM_PROJECTS_OVERRIDE="$world/home/projects" FM_CONFIG_OVERRIDE="$world/home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_LAUNCH_LOG="$launchlog" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_LAUNCH_LOG="$launchlog" CODEX_HOME="$world/codex-home" \
     "$ROOT/bin/fm-spawn.sh" "$id" "$home" "$@" --secondmate
 }
 
@@ -528,6 +547,29 @@ test_spawn_secondmate_harness_model_and_effort_tokens() {
   assert_contains "$launch" "claude --dangerously-skip-permissions --model 'opus' --effort 'high'" \
     "model-effort-tokens: launch did not carry both --model opus and --effort high"
   pass "C4 spawn: config/secondmate-harness's model+effort tokens thread into the launch and meta"
+}
+
+test_spawn_secondmate_harness_profile_token() {
+  local w sm meta launchlog launch out status
+  w="$TMP_ROOT/spawn-harness-profile-token"
+  sm="$w/sm"
+  launchlog="$w/launch.log"
+  mkdir -p "$w/home/config" "$w/codex-home"
+  printf 'codex gpt-5 high glm\n' > "$w/home/config/secondmate-harness"
+  printf 'model_provider = "openrouter"\n' > "$w/codex-home/glm.config.toml"
+  make_seeded_home "$sm" sm
+
+  out=$(spawn_secondmate_capture "$w" sm "$sm" "$launchlog" 2>&1)
+  status=$?
+  expect_code 0 "$status" "four-token secondmate-harness spawn should succeed"
+  meta="$w/home/state/sm.meta"
+  [ "$(meta_field "$meta" model)" = gpt-5 ] || fail "harness-profile-token: meta model did not use the standing token"
+  [ "$(meta_field "$meta" effort)" = high ] || fail "harness-profile-token: meta effort did not use the standing token"
+  [ "$(meta_field "$meta" harness_profile)" = glm ] || fail "harness-profile-token: meta harness_profile did not use the standing token"
+  launch=$(cat "$launchlog")
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --profile 'glm'" \
+    "harness-profile-token: launch did not use all four standing tokens"
+  pass "C4b spawn: config/secondmate-harness's fourth token threads codex profile into the launch and meta"
 }
 
 # Precedence: an explicit per-spawn --model overrides the file's model token.
@@ -1018,6 +1060,7 @@ test_config_push_exits_nonzero_on_copy_error() {
 
 test_harness_resolution
 test_secondmate_model_effort_tokens
+test_secondmate_harness_profile_token
 test_propagate_lib
 test_spawn_split_and_inherit
 test_spawn_backward_compat_crew_fallback
@@ -1027,6 +1070,7 @@ test_spawn_unverified_secondmate_harness_refused
 test_spawn_bare_harness_no_model_effort_flag
 test_spawn_secondmate_harness_model_token
 test_spawn_secondmate_harness_model_and_effort_tokens
+test_spawn_secondmate_harness_profile_token
 test_spawn_explicit_model_overrides_secondmate_harness_token
 test_spawn_explicit_effort_overrides_secondmate_harness_token
 test_spawn_explicit_harness_does_not_inherit_secondmate_harness_tokens

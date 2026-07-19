@@ -791,6 +791,8 @@ array profile unsupported effort is flagged^{"rules":[{"when":"big feature","use
 harness_profile on non-codex harness is flagged^{"rules":[{"when":"audition work","use":{"harness":"claude","harness_profile":"glm"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - harness_profile is only supported for harness codex: claude
 default harness_profile on non-codex harness is flagged^{"default":{"harness":"claude","harness_profile":"glm"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - harness_profile is only supported for harness codex: claude
 empty harness_profile is flagged^{"rules":[{"when":"audition work","use":{"harness":"codex","harness_profile":""}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each use profile harness_profile must be a non-empty string when present
+path-shaped rule harness_profile is flagged^{"rules":[{"when":"audition work","use":{"harness":"codex","harness_profile":"../glm"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each use profile harness_profile must be a plain name (letters, digits, dash, underscore only) when present
+path-shaped default harness_profile is flagged^{"default":{"harness":"codex","harness_profile":"../glm"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default harness_profile must be a plain name (letters, digits, dash, underscore only) when present
 array profile harness_profile on non-codex harness is flagged^{"rules":[{"when":"big feature","use":[{"harness":"claude","harness_profile":"glm"},{"harness":"codex"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - harness_profile is only supported for harness codex: claude
 ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"

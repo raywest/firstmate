@@ -315,6 +315,73 @@ test_codex_secondmate_threads_harness_profile() {
   pass "codex secondmate template also threads --harness-profile"
 }
 
+test_secondmate_harness_profile_token_is_durable() {
+  local rec id sm out status launch
+  id=profile-codex-sm-config-hp-z18b
+  rec=$(make_spawn_case profile-codex-sm-config-hp codex "$id")
+  read_case_record "$rec"
+  make_codex_profile_file "$CASE_DIR" glm
+  printf '%s\n' 'codex gpt-5 high glm' > "$HOME_DIR/config/secondmate-harness"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "secondmate harness_profile token should resolve through standing config"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
+  assert_meta_harness_profile "$HOME_DIR/state/$id.meta" glm
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --profile 'glm'" \
+    "secondmate launch did not resolve all four standing config tokens"
+  pass "secondmate standing harness-profile token threads into the launch and meta"
+}
+
+test_secondmate_harness_profile_token_explicit_flag_wins() {
+  local rec id sm out status launch
+  id=profile-codex-sm-config-hp-override-z18c
+  rec=$(make_spawn_case profile-codex-sm-config-hp-override codex "$id")
+  read_case_record "$rec"
+  make_codex_profile_file "$CASE_DIR" glm
+  make_codex_profile_file "$CASE_DIR" alternate
+  printf '%s\n' 'codex gpt-5 high glm' > "$HOME_DIR/config/secondmate-harness"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$sm" --secondmate --harness-profile alternate)
+  status=$?
+  expect_code 0 "$status" "explicit secondmate harness_profile should override standing config"
+  assert_meta_harness_profile "$HOME_DIR/state/$id.meta" alternate
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "--profile 'alternate'" "secondmate launch did not use the explicit harness-profile"
+  assert_not_contains "$launch" "--profile 'glm'" "secondmate launch leaked the standing harness-profile token"
+  pass "explicit --harness-profile overrides the secondmate standing token"
+}
+
+test_secondmate_harness_profile_token_is_validated() {
+  local rec id sm out status
+  id=profile-codex-sm-config-hp-invalid-z18d
+  rec=$(make_spawn_case profile-codex-sm-config-hp-invalid codex "$id")
+  read_case_record "$rec"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  printf '%s\n' 'codex gpt-5 high does-not-exist' > "$HOME_DIR/config/secondmate-harness"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 1 "$status" "a missing standing harness-profile config should fail closed"
+  assert_contains "$out" "missing or unreadable" "standing config missing-file check did not run"
+  assert_absent "$HOME_DIR/state/$id.meta" "missing standing profile config should refuse before meta is written"
+
+  printf '%s\n' 'codex gpt-5 high ../glm' > "$HOME_DIR/config/secondmate-harness"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 1 "$status" "a path-shaped standing harness-profile should be refused"
+  assert_contains "$out" "must be a plain name" "standing config profile shape check did not run"
+  assert_absent "$HOME_DIR/state/$id.meta" "path-shaped standing profile should refuse before meta is written"
+  pass "secondmate standing harness-profile tokens use shape and fail-closed validation"
+}
+
 test_harness_profile_fails_closed_when_config_missing() {
   local rec id out status
   id=profile-codex-hp-missing-z19
@@ -536,6 +603,9 @@ test_batch_forwards_shared_profile_flags
 test_active_dispatch_profile_does_not_block_secondmate_launch
 test_codex_threads_harness_profile
 test_codex_secondmate_threads_harness_profile
+test_secondmate_harness_profile_token_is_durable
+test_secondmate_harness_profile_token_explicit_flag_wins
+test_secondmate_harness_profile_token_is_validated
 test_harness_profile_fails_closed_when_config_missing
 test_harness_profile_rejected_for_non_codex_harness
 test_harness_profile_rejected_for_raw_launch_command
