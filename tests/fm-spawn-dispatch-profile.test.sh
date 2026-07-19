@@ -81,15 +81,28 @@ make_seeded_secondmate_home() {
 }
 
 run_spawn() {
-  local home=$1 wt=$2 fakebin=$3 launchlog=$4
+  local home=$1 wt=$2 fakebin=$3 launchlog=$4 codex_home
   shift 4
+  # CODEX_HOME is always pinned to an isolated per-case directory (never the real
+  # operator ~/.codex) so --harness-profile file-existence checks are deterministic
+  # and never touch real persistence.
+  codex_home="$(dirname "$home")/codex-home"
+  mkdir -p "$codex_home"
   : > "$launchlog"
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
-    FM_FAKE_LAUNCH_LOG="$launchlog" GROK_HOME="$home/grok-home" PATH="$fakebin:$PATH" \
+    FM_FAKE_LAUNCH_LOG="$launchlog" GROK_HOME="$home/grok-home" CODEX_HOME="$codex_home" \
+    PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
+}
+
+make_codex_profile_file() {
+  local case_dir=$1 name=$2 codex_home
+  codex_home="$case_dir/codex-home"
+  mkdir -p "$codex_home"
+  printf 'model_provider = "openrouter"\nmodel = "z-ai/glm-5.2"\n' > "$codex_home/$name.config.toml"
 }
 
 read_case_record() {
@@ -105,6 +118,11 @@ assert_meta_profile() {
   assert_grep "effort=$effort" "$meta" "meta missing effort=$effort"
 }
 
+assert_meta_harness_profile() {
+  local meta=$1 value=$2
+  assert_grep "harness_profile=$value" "$meta" "meta missing harness_profile=$value"
+}
+
 test_no_profile_keeps_claude_launch_unchanged() {
   local rec id out status expected launch
   id=profile-off-z1
@@ -116,11 +134,12 @@ test_no_profile_keeps_claude_launch_unchanged() {
   expect_code 0 "$status" "claude spawn without profile flags should succeed"
   assert_contains "$out" "spawned $id harness=claude" "spawn did not report claude"
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude default default
+  assert_meta_harness_profile "$HOME_DIR/state/$id.meta" default
 
   launch=$(cat "$LAUNCH_LOG")
   expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \"\$(cat '$HOME_DIR/data/$id/brief.md')\""
   [ "$launch" = "$expected" ] || fail "no-profile claude launch changed"$'\n'"expected: $expected"$'\n'"actual:   $launch"
-  pass "no --model/--effort records defaults and keeps the claude launch byte-identical"
+  pass "no --model/--effort/--harness-profile records defaults and keeps the claude launch byte-identical"
 }
 
 test_active_dispatch_profile_requires_explicit_harness_for_ship() {
@@ -234,10 +253,12 @@ test_codex_threads_model_and_effort() {
   status=$?
   expect_code 0 "$status" "codex spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
+  assert_meta_harness_profile "$HOME_DIR/state/$id.meta" default
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
     "codex launch did not thread model and reasoning effort config"
-  pass "codex receives --model and model_reasoning_effort profile flags"
+  assert_not_contains "$launch" "--profile" "codex launch must not gain --profile when --harness-profile is omitted"
+  pass "codex receives --model and model_reasoning_effort profile flags, harness_profile stays default"
 }
 
 test_codex_omits_invalid_max_effort() {
@@ -255,6 +276,119 @@ test_codex_omits_invalid_max_effort() {
     "codex launch did not preserve the model flag when max effort was omitted"
   assert_not_contains "$launch" "model_reasoning_effort" "codex launch must omit unsupported max reasoning effort"
   pass "codex omits unsupported max effort instead of passing a bad config value"
+}
+
+test_codex_threads_harness_profile() {
+  local rec id out status launch
+  id=profile-codex-hp-z17
+  rec=$(make_spawn_case profile-codex-hp codex "$id")
+  read_case_record "$rec"
+  make_codex_profile_file "$CASE_DIR" glm
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness-profile glm)
+  status=$?
+  expect_code 0 "$status" "codex spawn with a valid --harness-profile should succeed"
+  assert_meta_profile "$HOME_DIR/state/$id.meta" codex default default
+  assert_meta_harness_profile "$HOME_DIR/state/$id.meta" glm
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex --profile 'glm' --dangerously-bypass-approvals-and-sandbox" \
+    "codex launch did not thread the --profile flag"
+  pass "codex receives --profile and records harness_profile in meta"
+}
+
+test_codex_secondmate_threads_harness_profile() {
+  local rec id sm out status launch
+  id=profile-codex-sm-hp-z18
+  rec=$(make_spawn_case profile-codex-sm-hp codex "$id")
+  read_case_record "$rec"
+  make_codex_profile_file "$CASE_DIR" glm
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate --harness-profile glm)
+  status=$?
+  expect_code 0 "$status" "codex secondmate spawn with a valid --harness-profile should succeed"
+  assert_meta_harness_profile "$HOME_DIR/state/$id.meta" glm
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex --profile 'glm' --dangerously-bypass-approvals-and-sandbox" \
+    "codex secondmate launch did not thread the --profile flag"
+  pass "codex secondmate template also threads --harness-profile"
+}
+
+test_harness_profile_fails_closed_when_config_missing() {
+  local rec id out status
+  id=profile-codex-hp-missing-z19
+  rec=$(make_spawn_case profile-codex-hp-missing codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness-profile does-not-exist)
+  status=$?
+  expect_code 1 "$status" "codex spawn with a missing --harness-profile config should fail closed"
+  assert_contains "$out" "missing or unreadable" "spawn did not explain the missing harness-profile config"
+  assert_absent "$HOME_DIR/state/$id.meta" "fail-closed refusal should happen before meta is written"
+  pass "--harness-profile fails closed when the named config file does not exist"
+}
+
+test_harness_profile_rejected_for_non_codex_harness() {
+  local rec id out status
+  id=profile-claude-hp-z20
+  rec=$(make_spawn_case profile-claude-hp claude "$id")
+  read_case_record "$rec"
+  make_codex_profile_file "$CASE_DIR" glm
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness-profile glm)
+  status=$?
+  expect_code 1 "$status" "a non-codex harness with --harness-profile should be refused"
+  assert_contains "$out" "only supported for harness=codex" "spawn did not explain the codex-only scope"
+  assert_absent "$HOME_DIR/state/$id.meta" "scope refusal should happen before meta is written"
+  pass "--harness-profile is rejected loudly for a non-codex harness"
+}
+
+test_harness_profile_rejected_for_raw_launch_command() {
+  local rec id out status
+  id=profile-raw-hp-z21
+  rec=$(make_spawn_case profile-raw-hp claude "$id")
+  read_case_record "$rec"
+  make_codex_profile_file "$CASE_DIR" glm
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" "custom-agent --flag" --harness-profile glm)
+  status=$?
+  expect_code 1 "$status" "a raw launch command with --harness-profile should be refused"
+  assert_contains "$out" "not supported with a raw launch command" "spawn did not explain the raw-command refusal"
+  assert_absent "$HOME_DIR/state/$id.meta" "raw-command refusal should happen before meta is written"
+  pass "--harness-profile is rejected loudly for a raw launch command"
+}
+
+test_harness_profile_rejects_path_shaped_value() {
+  local rec id out status
+  id=profile-codex-hp-path-z22
+  rec=$(make_spawn_case profile-codex-hp-path codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness-profile ../glm)
+  status=$?
+  expect_code 1 "$status" "a path-shaped --harness-profile value should be refused"
+  assert_contains "$out" "must be a plain name" "spawn did not explain the plain-name requirement"
+  assert_absent "$HOME_DIR/state/$id.meta" "shape refusal should happen before meta is written"
+  pass "--harness-profile rejects a path-shaped value before ever reaching codex"
+}
+
+test_batch_forwards_harness_profile() {
+  local rec id1 id2 out status
+  id1=profile-batch-hp-a-z23
+  id2=profile-batch-hp-b-z24
+  rec=$(make_spawn_case profile-batch-hp codex "$id1" "$id2")
+  read_case_record "$rec"
+  make_codex_profile_file "$CASE_DIR" glm
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness codex --harness-profile glm)
+  status=$?
+  expect_code 0 "$status" "batch spawn with a shared --harness-profile should succeed"
+  assert_meta_harness_profile "$HOME_DIR/state/$id1.meta" glm
+  assert_meta_harness_profile "$HOME_DIR/state/$id2.meta" glm
+  pass "batch dispatch forwards a shared --harness-profile to every pair"
 }
 
 test_grok_threads_model_and_reasoning_effort() {
@@ -400,5 +534,12 @@ test_opencode_threads_model_and_ignores_effort_axis
 test_pi_threads_model_and_max_effort
 test_batch_forwards_shared_profile_flags
 test_active_dispatch_profile_does_not_block_secondmate_launch
+test_codex_threads_harness_profile
+test_codex_secondmate_threads_harness_profile
+test_harness_profile_fails_closed_when_config_missing
+test_harness_profile_rejected_for_non_codex_harness
+test_harness_profile_rejected_for_raw_launch_command
+test_harness_profile_rejects_path_shaped_value
+test_batch_forwards_harness_profile
 
 echo "# all fm-spawn-dispatch-profile tests passed"

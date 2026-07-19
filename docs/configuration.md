@@ -202,29 +202,32 @@ This section is the single owner of the canonical schema and its per-field seman
     {
       "when": "<natural-language condition describing a kind of task>",
       "use": [
-        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>" }
+        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max, optional>", "harness_profile": "<optional codex-only provider-config name>" }
       ],
       "select": "<optional strategy>",
       "why": "<optional rationale that helps firstmate choose>"
     }
   ],
-  "default": { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" }
+  "default": { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>", "harness_profile": "<optional>" }
 }
 ```
 
 Per rule, `when` and `use` are required.
 `use` may be a single profile object or an ordered array of profile objects; the single-object form stays fully backward-compatible, and every profile needs `harness`.
-`use.model`, `use.effort`, and `why` are optional.
+`use.model`, `use.effort`, `use.harness_profile`, and `why` are optional.
 `select` is optional and currently supports `quota-balanced`.
 Absent `select` means use the first array element, or the only object in the single-object form; the first array element is the deterministic tie-break and the ultimate fallback.
 `default` is optional.
 An omitted model or effort means the selected harness uses its own default for that axis.
 If a selected profile carries an effort value the chosen harness does not accept, `fm-spawn.sh` records the requested `effort=` in task meta for traceability but omits the launch flag, and bootstrap reports the invalid harness/effort pair as a `CREW_DISPATCH` diagnostic when it is visible in the file.
+`harness_profile` is a codex-only provider-config override: a plain name (never a path) that `fm-spawn.sh` passes to codex's own `-p/--profile <name>` flag, which layers `${CODEX_HOME:-$HOME/.codex}/<name>.config.toml` on top of codex's base config (verified on codex-cli 0.144.1; there is no `--config-file <path>` flag, and `--profile` rejects a path outright).
+It is how a dispatch rule selects a provider-swapped codex variant, such as GLM 5.2 via OpenRouter, without the raw-launch escape hatch; see the harness-adapters skill's codex section for the standing GLM audition rules.
+`harness_profile` on a profile whose `harness` is not `codex` is invalid, and codex's own flag silently falls back to the base config when the named file is missing rather than failing, so `fm-spawn.sh` validates the resolved file exists and is readable before every launch and bootstrap validates the same at dispatch-profile validation time; both fail closed rather than launching on the wrong provider.
 `quota-balanced` selection is deterministic and implemented by `bin/fm-dispatch-select.sh`, whose header owns the general-window rules, the 20 point stale-clear freshness margin, vendor-availability handling, and the degrade-to-first-element fallbacks; quota trouble never blocks dispatch.
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
 When the file exists, bootstrap validates it with `jq`.
 Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json` plus one `BOOTSTRAP_INFO:` fact per rule and default profile.
-Malformed JSON, an unverified harness, a malformed array profile, an unknown `select`, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
+Malformed JSON, an unverified harness, a malformed array profile, an unknown `select`, an effort value unsupported by that harness, a `harness_profile` on a non-codex profile, or a `harness_profile` whose config file does not exist under `${CODEX_HOME:-$HOME/.codex}` is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 If no dispatch rule fits, firstmate uses the dispatch profile `default` when present, then falls back to `config/crew-harness`.
 Because the spawn backstop is gated by file presence, any fallback path after a missing match, validation error, or missing `jq` still passes a resolved harness explicitly until the file is fixed or removed.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.

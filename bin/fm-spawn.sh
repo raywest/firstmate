@@ -1,14 +1,26 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--harness-profile <name>] [--backend <name>] [--scout]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--harness-profile <name>] [--backend <name>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --harness-profile <name> is a codex-only provider-config override axis: name
+#   resolves to ${CODEX_HOME:-$HOME/.codex}/<name>.config.toml, layered onto codex's
+#   base config through its own verified `-p/--profile <name>` flag (codex-cli
+#   0.144.1; there is no `--config-file <path>` flag, and `--profile` accepts only a
+#   plain name, never a path - confirmed empirically, codex itself refuses a path
+#   value). Codex's own --profile silently falls back to the base config when the
+#   named profile file is missing (verified empirically), so fm-spawn validates the
+#   resolved file exists and is readable BEFORE launch and fails closed otherwise -
+#   this is the point of the axis. A non-codex harness, and a raw launch command
+#   (which bypasses template placeholder substitution entirely), both reject
+#   --harness-profile loudly rather than silently dropping it. Omitting the flag is a
+#   byte-identical no-op for every harness.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   spawn. Without it, the script resolves FM_BACKEND, then config/backend, then
 #   runtime auto-detection (the runtime firstmate itself is executing inside -
@@ -62,7 +74,7 @@
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
-#   source of truth; shared --scout/--harness/--model/--effort/--backend applies to every pair.
+#   source of truth; shared --scout/--harness/--model/--effort/--harness-profile/--backend applies to every pair.
 #   If config/crew-dispatch.json exists, shared --harness is required for crewmate
 #   and scout batches. The loop lives here, in bash, so callers never hand-write a
 #   multi-task shell loop (the tool shell is zsh, which does not word-split unquoted
@@ -126,10 +138,12 @@ KIND=ship
 HARNESS_ARG=
 MODEL=
 EFFORT=
+HARNESS_PROFILE=
 BACKEND_ARG=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
+HARNESS_PROFILE_SET=0
 BACKEND_SET=0
 POS=()
 want_value=
@@ -142,6 +156,7 @@ for a in "$@"; do
       harness) HARNESS_ARG=$a; HARNESS_SET=1 ;;
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
+      harness-profile) HARNESS_PROFILE=$a; HARNESS_PROFILE_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
@@ -157,6 +172,8 @@ for a in "$@"; do
     --model=*) MODEL=${a#--model=}; MODEL_SET=1 ;;
     --effort) want_value=effort ;;
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
+    --harness-profile) want_value="harness-profile" ;;
+    --harness-profile=*) HARNESS_PROFILE=${a#--harness-profile=}; HARNESS_PROFILE_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
     *) POS+=("$a") ;;
@@ -171,6 +188,16 @@ case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
+# --harness-profile must be a plain name: codex's own --profile flag resolves it to
+# ${CODEX_HOME:-$HOME/.codex}/<name>.config.toml and rejects a path outright
+# ("pass a plain name such as `work`", verified on codex-cli 0.144.1), so firstmate
+# enforces the same shape before ever reaching codex.
+if [ "$HARNESS_PROFILE_SET" -eq 1 ]; then
+  case "$HARNESS_PROFILE" in
+    '') echo "error: --harness-profile requires a non-empty value" >&2; exit 1 ;;
+    *[!A-Za-z0-9_-]*) echo "error: --harness-profile must be a plain name (letters, digits, dash, underscore only); codex's own --profile flag rejects a path" >&2; exit 1 ;;
+  esac
+fi
 
 # Backend selection (data/fm-backend-design-d7): explicit --backend, else
 # FM_BACKEND env, else config/backend, else runtime auto-detection, else
@@ -251,6 +278,7 @@ orca_spawn_abort_cleanup() {
           echo "tasktmp=${TASK_TMP:-}"
           echo "model=${MODEL:-default}"
           echo "effort=${EFFORT:-default}"
+          echo "harness_profile=${HARNESS_PROFILE:-default}"
           echo "backend=orca"
           echo "orca_worktree_id=$ORCA_WORKTREE_ID"
           [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
@@ -280,6 +308,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
+  [ -z "$HARNESS_PROFILE" ] || shared_args+=(--harness-profile "$HARNESS_PROFILE")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   for pair in "${POS[@]}"; do
     case "$pair" in
@@ -346,9 +375,9 @@ launch_template() {
     claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(cat __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG____HARNESSPROFILEFLAG__--dangerously-bypass-approvals-and-sandbox "$(cat __BRIEF__)"'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(cat __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG____HARNESSPROFILEFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(cat __BRIEF__)"'
       fi
       ;;
     opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(cat __BRIEF__)"' ;;
@@ -443,6 +472,31 @@ if [ "$LAUNCH_SOURCE" = template ]; then
       fi
       ;;
   esac
+fi
+
+# --harness-profile scope gate (fail closed): codex is the only harness whose
+# installed CLI has a provider-config layering flag (-p/--profile), so a
+# --harness-profile paired with any other harness is refused loudly rather than
+# silently ignored. Raw launch commands bypass template placeholder substitution
+# entirely (the __HARNESSPROFILEFLAG__ token only exists inside the codex
+# templates below), so pairing --harness-profile with a raw command would silently
+# drop it; refuse that combination too instead of launching without the requested
+# provider config.
+if [ "$HARNESS_PROFILE_SET" -eq 1 ]; then
+  if [ "$LAUNCH_SOURCE" = raw ]; then
+    echo "error: --harness-profile is not supported with a raw launch command; embed codex's --profile flag directly in the raw command instead" >&2
+    exit 1
+  fi
+  case "$HARNESS" in
+    codex) ;;
+    *) echo "error: --harness-profile is only supported for harness=codex (got harness=$HARNESS)" >&2; exit 1 ;;
+  esac
+  CODEX_PROFILE_HOME="${CODEX_HOME:-$HOME/.codex}"
+  CODEX_PROFILE_FILE="$CODEX_PROFILE_HOME/$HARNESS_PROFILE.config.toml"
+  if [ ! -r "$CODEX_PROFILE_FILE" ]; then
+    echo "error: --harness-profile '$HARNESS_PROFILE' names a missing or unreadable config file ($CODEX_PROFILE_FILE); codex's own --profile flag would silently fall back to the base config instead of failing (verified empirically), so firstmate refuses the spawn rather than launching on the wrong provider" >&2
+    exit 1
+  fi
 fi
 
 KIMI_HOME_DIR=
@@ -557,6 +611,18 @@ effort_flag_for_harness() {
     # --reasoning-effort are all rejected as "unknown option"); a requested effort
     # is recorded in meta but no flag is emitted (the record-only pattern above).
     # kimi's own per-model default_effort in config.toml governs the launch.
+  esac
+}
+
+harness_profile_flag_for_harness() {
+  local harness=$1 profile=$2
+  [ -n "$profile" ] || return 0
+  case "$harness" in
+    # codex-cli 0.144.1's -p/--profile <name> layers
+    # ${CODEX_HOME:-$HOME/.codex}/<name>.config.toml on top of the base config; the
+    # scope gate above already refused this axis for every other harness and
+    # already validated the resolved file exists, so this is a pure flag emission.
+    codex) printf -- '--profile %s ' "$(shell_quote "$profile")" ;;
   esac
 }
 
@@ -994,6 +1060,7 @@ write_task_meta() {
     echo "tasktmp=$TASK_TMP"
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
+    echo "harness_profile=${HARNESS_PROFILE:-default}"
     case "$HARNESS" in
       kimi*) echo "kimi_home=$KIMI_HOME_DIR" ;;
     esac
@@ -1228,8 +1295,10 @@ sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+HARNESSPROFILEFLAG=$(harness_profile_flag_for_harness "$HARNESS" "$HARNESS_PROFILE")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
+LAUNCH=${LAUNCH//__HARNESSPROFILEFLAG__/$HARNESSPROFILEFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}

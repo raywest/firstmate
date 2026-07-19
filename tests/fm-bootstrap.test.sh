@@ -758,8 +758,12 @@ test_crew_dispatch_validation() {
     printf '%s\n' "$body" > "$case_dir/home/config/crew-dispatch.json"
     fakebin=$(make_fake_toolchain "$case_dir")
     add_real_jq "$fakebin"
+    # CODEX_HOME is pinned to an isolated, always-empty per-case directory (never
+    # the real operator ~/.codex) so rows never accidentally resolve against real
+    # persistence; only the dedicated harness_profile file-existence tests below
+    # populate a config file in it.
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+      CODEX_HOME="$case_dir/codex-home" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in
       empty)
         [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
@@ -784,8 +788,37 @@ empty array use is flagged^{"rules":[{"when":"big feature","use":[]}]}^exact^CRE
 array profile without harness is flagged^{"rules":[{"when":"big feature","use":[{"model":"gpt-5.5"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each use profile needs harness
 unknown select is flagged^{"rules":[{"when":"big feature","use":[{"harness":"claude"},{"harness":"codex"}],"select":"mystery"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - unknown select: mystery
 array profile unsupported effort is flagged^{"rules":[{"when":"big feature","use":[{"harness":"codex","effort":"max"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max
+harness_profile on non-codex harness is flagged^{"rules":[{"when":"audition work","use":{"harness":"claude","harness_profile":"glm"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - harness_profile is only supported for harness codex: claude
+default harness_profile on non-codex harness is flagged^{"default":{"harness":"claude","harness_profile":"glm"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - harness_profile is only supported for harness codex: claude
+empty harness_profile is flagged^{"rules":[{"when":"audition work","use":{"harness":"codex","harness_profile":""}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each use profile harness_profile must be a non-empty string when present
+array profile harness_profile on non-codex harness is flagged^{"rules":[{"when":"big feature","use":[{"harness":"claude","harness_profile":"glm"},{"harness":"codex"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - harness_profile is only supported for harness codex: claude
 ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
+}
+
+test_crew_dispatch_harness_profile_config_file_gate() {
+  local case_dir out codex_home fakebin
+  case_dir="$TMP_ROOT/dispatch-harness-profile-missing"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf '%s\n' '{"rules":[{"when":"audition work","use":{"harness":"codex","harness_profile":"glm"}}]}' \
+    > "$case_dir/home/config/crew-dispatch.json"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+  codex_home="$case_dir/codex-home"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    CODEX_HOME="$codex_home" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ "$out" = "CREW_DISPATCH: invalid config/crew-dispatch.json - harness_profile config missing or unreadable under $codex_home: glm" ] \
+    || fail "missing harness_profile config should be flagged, got: $out"
+
+  mkdir -p "$codex_home"
+  printf 'model_provider = "openrouter"\n' > "$codex_home/glm.config.toml"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    CODEX_HOME="$codex_home" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "present harness_profile config should validate silently, got: $out"
+
+  pass "bootstrap fails closed on a missing harness_profile config file and accepts a present one"
 }
 
 test_bootstrap_reporting
@@ -809,3 +842,4 @@ test_routine_bootstrap_contract_runs_under_system_bash
 test_bootstrap_info_is_no_load_and_actionable_lines_trigger
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_crew_dispatch_harness_profile_config_file_gate
