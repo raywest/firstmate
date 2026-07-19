@@ -130,7 +130,7 @@ phase_spawn() {
   assert_grep 'FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE=' "$LOG" "launch did not clear operational overrides"
   assert_grep 'FM_CONFIG_OVERRIDE=' "$LOG" "launch did not clear the config override"
   assert_grep "$SUB_ABS/data/charter.md" "$LOG" "launch did not use the persistent charter"
-  assert_grep -- "--profile 'glm'" "$LOG" "launch did not use the standing codex harness profile"
+  assert_grep "--profile 'glm'" "$LOG" "launch did not use the standing codex harness profile"
   assert_no_grep 'notify=' "$LOG" "secondmate codex launch included the parent turn-end notify hook"
   assert_no_grep 'turn-ended' "$LOG" "secondmate codex launch referenced a parent turn-ended signal"
   assert_no_grep 'treehouse get' "$LOG" "secondmate spawn ran a project treehouse get"
@@ -212,7 +212,7 @@ phase_recovery() {
   assert_grep 'projects=alpha, beta, gamma' "$meta" "respawn did not preserve the project list from the registry"
   assert_grep 'window=firstmate:fm-design' "$meta" "respawn did not reconstruct the direct-report window"
   assert_grep 'harness_profile=glm' "$meta" "respawn did not restore the standing harness profile"
-  assert_grep -- "--profile 'glm'" "$LOG" "respawn did not launch with the standing codex profile"
+  assert_grep "--profile 'glm'" "$LOG" "respawn did not launch with the standing codex profile"
   pass "recovery: respawns from the durable registry and persistent home with its standing profile pin"
 }
 
