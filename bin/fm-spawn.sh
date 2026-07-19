@@ -1312,6 +1312,15 @@ if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
 fi
+# Codex validates --harness-profile in CODEX_HOME before launch, so an explicitly
+# configured home must also be used by the pane that executes the profile.
+case "$HARNESS" in
+  codex)
+    if [ -n "$HARNESS_PROFILE" ] && [ -n "${CODEX_HOME:-}" ]; then
+      LAUNCH="CODEX_HOME=$(shell_quote "$CODEX_HOME") $LAUNCH"
+    fi
+    ;;
+esac
 # kimi: the preflight above resolved ${KIMI_CODE_HOME:-$HOME/.kimi-code} for the
 # config append and token registry, so when the operator has KIMI_CODE_HOME set,
 # the launched kimi must read the SAME home or it will load a config without the

@@ -296,6 +296,35 @@ test_codex_threads_harness_profile() {
   pass "codex receives --profile and records harness_profile in meta"
 }
 
+test_codex_harness_profile_propagates_explicit_config_home() {
+  local rec id out status launch codex_home expected_prefix
+  id=profile-codex-hp-home-z17a
+  rec=$(make_spawn_case profile-codex-hp-home codex "$id")
+  read_case_record "$rec"
+  make_codex_profile_file "$CASE_DIR" glm
+  codex_home="$CASE_DIR/codex-home"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness-profile glm)
+  status=$?
+  expect_code 0 "$status" "codex spawn with an isolated profile home should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  expected_prefix="CODEX_HOME='$codex_home' "
+  case "$launch" in
+    "$expected_prefix"*) ;;
+    *) fail "profiled codex launch did not begin with the validated CODEX_HOME" ;;
+  esac
+
+  id=profile-codex-no-hp-home-z17b
+  rec=$(make_spawn_case profile-codex-no-hp-home codex "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "plain codex spawn with an isolated config home should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "CODEX_HOME=" "plain codex launch must not gain a CODEX_HOME prefix"
+  pass "codex propagates an explicit config home only for harness-profile launches"
+}
+
 test_codex_secondmate_threads_harness_profile() {
   local rec id sm out status launch
   id=profile-codex-sm-hp-z18
@@ -602,6 +631,7 @@ test_pi_threads_model_and_max_effort
 test_batch_forwards_shared_profile_flags
 test_active_dispatch_profile_does_not_block_secondmate_launch
 test_codex_threads_harness_profile
+test_codex_harness_profile_propagates_explicit_config_home
 test_codex_secondmate_threads_harness_profile
 test_secondmate_harness_profile_token_is_durable
 test_secondmate_harness_profile_token_explicit_flag_wins
