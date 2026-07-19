@@ -20,8 +20,11 @@
 #                          line, since the crew's own log gets no new entry once
 #                          firstmate hands it to a no-mistakes validation. A declared
 #                          external-wait pause is absorbed instead with its own long
-#                          re-surface cadence, never as a wedge. Only when neither
-#                          absorb class applies does the log's last line decide:
+#                          re-surface cadence, never as a wedge. While the current
+#                          status line remains paused, only definitive working
+#                          evidence overrides that treatment; a non-working state
+#                          read does not turn it into an immediate stale. Only when
+#                          neither case applies does the log's last line decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
 #                          both surfaced at once. A provably-working stale past the
 #                          wedge threshold also surfaces, with an "escalation N"
@@ -351,6 +354,9 @@ clear_pause_tracking() {  # <window>
   rm -f "$STATE/.stale-$key" "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
 }
 
+# Recheck an unchanged declared-pause stale at a bounded interval. As long as
+# its current status line still says paused:, only a definitive working verdict
+# displaces the pause; every other crew-state verdict stays on pause treatment.
 pause_state_class() {  # <window> <task>
   local win=$1 task=$2 key last recheck_file class
   key=${win//:/_}
