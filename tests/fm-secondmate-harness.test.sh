@@ -133,6 +133,17 @@ ROWS
   pass "C1b fm-harness.sh secondmate-harness-profile resolves the fourth optional token"
 }
 
+test_secondmate_harness_profile_token_preserves_glob() {
+  local case_dir cfg got
+  case_dir="$TMP_ROOT/profile-token-glob"
+  cfg="$case_dir/config"
+  mkdir -p "$cfg" "$case_dir/cwd/glm"
+  printf 'codex gpt-5 high glm*\n' > "$cfg/secondmate-harness"
+  got=$(cd "$case_dir/cwd" && CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh" secondmate-harness-profile)
+  [ "$got" = 'glm*' ] || fail "glob token resolved '$got', expected literal 'glm*'"
+  pass "C1c fm-harness.sh preserves literal glob characters in the fourth token"
+}
+
 # ===========================================================================
 # B) propagate_inheritable_config unit behavior
 # ===========================================================================
@@ -1061,6 +1072,7 @@ test_config_push_exits_nonzero_on_copy_error() {
 test_harness_resolution
 test_secondmate_model_effort_tokens
 test_secondmate_harness_profile_token
+test_secondmate_harness_profile_token_preserves_glob
 test_propagate_lib
 test_spawn_split_and_inherit
 test_spawn_backward_compat_crew_fallback

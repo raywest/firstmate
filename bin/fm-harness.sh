@@ -109,7 +109,9 @@ secondmate_field() {
   line=$(secondmate_line)
   [ -n "$line" ] || return 0
   # shellcheck disable=SC2086  # deliberate word-splitting: tokenizing the line into fields
+  set -f
   set -- $line
+  set +f
   case "$idx" in
     1) printf '%s\n' "${1:-}" ;;
     2) printf '%s\n' "${2:-}" ;;
