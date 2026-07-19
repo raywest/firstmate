@@ -83,11 +83,10 @@ make_seeded_secondmate_home() {
 run_spawn() {
   local home=$1 wt=$2 fakebin=$3 launchlog=$4 codex_home
   shift 4
-  # CODEX_HOME is always pinned to an isolated per-case directory (never the real
-  # operator ~/.codex) so --harness-profile file-existence checks are deterministic
-  # and never touch real persistence.
-  codex_home="$(dirname "$home")/codex-home"
-  mkdir -p "$codex_home"
+  # CODEX_HOME defaults to an isolated per-case directory (never the real operator
+  # ~/.codex); focused tests may override it without touching real persistence.
+  codex_home="${FM_TEST_CODEX_HOME:-$(dirname "$home")/codex-home}"
+  [ -n "${FM_TEST_CODEX_HOME:-}" ] || mkdir -p "$codex_home"
   : > "$launchlog"
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
@@ -308,7 +307,7 @@ test_codex_harness_profile_propagates_explicit_config_home() {
   status=$?
   expect_code 0 "$status" "codex spawn with an isolated profile home should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  expected_prefix="CODEX_HOME='$codex_home' "
+  expected_prefix="CODEX_HOME='$(cd "$codex_home" && pwd -P)' "
   case "$launch" in
     "$expected_prefix"*) ;;
     *) fail "profiled codex launch did not begin with the validated CODEX_HOME" ;;
@@ -323,6 +322,37 @@ test_codex_harness_profile_propagates_explicit_config_home() {
   launch=$(cat "$LAUNCH_LOG")
   assert_not_contains "$launch" "CODEX_HOME=" "plain codex launch must not gain a CODEX_HOME prefix"
   pass "codex propagates an explicit config home only for harness-profile launches"
+}
+
+test_codex_harness_profile_canonicalizes_explicit_config_home() {
+  local rec id out status launch relative_home expected_prefix missing_home
+  id=profile-codex-hp-relative-home-z17c
+  rec=$(make_spawn_case profile-codex-hp-relative-home codex "$id")
+  read_case_record "$rec"
+  relative_home=relative-codex-home
+  mkdir -p "$CASE_DIR/$relative_home"
+  printf 'model_provider = "openrouter"\nmodel = "z-ai/glm-5.2"\n' > "$CASE_DIR/$relative_home/glm.config.toml"
+
+  out=$(cd "$CASE_DIR" && FM_TEST_CODEX_HOME="$relative_home" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness-profile glm)
+  status=$?
+  expect_code 0 "$status" "codex spawn with a relative profile home should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  expected_prefix="CODEX_HOME='$(cd "$CASE_DIR/$relative_home" && pwd -P)' "
+  case "$launch" in
+    "$expected_prefix"*) ;;
+    *) fail "profiled codex launch did not canonicalize the explicit CODEX_HOME" ;;
+  esac
+
+  id=profile-codex-hp-missing-home-z17d
+  rec=$(make_spawn_case profile-codex-hp-missing-home codex "$id")
+  read_case_record "$rec"
+  missing_home="$CASE_DIR/missing-codex-home"
+  out=$(FM_TEST_CODEX_HOME="$missing_home" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness-profile glm)
+  status=$?
+  expect_code 1 "$status" "codex spawn with a missing explicit config home should fail closed"
+  assert_contains "$out" "CODEX_HOME '$missing_home'" "missing explicit CODEX_HOME diagnostic did not name the unresolved path"
+  assert_absent "$HOME_DIR/state/$id.meta" "missing explicit config home should refuse before meta is written"
+  pass "codex canonicalizes explicit profile homes and rejects missing homes"
 }
 
 test_codex_secondmate_threads_harness_profile() {
@@ -632,6 +662,7 @@ test_batch_forwards_shared_profile_flags
 test_active_dispatch_profile_does_not_block_secondmate_launch
 test_codex_threads_harness_profile
 test_codex_harness_profile_propagates_explicit_config_home
+test_codex_harness_profile_canonicalizes_explicit_config_home
 test_codex_secondmate_threads_harness_profile
 test_secondmate_harness_profile_token_is_durable
 test_secondmate_harness_profile_token_explicit_flag_wins

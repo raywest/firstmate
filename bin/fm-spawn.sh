@@ -517,7 +517,15 @@ if [ -n "$HARNESS_PROFILE" ]; then
     codex) ;;
     *) echo "error: --harness-profile is only supported for harness=codex (got harness=$HARNESS)" >&2; exit 1 ;;
   esac
-  CODEX_PROFILE_HOME="${CODEX_HOME:-$HOME/.codex}"
+  CODEX_PROFILE_HOME_INPUT="${CODEX_HOME:-$HOME/.codex}"
+  if ! CODEX_PROFILE_HOME=$(cd "$CODEX_PROFILE_HOME_INPUT" 2>/dev/null && pwd -P); then
+    if [ -n "${CODEX_HOME:-}" ]; then
+      echo "error: --harness-profile requires CODEX_HOME '$CODEX_HOME' to name an existing, accessible directory" >&2
+    else
+      echo "error: --harness-profile requires Codex config home '$CODEX_PROFILE_HOME_INPUT' to name an existing, accessible directory" >&2
+    fi
+    exit 1
+  fi
   CODEX_PROFILE_FILE="$CODEX_PROFILE_HOME/$HARNESS_PROFILE.config.toml"
   if [ ! -r "$CODEX_PROFILE_FILE" ]; then
     echo "error: --harness-profile '$HARNESS_PROFILE' names a missing or unreadable config file ($CODEX_PROFILE_FILE); codex's own --profile flag would silently fall back to the base config instead of failing (verified empirically), so firstmate refuses the spawn rather than launching on the wrong provider" >&2
@@ -1317,7 +1325,7 @@ fi
 case "$HARNESS" in
   codex)
     if [ -n "$HARNESS_PROFILE" ] && [ -n "${CODEX_HOME:-}" ]; then
-      LAUNCH="CODEX_HOME=$(shell_quote "$CODEX_HOME") $LAUNCH"
+      LAUNCH="CODEX_HOME=$(shell_quote "$CODEX_PROFILE_HOME") $LAUNCH"
     fi
     ;;
 esac
