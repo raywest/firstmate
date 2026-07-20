@@ -372,7 +372,7 @@ fm_wake_clean_field() {
 }
 
 fm_wake_append() {
-  local kind=$1 key=$2 payload=$3 clean_key clean_payload epoch seq seq_file seq_tmp status
+  local kind=$1 key=$2 payload=$3 clean_key clean_payload epoch seq seq_file status
   case "$kind" in
     signal|stale|check|heartbeat) ;;
     *) printf 'fm_wake_append: invalid wake kind: %s\n' "$kind" >&2; return 2 ;;
@@ -390,15 +390,9 @@ fm_wake_append() {
     ''|*[!0-9]*) seq=0 ;;
   esac
   seq=$((seq + 1))
-  printf '%s\t%s\t%s\t%s\t%s\n' "$epoch" "$seq" "$kind" "$clean_key" "$clean_payload" >> "$FM_WAKE_QUEUE" || status=$?
+  printf '%s\n' "$seq" > "$seq_file" || status=$?
   if [ "$status" -eq 0 ]; then
-    seq_tmp="$seq_file.tmp.$(fm_current_pid)"
-    if printf '%s\n' "$seq" > "$seq_tmp" && mv -f "$seq_tmp" "$seq_file"; then
-      :
-    else
-      status=$?
-      rm -f "$seq_tmp" 2>/dev/null || true
-    fi
+    printf '%s\t%s\t%s\t%s\t%s\n' "$epoch" "$seq" "$kind" "$clean_key" "$clean_payload" >> "$FM_WAKE_QUEUE" || status=$?
   fi
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   return "$status"
