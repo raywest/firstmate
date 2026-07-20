@@ -400,6 +400,31 @@ test_actionable_signal_surfaced() {
   pass "captain-relevant signal is surfaced (queue + exit) and marked surfaced"
 }
 
+# Regression coverage for the watcher-cycle-end misreporting fix: the multi-file
+# signal loop now tracks how many of the pending files it durably appended
+# before failing, so it can report a diagnostic instead of dying silently mid-
+# batch. This proves the tracking change did not disturb the ordinary all-succeed
+# path: both simultaneous files must still be appended and named.
+test_multi_file_actionable_signal_all_appended() {
+  local dir state fakebin out drain_out status_file1 status_file2 pid
+  dir=$(make_case multi-file-actionable); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  status_file1="$state/task-one.status"
+  status_file2="$state/task-two.status"
+  printf 'needs-decision: pick A or B\n' > "$status_file1"
+  printf 'blocked: waiting on credentials\n' > "$status_file2"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "watcher did not exit for two simultaneous actionable signals"
+  grep -F "signal:" "$out" | grep -F "$status_file1" >/dev/null || fail "watcher did not name the first file in its signal reason: $(cat "$out")"
+  grep -F "signal:" "$out" | grep -F "$status_file2" >/dev/null || fail "watcher did not name the second file in its signal reason: $(cat "$out")"
+  ! grep -F "partial-append-failure" "$out" >/dev/null || fail "watcher reported a partial-append failure on the ordinary all-succeed path: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the multi-file signal failed"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$(basename "$status_file1")" >/dev/null || fail "first file's wake was not queued"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$(basename "$status_file2")" >/dev/null || fail "second file's wake was not queued"
+  pass "multi-file signal loop: two simultaneous actionable files are both appended and both named in the reason"
+}
+
 test_terminal_stale_surfaced() {
   local dir state fakebin out drain_out capture_file window key pane_hash sig pid
   dir=$(make_case terminal-stale); state="$dir/state"; fakebin="$dir/fakebin"
@@ -1283,6 +1308,7 @@ test_turn_ended_provably_working_absorbed
 test_turn_ended_not_working_surfaced
 test_working_note_not_working_surfaced
 test_actionable_signal_surfaced
+test_multi_file_actionable_signal_all_appended
 test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated

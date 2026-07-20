@@ -28,16 +28,32 @@
 #   watcher: FAILED - no live watcher with a fresh beacon  - could not confirm one
 #   watcher: FAILED - cycle ended without an actionable reason
 #                                                        - a clean cycle ended with no wake and no
-#                                                          verified healthy successor
+#                                                          verified healthy successor, AND
+#                                                          state/.wake-queue.seq did not advance
+#                                                          during this cycle - genuinely nothing
+#                                                          happened; treat as an alarm
+#   watcher: cycle ended ... - N wake(s) already queued  - the cycle ended without a reason
+#                                                          visible to THIS process (an attached
+#                                                          arm never captures the owning
+#                                                          watcher's stdout; an owned child can
+#                                                          die between a successful append and
+#                                                          its own wake() call), but
+#                                                          state/.wake-queue.seq DID advance -
+#                                                          a real wake is already durable. Exits
+#                                                          nonzero (re-arm is still needed - no
+#                                                          watcher is running) but is never the
+#                                                          literal "watcher: FAILED" text, so it
+#                                                          is not the alarm case.
 # It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
 # returns the FAILED line. On started it waits the child and propagates the wake
 # reason; on attached it stays live across identity-matched successors. An
-# attached cycle that ends without a healthy successor is a typed nonzero failure,
-# never a clean empty completion. On FAILED it exits non-zero so the failure is
-# loud. A live cycle already present means re-arm attaches - do not start a second
-# watcher.
+# attached cycle that ends without a healthy successor is a typed nonzero result,
+# never a clean empty completion: it is the loud FAILED alarm only when the wake
+# queue genuinely did not advance during the cycle, and the accurate
+# already-queued line otherwise. A live cycle already present means re-arm
+# attaches - do not start a second watcher.
 #
 # Every observed watcher cycle appends one tab-separated lifecycle record to
 # state/.watch-cycle-exits.log. The arm layer owns that bounded ledger; it records
@@ -95,13 +111,40 @@ cycle_watcher_pid=none
 cycle_origin=unknown
 cycle_started_at=0
 cycle_lock_before='pid:none|identity:none'
+cycle_queue_seq_before=0
+
+# The wake-queue sequence counter (fm-wake-lib.sh's fm_wake_append, guarded by
+# FM_WAKE_QUEUE_LOCK on the write side) as of right now. 0 for an absent or
+# corrupt counter file, never a fatal read.
+wake_queue_seq() {
+  local seq
+  seq=$(cat "$STATE/.wake-queue.seq" 2>/dev/null || true)
+  case "$seq" in
+    ''|*[!0-9]*) seq=0 ;;
+  esac
+  printf '%s' "$seq"
+}
 
 cycle_begin() {
   cycle_watcher_pid=$1
   cycle_origin=$2
   cycle_started_at=$(date +%s)
   cycle_lock_before=$(lock_snapshot)
+  cycle_queue_seq_before=$(wake_queue_seq)
   cycle_active=1
+}
+
+# Wake(s) durably appended to state/.wake-queue since this cycle began, even if
+# THIS process cannot see the reason text: an attached arm never captures the
+# owning watcher's stdout, and an owned child can die between a successful
+# fm_wake_append and its own wake() call. 0 means the queue genuinely did not
+# advance during this cycle's window.
+cycle_queued_wake_count() {
+  local seq_after delta
+  seq_after=$(wake_queue_seq)
+  delta=$((seq_after - cycle_queue_seq_before))
+  [ "$delta" -gt 0 ] || delta=0
+  printf '%s' "$delta"
 }
 
 cycle_refresh_lock_before() {
@@ -247,7 +290,20 @@ wait_for_healthy_successor() {
   done
 }
 
-fail_unexplained_cycle() {
+# Report a cycle end this process cannot directly explain. If the wake queue
+# advanced during this cycle's window (cycle_begin's snapshot), a real wake is
+# already durable even though this process never saw its reason text - report
+# that honestly (exit 4: re-arm, not an alarm - distinct from the usage-error
+# exit 2 above) instead of the typed FAILED result. Only the genuinely-empty
+# case (exit 1, the actual alarm callers repair on) still emits the literal
+# "watcher: FAILED" line.
+report_cycle_end() {
+  local queued
+  queued=$(cycle_queued_wake_count)
+  if [ "$queued" -gt 0 ]; then
+    echo "watcher: cycle ended - $queued wake(s) already queued (no visible reason from this process) - see state/.wake-queue"
+    return 4
+  fi
   echo "watcher: FAILED - cycle ended without an actionable reason"
   return 1
 }
@@ -276,8 +332,8 @@ attach_and_wait() {
       continue
     fi
     cycle_log_append unknown unknown attached-cycle-ended none
-    fail_unexplained_cycle
-    return 1
+    report_cycle_end
+    return $?
   done
 }
 
@@ -396,7 +452,7 @@ cycle_begin "$child" started
 child_done=0
 
 owned_child_finished() {
-  local rc=$1 signal reason_type status
+  local rc=$1 signal reason_type status queued
   signal=$(cycle_signal_name "$rc")
   if [ "$rc" -eq 0 ] && watch_output_has_wake "$child_out"; then
     reason_type=$(watch_output_reason_type "$child_out")
@@ -426,8 +482,8 @@ owned_child_finished() {
     rm -f "$child_out" 2>/dev/null || true
     child=
     child_out=
-    fail_unexplained_cycle
-    return 1
+    report_cycle_end
+    return $?
   fi
 
   reason_type="nonzero-exit"
@@ -435,7 +491,12 @@ owned_child_finished() {
   cycle_log_append "$rc" "$signal" "$reason_type" none
   print_watch_output "$child_out"
   if ! grep -q '^watcher: FAILED' "$child_out" 2>/dev/null; then
-    echo "watcher: FAILED - watcher cycle exited $rc without an actionable reason"
+    queued=$(cycle_queued_wake_count)
+    if [ "$queued" -gt 0 ]; then
+      echo "watcher: cycle ended abnormally (rc=$rc) - $queued wake(s) already queued - see state/.wake-queue"
+    else
+      echo "watcher: FAILED - watcher cycle exited $rc without an actionable reason"
+    fi
   fi
   rm -f "$child_out" 2>/dev/null || true
   child=
