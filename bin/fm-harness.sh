@@ -108,8 +108,8 @@ secondmate_field() {
   local idx=$1 line
   line=$(secondmate_line)
   [ -n "$line" ] || return 0
-  # shellcheck disable=SC2086  # deliberate word-splitting: tokenizing the line into fields
   set -f
+  # shellcheck disable=SC2086  # deliberate word-splitting: tokenizing the line into fields
   set -- $line
   set +f
   case "$idx" in
