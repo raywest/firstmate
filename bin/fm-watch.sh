@@ -689,12 +689,17 @@ handle_push_transition() {  # <backend> <session> <record>
   task=$(window_to_task "$window" "$STATE")
   if status_is_paused "$(last_status_line "$STATE/$task.status")"; then
     triage_log "absorbed push $to (declared pause, awaiting external): $window"
-    fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" || exit 1
+    fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" \
+      || triage_log "commit-transition failed for $window (paused push absorbed, no wake queued)"
     return
   fi
   reason="stale: $window (herdr: agent $to - waiting on human, escalated immediately, not via wedge timer)"
   fm_wake_append stale "$window" "$reason" || exit 1
-  fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" || exit 1
+  # Best-effort: the wake above is already durable. A failed dedupe-marker
+  # write here only risks a duplicate escalation on the next herdr event for
+  # this pane - far cheaper than exiting and discarding an already-queued wake.
+  fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" \
+    || triage_log "commit-transition failed for $window (wake already queued)"
   mark_surfaced "$STATE/$task.status"
   wake "$reason"
 }
@@ -843,8 +848,10 @@ while :; do
     sleep "$SIGNAL_GRACE"
     pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
     files=""
+    pending_total=0
     while IFS=$(printf '\t') read -r sf sig f; do
       [ -n "$sf" ] || continue
+      pending_total=$((pending_total + 1))
       case " $files " in *" $f "*) ;; *) files="$files $f" ;; esac
     done <<EOF
 $pending
@@ -865,9 +872,18 @@ EOF
     # ordering evaluates it ONLY for a non-afk, no-captain-verb signal.
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
     if afk_present || signal_reason_is_actionable $files || ! signal_crew_provably_working $files; then
+      appended=0
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
-        fm_wake_append signal "$(basename "$f")" "$reason" || exit 1
+        if fm_wake_append signal "$(basename "$f")" "$reason"; then
+          appended=$((appended + 1))
+        else
+          # At least one append already landed durably before this one failed -
+          # never exit silently on top of an orphaned wake; give a downstream
+          # nonzero-exit classifier something non-empty to read.
+          [ "$appended" -eq 0 ] || echo "signal: partial-append-failure (appended: $appended/$pending_total)"
+          exit 1
+        fi
       done <<EOF
 $pending
 EOF

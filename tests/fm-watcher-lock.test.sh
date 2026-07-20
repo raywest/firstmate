@@ -586,6 +586,163 @@ test_arm_attaches_and_waits_for_live_fresh_watcher() {
   pass "arm attaches to a live fresh watcher and fails loudly when that cycle has no successor"
 }
 
+# Regression coverage for the watcher-cycle-end misreporting fix: an attached
+# arm never captures the owning watcher's stdout, so when the attached-to cycle
+# ends with no successor, the pre-fix code always emitted the typed FAILED line
+# even when a real wake landed and is durably queued. Distinct from
+# test_arm_attaches_and_waits_for_live_fresh_watcher above (which kills the
+# seed watcher with NOTHING pending and must still see the FAILED line - that
+# assertion is untouched).
+test_attached_arm_reports_queued_wake_without_visible_reason() {
+  local dir state fakebin out armout i wpid armpid status
+  dir=$(make_case arm-attach-queued-wake)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  armout="$dir/arm.out"
+  # A genuinely live watcher with a fresh beacon already holds the singleton.
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  wpid=$!
+  i=0
+  while [ "$i" -lt 60 ]; do
+    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$wpid" ] && [ -e "$state/.last-watcher-beat" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$wpid" ] || fail "seed watcher did not take the lock"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=1 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$wpid" "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: attached pid=$wpid" "$armout" || fail "arm did not report attach to the live watcher"
+  # Once attached, a real wake lands durably - here, deterministically, via a
+  # direct append, standing in for the owning watcher's own signal scan. The
+  # attached arm cannot see this text (it never captured the owning watcher's
+  # stdout) but must still report it accurately instead of a false FAILED when
+  # the seed dies.
+  append_wake "$state" signal fake-queued-wake "signal: fake-queued-wake (attached-shape regression test)"
+  kill "$wpid" 2>/dev/null || true
+  wait "$wpid" 2>/dev/null || true
+  wait_for_exit "$armpid" 80
+  status=$?
+  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "attached arm did not exit after seed died (status $status)"
+  [ "$status" -eq 4 ] || fail "attached arm with an already-queued wake must use the distinct re-arm exit code, got $status: $(cat "$armout")"
+  ! grep -qF 'watcher: FAILED' "$armout" || fail "attached arm falsely reported FAILED despite a real queued wake: $(cat "$armout")"
+  grep -qF 'wake(s) already queued' "$armout" || fail "attached arm did not report the already-queued wake: $(cat "$armout")"
+  pass "attached arm reports an already-queued wake accurately instead of a false FAILED"
+}
+
+# A queue record that predates an arm cycle is not evidence of a wake from that
+# cycle. Keep every date +%s call in this case in one fixed second so the old
+# epoch-window classification would deterministically misidentify the record.
+test_attached_arm_ignores_precycle_same_second_wake() {
+  local dir state fakebin out armout i wpid armpid status fixed_epoch date_calls
+  dir=$(make_case arm-attach-precycle-same-second)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  armout="$dir/arm.out"
+  cat > "$fakebin/date" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  +%s)
+    [ -n "${FM_TEST_DATE_CALLS:-}" ] || exec /bin/date "$@"
+    calls=$(cat "$FM_TEST_DATE_CALLS" 2>/dev/null || echo 0)
+    calls=$((calls + 1))
+    printf '%s\n' "$calls" > "$FM_TEST_DATE_CALLS"
+    if [ "$calls" -le 3 ]; then
+      printf '%s\n' "$FM_TEST_FIXED_EPOCH"
+    else
+      exec /bin/date "$@"
+    fi
+    ;;
+  *) exec /bin/date "$@" ;;
+esac
+SH
+  chmod +x "$fakebin/date"
+
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  wpid=$!
+  i=0
+  while [ "$i" -lt 60 ]; do
+    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$wpid" ] && [ -e "$state/.last-watcher-beat" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$wpid" ] || fail "seed watcher did not take the lock"
+
+  # This durable wake is intentionally queued before cycle_begin, but shares
+  # its epoch second. The arm must not report it as a new cycle wake.
+  fixed_epoch=$(date +%s)
+  date_calls="$dir/date-calls"
+  : > "$date_calls"
+  FM_TEST_DATE_CALLS="$date_calls" FM_TEST_FIXED_EPOCH="$fixed_epoch" PATH="$fakebin:$PATH" append_wake "$state" signal precycle-wake "signal: precycle wake"
+  [ "$(cat "$state/.wake-queue.seq" 2>/dev/null || true)" = 1 ] || fail "pre-cycle wake did not publish sequence 1"
+
+  FM_TEST_DATE_CALLS="$date_calls" FM_TEST_FIXED_EPOCH="$fixed_epoch" PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=1 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$wpid" "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: attached pid=$wpid" "$armout" || fail "arm did not report attach to the live watcher"
+  kill "$wpid" 2>/dev/null || true
+  wait "$wpid" 2>/dev/null || true
+  wait_for_exit "$armpid" 80
+  status=$?
+  [ "$status" -eq 1 ] || fail "pre-cycle wake was misclassified as a cycle wake (status $status): $(cat "$armout")"
+  grep -qF 'watcher: FAILED - cycle ended without an actionable reason' "$armout" || fail "pre-cycle wake suppressed the genuine empty-cycle failure"
+  ! grep -qF 'wake(s) already queued' "$armout" || fail "pre-cycle wake was reported as newly queued: $(cat "$armout")"
+  pass "attached arm ignores a pre-cycle wake queued in the same second"
+}
+
+# Regression coverage for the owned-shape half of the same fix: owned_child_finished
+# used to synthesize "without an actionable reason" for ANY nonzero exit with
+# empty stdout, never checking whether a wake had already landed durably. A
+# signal delivered to the owned child between a successful fm_wake_append and its
+# own wake() call (report root-cause item 3, the process-wide HUP/INT/TERM trap
+# window) reproduces rc!=0 with empty child_out deterministically.
+test_owned_arm_reports_queued_wake_on_signal_exit() {
+  local dir state fakebin armout armpid watcher_pid status i
+  dir=$(make_case arm-owned-queued-wake)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  mark_pr_check_migration_complete "$state"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_ARM_CONFIRM_TIMEOUT=1 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  watcher_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  grep -qF "watcher: started pid=$watcher_pid" "$armout" || fail "arm did not start before signal-exit check"
+
+  # Append a durable wake, then kill the child with TERM before it ever reaches
+  # its own wake() call. bin/fm-watch.sh's own trap is 'exit 1' on HUP/INT/TERM
+  # (not a raw signal death), so this yields rc=1 with empty stdout - the exact
+  # "nonzero exit, empty output" signature - while the queue advances during
+  # the active cycle.
+  append_wake "$state" signal fake-queued-wake "signal: fake-queued-wake (owned-shape regression test)"
+  kill -TERM "$watcher_pid" 2>/dev/null || true
+  wait_for_exit "$armpid" 80
+  status=$?
+  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "owned arm did not exit after its child died from a signal (status $status)"
+  [ "$status" -eq 1 ] || fail "owned arm must still propagate the child's real exit status (fm-watch.sh's trap exits 1), got $status: $(cat "$armout")"
+  ! grep -qF 'watcher: FAILED' "$armout" || fail "owned arm falsely reported FAILED despite a real queued wake: $(cat "$armout")"
+  grep -qF 'wake(s) already queued' "$armout" || fail "owned arm did not report the already-queued wake: $(cat "$armout")"
+  grep -q 'reason=nonzero-exit' "$state/.watch-cycle-exits.log" || fail "nonzero-exit cycle was not classified in the lifecycle ledger"
+  pass "owned arm reports an already-queued wake accurately instead of a false FAILED when its child dies from a signal"
+}
+
 test_attached_arm_signal_is_recorded_in_cycle_ledger() {
   local dir state fakebin out armout i wpid armpid status
   dir=$(make_case attached-arm-signal-ledger)
@@ -945,6 +1102,9 @@ test_watch_restart_attaches_to_healthy_peer
 test_watcher_self_evicts_on_lock_takeover
 test_arm_self_eviction_is_loud_without_successor
 test_arm_attaches_and_waits_for_live_fresh_watcher
+test_attached_arm_reports_queued_wake_without_visible_reason
+test_attached_arm_ignores_precycle_same_second_wake
+test_owned_arm_reports_queued_wake_on_signal_exit
 test_attached_arm_signal_is_recorded_in_cycle_ledger
 test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output

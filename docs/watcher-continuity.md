@@ -31,8 +31,13 @@ They remain the final backstop rather than the normal continuity mechanism.
 
 `bin/fm-watch-arm.sh` never returns a clean empty success.
 An actionable child output returns that reason normally.
-A zero/empty child return rechecks the home lock and beacon, attaches to a verified healthy successor when one exists, or emits `watcher: FAILED - cycle ended without an actionable reason` and exits nonzero.
-An attached arm follows verified identity-matched successors and reports the same typed failure if that chain ends without one.
+A zero/empty child return rechecks the home lock and beacon, and attaches to a verified healthy successor when one exists.
+An attached arm follows verified identity-matched successors the same way.
+
+When neither an owned child's output nor a verified successor explains a cycle's end, the arm layer does not assume nothing happened.
+`cycle_begin` snapshots `state/.wake-queue.seq` under the queue lock when it starts owning or following a pid; at cycle end, a valid `state/.wake-queue` row with a later sequence proves a real wake landed durably even though this process could not see its reason text (an attached arm never captures the owning watcher's stdout, and an owned child can die between a successful `fm_wake_append` and its own `wake()` call).
+That case reports `watcher: cycle ended - N wake(s) already queued ...` and exits nonzero (re-arm is still needed - no watcher is running) but is never the literal `watcher: FAILED` text, so a caller keying on that exact string does not treat it as an alarm.
+Only a cycle with no valid queue row after its sequence snapshot still emits the typed `watcher: FAILED - cycle ended without an actionable reason` result.
 
 The arm layer appends one tab-separated record per observed cycle to `state/.watch-cycle-exits.log`.
 Each record includes arm and watcher PIDs, start and end timestamps, exit code and signal, classified reason, beacon age, lock identity before and after close, and successor disposition.
@@ -45,7 +50,7 @@ Only the watcher process touches `state/.last-watcher-beat`; no helper process c
 ## Regression coverage
 
 `tests/fm-pi-watch-extension.test.sh` simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
-`tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, and a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
+`tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination, and the already-queued-wake report (both the owned and attached shapes) alongside the still-covered genuinely-empty FAILED case.
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery fleet execution in the precise unhealthy state and preserves the existing Stop registration.
 
 ## Sanitized live evidence, 2026-07-17
