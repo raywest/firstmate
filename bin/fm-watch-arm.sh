@@ -39,11 +39,12 @@
 #                                                          die between a successful append and
 #                                                          its own wake() call), but
 #                                                          state/.wake-queue.seq DID advance -
-#                                                          a real wake is already durable. Exits
-#                                                          nonzero (re-arm is still needed - no
-#                                                          watcher is running) but is never the
-#                                                          literal "watcher: FAILED" text, so it
-#                                                          is not the alarm case.
+#                                                          a real wake is already durable. A
+#                                                          clean or attached arm-level outcome
+#                                                          exits 4 (re-arm needed, not an alarm);
+#                                                          an owned child preserves its own
+#                                                          nonzero exit status. Neither prints
+#                                                          literal "watcher: FAILED" text.
 # It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
@@ -294,9 +295,10 @@ wait_for_healthy_successor() {
 # advanced during this cycle's window (cycle_begin's snapshot), a real wake is
 # already durable even though this process never saw its reason text - report
 # that honestly (exit 4: re-arm, not an alarm - distinct from the usage-error
-# exit 2 above) instead of the typed FAILED result. Only the genuinely-empty
-# case (exit 1, the actual alarm callers repair on) still emits the literal
-# "watcher: FAILED" line.
+# exit 2 above) instead of the typed FAILED result. This arm-level fallback does
+# not reclassify an owned child's observed nonzero exit, which preserves that
+# child's exit or signal status. Only the genuinely-empty case (exit 1, the
+# actual alarm callers repair on) still emits the literal "watcher: FAILED" line.
 report_cycle_end() {
   local queued
   queued=$(cycle_queued_wake_count)
