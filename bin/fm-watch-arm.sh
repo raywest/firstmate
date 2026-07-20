@@ -29,17 +29,19 @@
 #   watcher: FAILED - cycle ended without an actionable reason
 #                                                        - a clean cycle ended with no wake and no
 #                                                          verified healthy successor, AND
-#                                                          state/.wake-queue.seq did not advance
-#                                                          during this cycle - genuinely nothing
-#                                                          happened; treat as an alarm
+#                                                          state/.wake-queue has no valid record
+#                                                          at or after this cycle's start epoch -
+#                                                          genuinely nothing happened; treat as
+#                                                          an alarm
 #   watcher: cycle ended ... - N wake(s) already queued  - the cycle ended without a reason
 #                                                          visible to THIS process (an attached
 #                                                          arm never captures the owning
 #                                                          watcher's stdout; an owned child can
 #                                                          die between a successful append and
 #                                                          its own wake() call), but
-#                                                          state/.wake-queue.seq DID advance -
-#                                                          a real wake is already durable. A
+#                                                          state/.wake-queue has a valid row at
+#                                                          or after this cycle's start epoch - a
+#                                                          real wake is already durable. A
 #                                                          clean or attached arm-level outcome
 #                                                          exits 4 (re-arm needed, not an alarm);
 #                                                          an owned child preserves its own
@@ -112,40 +114,25 @@ cycle_watcher_pid=none
 cycle_origin=unknown
 cycle_started_at=0
 cycle_lock_before='pid:none|identity:none'
-cycle_queue_seq_before=0
-
-# The wake-queue sequence counter (fm-wake-lib.sh's fm_wake_append, guarded by
-# FM_WAKE_QUEUE_LOCK on the write side) as of right now. 0 for an absent or
-# corrupt counter file, never a fatal read.
-wake_queue_seq() {
-  local seq
-  seq=$(cat "$STATE/.wake-queue.seq" 2>/dev/null || true)
-  case "$seq" in
-    ''|*[!0-9]*) seq=0 ;;
-  esac
-  printf '%s' "$seq"
-}
 
 cycle_begin() {
   cycle_watcher_pid=$1
   cycle_origin=$2
   cycle_started_at=$(date +%s)
   cycle_lock_before=$(lock_snapshot)
-  cycle_queue_seq_before=$(wake_queue_seq)
   cycle_active=1
 }
 
 # Wake(s) durably appended to state/.wake-queue since this cycle began, even if
 # THIS process cannot see the reason text: an attached arm never captures the
 # owning watcher's stdout, and an owned child can die between a successful
-# fm_wake_append and its own wake() call. 0 means the queue genuinely did not
-# advance during this cycle's window.
+# fm_wake_append and its own wake() call. 0 means no valid record was appended
+# during this cycle's window.
 cycle_queued_wake_count() {
-  local seq_after delta
-  seq_after=$(wake_queue_seq)
-  delta=$((seq_after - cycle_queue_seq_before))
-  [ "$delta" -gt 0 ] || delta=0
-  printf '%s' "$delta"
+  awk -F '\t' -v started="$cycle_started_at" '
+    NF >= 5 && $1 ~ /^[0-9]+$/ && $1 >= started { count++ }
+    END { print count + 0 }
+  ' "$STATE/.wake-queue" 2>/dev/null || printf '0'
 }
 
 cycle_refresh_lock_before() {
@@ -292,13 +279,13 @@ wait_for_healthy_successor() {
 }
 
 # Report a cycle end this process cannot directly explain. If the wake queue
-# advanced during this cycle's window (cycle_begin's snapshot), a real wake is
-# already durable even though this process never saw its reason text - report
-# that honestly (exit 4: re-arm, not an alarm - distinct from the usage-error
-# exit 2 above) instead of the typed FAILED result. This arm-level fallback does
-# not reclassify an owned child's observed nonzero exit, which preserves that
-# child's exit or signal status. Only the genuinely-empty case (exit 1, the
-# actual alarm callers repair on) still emits the literal "watcher: FAILED" line.
+# has a valid record at or after this cycle's start epoch, a real wake is already
+# durable even though this process never saw its reason text - report that honestly
+# (exit 4: re-arm, not an alarm - distinct from the usage-error exit 2 above)
+# instead of the typed FAILED result. This arm-level fallback does not reclassify
+# an owned child's observed nonzero exit, which preserves that child's exit or
+# signal status. Only the genuinely-empty case (exit 1, the actual alarm callers
+# repair on) still emits the literal "watcher: FAILED" line.
 report_cycle_end() {
   local queued
   queued=$(cycle_queued_wake_count)

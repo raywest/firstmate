@@ -619,11 +619,11 @@ test_attached_arm_reports_queued_wake_without_visible_reason() {
     i=$((i + 1))
   done
   grep -qF "watcher: attached pid=$wpid" "$armout" || fail "arm did not report attach to the live watcher"
-  # Once attached (cycle_begin has snapshotted the wake-queue counter), a real
-  # wake lands durably - here, deterministically, via a direct append, standing
-  # in for the owning watcher's own signal scan. The attached arm cannot see
-  # this text (it never captured the owning watcher's stdout) but must still
-  # report it accurately instead of a false FAILED when the seed dies.
+  # Once attached, a real wake lands durably - here, deterministically, via a
+  # direct append, standing in for the owning watcher's own signal scan. The
+  # attached arm cannot see this text (it never captured the owning watcher's
+  # stdout) but must still report it accurately instead of a false FAILED when
+  # the seed dies.
   append_wake "$state" signal fake-queued-wake "signal: fake-queued-wake (attached-shape regression test)"
   kill "$wpid" 2>/dev/null || true
   wait "$wpid" 2>/dev/null || true
@@ -660,13 +660,13 @@ test_owned_arm_reports_queued_wake_on_signal_exit() {
   watcher_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   grep -qF "watcher: started pid=$watcher_pid" "$armout" || fail "arm did not start before signal-exit check"
 
-  # cycle_begin already snapshotted the wake-queue counter when the child was
-  # forked. Append a real wake, then kill the child with TERM before it ever
-  # reaches its own wake() call. bin/fm-watch.sh's own trap is 'exit 1' on
-  # HUP/INT/TERM (not a raw signal death), so this yields rc=1 with empty
-  # stdout - the exact "nonzero exit, empty output" signature - while the
-  # queue genuinely advanced during the window between append and death.
-  append_wake "$state" signal fake-queued-wake "signal: fake-queued-wake (owned-shape regression test)"
+  # Write a durable row, then kill the child with TERM before it ever reaches
+  # its own wake() call. bin/fm-watch.sh's own trap is 'exit 1' on HUP/INT/TERM
+  # (not a raw signal death), so this yields rc=1 with empty stdout - the exact
+  # "nonzero exit, empty output" signature - while the queue has a wake from
+  # the active cycle.
+  printf '%s\t1\tsignal\tfake-queued-wake\tsignal: fake-queued-wake (owned-shape regression test)\n' "$(date +%s)" >> "$state/.wake-queue"
+  [ ! -e "$state/.wake-queue.seq" ] || fail "owned-shape fixture unexpectedly published a sequence counter"
   kill -TERM "$watcher_pid" 2>/dev/null || true
   wait_for_exit "$armpid" 80
   status=$?

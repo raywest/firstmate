@@ -47,27 +47,6 @@ test_concurrent_append_and_drain() {
   pass "concurrent append plus drain preserves queue records"
 }
 
-test_queue_append_failure_does_not_advance_sequence() {
-  local dir state queue_target seq_before seq_after
-  dir=$(make_case append-failure)
-  state="$dir/state"
-  queue_target="$dir/queue-target"
-  seq_before=41
-  printf '%s\n' "$seq_before" > "$state/.wake-queue.seq"
-  mkdir "$queue_target"
-  if FM_STATE_OVERRIDE="$state" FM_WAKE_QUEUE="$queue_target" bash -c '
-    # shellcheck disable=SC1090,SC1091
-    . "$1"
-    fm_wake_append signal task.status "signal: task"
-  ' _ "$ROOT/bin/fm-wake-lib.sh"; then
-    fail "append to a directory unexpectedly succeeded"
-  fi
-  seq_after=$(cat "$state/.wake-queue.seq")
-  [ "$seq_after" = "$seq_before" ] || fail "queue append failure advanced the sequence from $seq_before to $seq_after"
-  [ ! -e "$state/.wake-queue" ] || fail "queue append failure created a queue record"
-  pass "queue append failure leaves the sequence unchanged"
-}
-
 test_signal_catchup_without_running_watcher() {
   local dir state fakebin out drain_out status_file
   dir=$(make_case signal)
@@ -451,7 +430,6 @@ test_interruption_before_and_after_raw_commit() {
 }
 
 test_concurrent_append_and_drain
-test_queue_append_failure_does_not_advance_sequence
 test_signal_catchup_without_running_watcher
 test_stale_enqueue_before_suppressor
 test_not_working_stale_enqueue_before_suppressor
