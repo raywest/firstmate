@@ -65,6 +65,24 @@ fm_write_meta "$STATE_DIR/tk1.meta" "window=default:wG:pQ" "backend=herdr" "kind
 [ ! -e "$STATE_DIR/.herdr-escalated-default_wG_pQ" ] || fail "a failed durable enqueue must leave the blocked edge eligible for reconnect reconciliation"
 pass "handle_push_transition: enqueue failure cannot commit the Herdr dedupe marker"
 
+# A failed dedupe-marker commit AFTER a successful enqueue is a different
+# failure than the one above: the wake is already durable, so it must never be
+# discarded by turning into a fatal exit. Regression coverage for the
+# watcher-cycle-end misreporting fix (post-append side effects are best-effort).
+reset_state
+fm_write_meta "$STATE_DIR/tk1.meta" "window=default:wG:pQ" "backend=herdr" "kind=ship"
+(
+  fm_backend_commit_transition() { return 1; }
+  handle_push_transition herdr default "$(mkrec wG:pQ blocked)"
+)
+status=$?
+[ "$status" -eq 0 ] || fail "a failed dedupe-marker commit must not turn an already-queued wake into a fatal exit: status $status"
+[ -e "$STATE_DIR/.wake-queue" ] || fail "the wake must still be durably queued even though the marker commit failed"
+grep -q 'stale' "$STATE_DIR/.wake-queue" || fail "the enqueued wake must still be a stale record: $(cat "$STATE_DIR/.wake-queue")"
+[ -s "$WAKE_LOG" ] || fail "a failed dedupe-marker commit must not swallow the already-queued wake - wake() must still run"
+grep -qF 'wake already queued' "$STATE_DIR/.watch-triage.log" 2>/dev/null || fail "a failed marker commit must be noted in the triage log"
+pass "handle_push_transition: a failed dedupe-marker commit is best-effort and never discards an already-queued wake"
+
 # --- handle_push_transition: absorb (no wake, no enqueue) for a declared pause -
 
 reset_state
