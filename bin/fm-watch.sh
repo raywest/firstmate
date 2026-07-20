@@ -809,6 +809,17 @@ while :; do
       if [ -n "$out" ]; then
         reason="check: $c: $out"
         fm_wake_append check "$c" "$reason" || exit 1
+        if [ "$(basename "$c")" = x-watch.check.sh ]; then
+          case "$out" in
+            x-mention\ *)
+              request_id=${out#x-mention }
+              case "$request_id" in
+                ''|.*|*[!A-Za-z0-9._-]*) ;;
+                *) fmx_offer_registry_acknowledge "$STATE" "$request_id" 2>/dev/null || true ;;
+              esac
+              ;;
+          esac
+        fi
         touch "$STATE/.last-check"
         wake "$reason"
       fi

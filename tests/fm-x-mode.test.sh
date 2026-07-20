@@ -290,7 +290,7 @@ test_poll_question_stashes_and_marks() {
 }
 
 test_poll_mentions_wake_once_per_durable_offer() {
-  local home fakebin out rc body marker
+  local home fakebin out rc body marker ack
   home="$TMP_ROOT/poll-offer-dedupe"; mkdir -p "$home"
   fakebin=$(make_fake_curl "$home")
   printf 'FMX_PAIRING_TOKEN=tok-offer\n' > "$home/.env"
@@ -304,8 +304,20 @@ test_poll_mentions_wake_once_per_durable_offer() {
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_NOW_OVERRIDE=1700000030 \
     FMX_RELAY_URL="https://relay.test" FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" \
     "$ROOT/bin/fm-x-poll.sh"); rc=$?
-  expect_code 0 "$rc" "repeated pending mention poll exit"
-  [ -z "$out" ] || fail "an already offered pending mention must stay silent (got: $out)"
+  expect_code 0 "$rc" "unacknowledged pending mention poll exit"
+  [ "$out" = "x-mention req-repeat" ] \
+    || fail "an unacknowledged offer must re-emit its mention wake (got: $out)"
+  ack=$(PATH="$fakebin:$BASE_PATH" FMX_NOW_OVERRIDE=1700000030 bash -c \
+    '. "$1"; fmx_offer_registry_acknowledge "$2" "$3"' _ \
+    "$ROOT/bin/fm-x-lib.sh" "$home/state" req-repeat) || fail "could not acknowledge the offered mention"
+  [ -z "$ack" ] || fail "offer acknowledgement must stay silent"
+  [ "$(jq -r .delivery_state "$home/state/x-context/req-repeat.offered.json")" = delivered ] \
+    || fail "the watcher acknowledgement must finalize the durable offer marker"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_NOW_OVERRIDE=1700000045 \
+    FMX_RELAY_URL="https://relay.test" FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" \
+    "$ROOT/bin/fm-x-poll.sh"); rc=$?
+  expect_code 0 "$rc" "delivered mention repeat poll exit"
+  [ -z "$out" ] || fail "a delivered mention must stay silent (got: $out)"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_RELAY_URL="https://relay.test" \
     FAKE_DISMISS_CODE=200 "$ROOT/bin/fm-x-dismiss.sh" req-repeat); rc=$?
   expect_code 0 "$rc" "successful dismiss before relay re-offer exit"
@@ -344,6 +356,48 @@ test_poll_mentions_wake_once_per_durable_offer() {
   [ "$out" = "x-mention req-new" ] \
     || fail "a re-offer after the bounded marker expiry must wake once (got: $out)"
   pass "fm-x-poll wakes once per durable request offer across inbox cleanup"
+}
+
+test_watcher_queues_before_acknowledging_x_offer() {
+  local home fakebin out drain_out body pid i marker repeat
+  home="$TMP_ROOT/watcher-offer"; mkdir -p "$home"
+  fakebin=$(make_fake_curl "$home")
+  printf 'FMX_PAIRING_TOKEN=tok-watcher-offer\n' > "$home/.env"
+  FM_HOME="$home" "$ROOT/bin/fm-bootstrap.sh" >/dev/null 2>&1 \
+    || fail "could not arm the X watcher fixture"
+  printf '%s\n' fm-pr-check-migration-scan-v1 > "$home/state/.pr-check-migration-scan-v1"
+  printf '%s\n' fm-pr-check-migration-v1 > "$home/state/.pr-check-migration-v1"
+  chmod 600 "$home/state/.pr-check-migration-scan-v1" "$home/state/.pr-check-migration-v1"
+  body='{"request_id":"req-watcher-offer","text":"status?"}'
+  out="$home/watch.out"
+  PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FMX_RELAY_URL="https://relay.test" FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 \
+    "$ROOT/bin/fm-watch.sh" > "$out" &
+  pid=$!
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 50 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "watcher did not exit for the X mention"
+  fi
+  wait "$pid" || fail "watcher failed while processing the X mention"
+  marker="$home/state/x-context/req-watcher-offer.offered.json"
+  [ "$(jq -r .delivery_state "$marker")" = delivered ] \
+    || fail "watcher must acknowledge only after its durable queue append"
+  drain_out="$home/drain.out"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-wake-drain.sh" > "$drain_out" \
+    || fail "could not drain the X mention wake"
+  grep "$(printf '\tcheck\t')" "$drain_out" | grep -F 'x-mention req-watcher-offer' >/dev/null \
+    || fail "watcher must queue the X mention before marking it delivered"
+  repeat=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_RELAY_URL="https://relay.test" \
+    FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" "$ROOT/bin/fm-x-poll.sh")
+  [ -z "$repeat" ] || fail "a watcher-acknowledged offer must not re-emit (got: $repeat)"
+  pass "watcher queues an X mention before finalizing its offer marker"
 }
 
 test_poll_offer_claim_failure_reports_once() {
@@ -2774,6 +2828,7 @@ test_poll_auth_error_reports_once
 test_poll_error_private_publication_rejects_unsafe_paths
 test_poll_question_stashes_and_marks
 test_poll_mentions_wake_once_per_durable_offer
+test_watcher_queues_before_acknowledging_x_offer
 test_poll_offer_claim_failure_reports_once
 test_poll_preserves_conversation_context
 test_poll_inbox_commit_failure_reports_error

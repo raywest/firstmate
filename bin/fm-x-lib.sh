@@ -22,8 +22,12 @@
 #   fmx_context_registry_set <state> <request_id> <platform> <reply-max> [refresh]
 #                                - persist the durable per-request reply context;
 #                                refresh=1 resets its retention timestamp
-#   fmx_offer_registry_claim <state> <request_id> - atomically claim the durable
-#                                one-wake offer marker; 0=new, 1=existing, 2=error
+#   fmx_offer_registry_delivery_state <state> <request_id> - print the durable
+#                                offer state: absent, pending, delivered, or legacy
+#   fmx_offer_registry_claim <state> <request_id> - atomically create a pending
+#                                offer marker; 0=new, 1=existing, 2=error
+#   fmx_offer_registry_acknowledge <state> <request_id> - record that the watcher
+#                                durably queued the pending offer
 #   fmx_context_registry_prune <state> - remove records older than seven days
 #   fmx_context_registry_get <state> <request_id> - read the durable per-request
 #                                reply context, or the empty shape when absent
@@ -534,12 +538,35 @@ fmx_context_registry_set() {
     | fmx_private_artifact_publish_stdin "$dir" "$rid.json" 600) || return 1
 }
 
-# fmx_offer_registry_claim <state> <request_id>: atomically claim the durable
-# one-wake marker at state/x-context/<request_id>.offered.json. The marker uses
-# the context registry's recorded_at retention contract, so its first claim
-# survives inbox cleanup and expires with the relay's bounded follow-up window.
-# Returns 0 only to the caller that created the marker, 1 when a valid marker
-# already exists, and 2 on invalid input or a publication failure.
+fmx_offer_registry_delivery_state() {
+  local state=$1 rid=$2 dir file delivery
+  case "$rid" in
+    ''|.*|*[!A-Za-z0-9._-]*) return 2 ;;
+  esac
+  dir="$state/x-context"
+  file="$dir/$rid.offered.json"
+  if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then
+    printf 'absent\n'
+    return 0
+  fi
+  fmx_private_artifact_dir_device "$dir" >/dev/null || return 2
+  if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+    printf 'absent\n'
+    return 0
+  fi
+  fmx_private_artifact_file_valid "$dir" "$rid.offered.json" 600 || return 2
+  delivery=$(jq -r --arg rid "$rid" '
+    if .request_id != $rid then empty
+    elif .delivery_state == null then "legacy"
+    elif .delivery_state == "pending" or .delivery_state == "delivered" then .delivery_state
+    else empty end
+  ' "$file" 2>/dev/null) || return 2
+  case "$delivery" in
+    pending|delivered|legacy) printf '%s\n' "$delivery" ;;
+    *) return 2 ;;
+  esac
+}
+
 fmx_offer_registry_claim() {
   local state=$1 rid=$2 dir now record rc
   case "$rid" in
@@ -552,12 +579,36 @@ fmx_offer_registry_claim() {
   esac
   [ "${#now}" -le 18 ] || return 2
   record=$(jq -cn --arg rid "$rid" --argjson recorded_at "$now" \
-    '{request_id:$rid, recorded_at:$recorded_at}') || return 2
+    '{request_id:$rid, recorded_at:$recorded_at, delivery_state:"pending"}') || return 2
   dir="$state/x-context"
   printf '%s\n' "$record" \
     | fmx_private_artifact_publish_stdin_once "$dir" "$rid.offered.json" 600
   rc=$?
   return "$rc"
+}
+
+fmx_offer_registry_acknowledge() {
+  local state=$1 rid=$2 dir file delivery now recorded_at record
+  case "$rid" in
+    ''|.*|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  now=${FMX_NOW_OVERRIDE:-$(date +%s)}
+  case "$now" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "${#now}" -le 18 ] || return 1
+  delivery=$(fmx_offer_registry_delivery_state "$state" "$rid") || return 1
+  [ "$delivery" = delivered ] && return 0
+  dir="$state/x-context"
+  file="$dir/$rid.offered.json"
+  recorded_at=$now
+  if [ "$delivery" != absent ]; then
+    recorded_at=$(fmx_context_registry_recorded_at "$file" "$now") || return 1
+  fi
+  record=$(jq -cn --arg rid "$rid" --argjson recorded_at "$recorded_at" \
+    '{request_id:$rid, recorded_at:$recorded_at, delivery_state:"delivered"}') || return 1
+  printf '%s\n' "$record" \
+    | fmx_private_artifact_publish_stdin "$dir" "$rid.offered.json" 600
 }
 
 # fmx_context_registry_get <state> <request_id>: print the durable per-request
