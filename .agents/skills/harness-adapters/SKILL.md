@@ -11,7 +11,8 @@ metadata:
 Use this reference before any harness-specific firstmate operation: spawn, recovery, trust-dialog handling, skill invocation, interrupt, exit, resume, or adapter verification.
 
 Crewmates default to the same harness firstmate is running on unless `config/crew-harness` records an adapter name.
-Optional dispatch profiles in `config/crew-dispatch.json` can override that static default for one crewmate or scout dispatch by selecting concrete harness, model, and effort axes at intake.
+Optional dispatch profiles in `config/crew-dispatch.json` can override that static default for one crewmate or scout dispatch by selecting a concrete launch profile at intake.
+[`docs/configuration.md`](../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson) owns the profile schema and axis semantics.
 The captain may override that file at session start or later; a per-task instruction such as "run this one on codex" overrides it for that dispatch only.
 `default` means mirror firstmate's own harness.
 
@@ -41,6 +42,7 @@ If the captain asks for a new harness, propose verifying it first: spawn a trivi
 `bin/fm-harness.sh` prints firstmate's own harness, using verified env markers first and then process ancestry.
 `bin/fm-harness.sh crew` resolves the effective crewmate harness from `config/crew-harness` (absent or `default` -> own).
 `bin/fm-harness.sh secondmate` resolves the secondmate-launch harness through the chain `config/secondmate-harness` -> `config/crew-harness` -> own, so an unset `config/secondmate-harness` matches the crew harness.
+The optional secondmate model, effort, and codex-only harness-profile pins use the canonical format in [`docs/configuration.md`](../../docs/configuration.md#harness-support).
 `bin/fm-spawn.sh` uses `crew` mode for a crewmate/scout launch and `secondmate` mode for a `--secondmate` launch, re-resolving on every spawn so the split is durable across respawns; an explicit per-spawn harness arg overrides either.
 On `unknown`, ask the captain instead of guessing.
 A captain override always beats detection.
@@ -89,7 +91,7 @@ When changing any primary watcher adapter, update `docs/supervision-protocols/`,
 
 ## Launch profile axes
 
-`bin/fm-spawn.sh` accepts concrete `--harness`, `--model`, and `--effort` values chosen by firstmate at intake.
+`bin/fm-spawn.sh` accepts concrete `--harness`, `--model`, `--effort`, and (codex-only) `--harness-profile` values chosen by firstmate at intake.
 Do not make the shell scripts parse or match natural-language dispatch rules.
 
 Effort precedence is an explicit per-task captain instruction first, then any applicable standing dispatch profile or secondmate pin, then the generic fallback below.
@@ -113,6 +115,10 @@ The supported launch-profile flags below are verified locally; each row records 
 
 When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
 This preserves launch success instead of passing a known-bad value.
+
+`--harness-profile <name>` is a separate, codex-only axis: a provider-config override rather than a model or effort choice.
+It selects codex's own `-p/--profile <name>` flag (verified on codex-cli 0.144.1), which layers `${CODEX_HOME:-$HOME/.codex}/<name>.config.toml` on top of codex's base config.
+The GLM/provider-variant note under the codex section below owns the concrete evidence and the standing GLM rules.
 
 ## no-mistakes skill invocation
 
@@ -175,8 +181,20 @@ Directory trust dialog on first run per repo root: "Do you trust the contents of
 Accept with Enter.
 The decision persists for the repo, so later worktrees of the same project skip it.
 
+On codex-cli 0.144.1, a fresh repo root can show a SECOND first-run dialog right after: "N hooks are new or changed" with options Review hooks / Trust all and continue / Continue without trusting.
+This was observed live spawning a codex crewmate (verified 2026-07-19) and is not project-specific to any one harness-profile; it is triggered by fm-spawn's own `-c notify=[...]` turn-end hook, so it can appear on any fresh codex worktree on this version, not only a `--harness-profile` launch.
+Accept with "2" (Trust all and continue) then Enter; like the directory trust dialog, this decision persists for the repo, so later worktrees of the same project skip it.
+Peek the pane after every codex spawn for both dialogs before assuming the brief is processing.
+
 Resume after exit with `codex resume <session-id>`.
 The session id is printed on quit.
+
+**Provider-config variants (GLM/OpenRouter note, verified 2026-07-19 on codex-cli 0.144.1).**
+Codex crewmates and secondmates are not limited to the default OpenAI-backed provider: `--harness-profile <name>` (`fm-spawn`'s `-p/--profile <name>` flag) layers `${CODEX_HOME:-$HOME/.codex}/<name>.config.toml` on top of the base config, and that file's `model_provider`/`model_providers.*` fields can point codex at an entirely different backend.
+Supervision facts are unchanged: busy signature, exit command, interrupt, skill invocation, trust dialog, and turn-end hook all behave identically regardless of which profile is active, because they are properties of the codex TUI itself, not of the model or provider behind it.
+`codex --profile <name>` accepts only a plain name (never a path) and silently falls back to the base config when the named profile file is missing rather than erroring - confirmed empirically (`codex exec --profile does-not-exist-xyz ...` completed successfully against the base OpenAI provider with no warning) - which is why `fm-spawn` validates the resolved file itself and fails closed before ever invoking codex.
+There is no `--ignore-user-config` flag on the interactive/top-level `codex` command (only on `codex exec`), so a profile launched this way still loads the base config's MCP servers alongside the provider override; this was not observed to break a trivial turn on 0.144.1, but has not been stress-tested against heavier MCP tool use.
+The GLM 5.2 (Zhipu, via OpenRouter) profile is on a standing audition seat, with these captain rules verbatim: real but low-stakes coding work only; NEVER production-gate work; log audition observations to `DevTeam/AUDITIONS.md`; pay-per-token via OpenRouter, not a subscription, so keep prompts trivial and purposeful.
 
 **Primary-session guard fact (verified 2026-07-08, codex-cli 0.142.1).**
 The firstmate PRIMARY's own `.codex/hooks.json` registers a Stop hook that pipes Codex's Stop payload to `bin/fm-turnend-guard.sh`.

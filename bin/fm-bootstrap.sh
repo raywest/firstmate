@@ -647,7 +647,7 @@ EOF
 }
 
 crew_dispatch_validate() {
-  local file err
+  local file err codex_home profiles missing name
   file="$CONFIG/crew-dispatch.json"
   [ -f "$file" ] || return 0
   if ! command -v jq >/dev/null 2>&1; then
@@ -660,6 +660,8 @@ crew_dispatch_validate() {
   fi
   err=$(jq -r '
     def verified($h): ["claude","codex","opencode","pi","grok","kimi"] | index($h);
+    def plain_profile_name:
+      if type == "string" then test("^[A-Za-z0-9_-]+$") else false end;
     def effort_ok($h; $e):
       if $e == null then true
       elif ($e | type) != "string" then false
@@ -692,18 +694,27 @@ crew_dispatch_validate() {
     elif [(.rules // [])[]? | select((.use? | type) == "array" and (.use | length) == 0)] | length > 0 then "each rule needs at least one use profile"
     elif [(.rules // [])[]? | use_profiles(.use?)[]? | select(type != "object")] | length > 0 then "each use profile must be an object"
     elif [(.rules // [])[]? | use_profiles(.use?)[]? | select((.harness? | type) != "string" or (.harness | length) == 0)] | length > 0 then "each use profile needs harness"
+    elif [(.rules // [])[]? | use_profiles(.use?)[]? | select(has("harness_profile") and ((.harness_profile? | type) != "string" or (.harness_profile | length) == 0))] | length > 0 then "each use profile harness_profile must be a non-empty string when present"
+    elif [(.rules // [])[]? | use_profiles(.use?)[]? | select(has("harness_profile") and (.harness_profile | plain_profile_name | not))] | length > 0 then "each use profile harness_profile must be a plain name (letters, digits, dash, underscore only) when present"
     elif [(.rules // [])[]? | select(has("select") and ((.select? | type) != "string" or (.select | length) == 0))] | length > 0 then "select must be a non-empty string"
     elif [(.rules // [])[]? | .select? // empty | select(. != "quota-balanced")] | length > 0 then
       "unknown select: " + ([ (.rules // [])[]? | .select? // empty | select(. != "quota-balanced") ] | unique | join(", "))
     elif has("default") and (.default | type) != "object" then "default must be an object"
     elif has("default") and ((.default.harness? | type) != "string" or (.default.harness | length) == 0) then "default needs harness when present"
+    elif has("default") and (.default | has("harness_profile")) and ((.default.harness_profile? | type) != "string" or (.default.harness_profile | length) == 0) then "default harness_profile must be a non-empty string when present"
+    elif has("default") and (.default | has("harness_profile")) and (.default.harness_profile | plain_profile_name | not) then "default harness_profile must be a plain name (letters, digits, dash, underscore only) when present"
     else
       ([(.rules // [])[]? | use_profiles(.use?)[]?.harness] + [.default?.harness?]
         | map(select(. != null))
         | map(select(. as $h | verified($h) | not))
         | unique) as $bad_harnesses
+      | ([(.rules // [])[]? | use_profiles(.use?)[]? | select(has("harness_profile")) | .harness]
+          + (if (.default? | type) == "object" and (.default | has("harness_profile")) then [.default.harness] else [] end)
+          | map(select(. != "codex"))
+          | unique) as $bad_harness_profile_harnesses
       | if ($bad_harnesses | length) > 0 then "unverified harness: " + ($bad_harnesses | join(", "))
         elif (bad_efforts | length) > 0 then "invalid effort: " + (bad_efforts | join(", "))
+        elif ($bad_harness_profile_harnesses | length) > 0 then "harness_profile is only supported for harness codex: " + ($bad_harness_profile_harnesses | join(", "))
         else empty
         end
     end
@@ -711,6 +722,32 @@ crew_dispatch_validate() {
   if [ -n "$err" ]; then
     echo "CREW_DISPATCH: invalid config/crew-dispatch.json - $err"
     return 0
+  fi
+  # harness_profile file-existence gate (fail closed): codex's own --profile flag
+  # silently falls back to the base config when the named profile file is missing
+  # (verified empirically), so a dispatch profile naming a config that does not
+  # exist at validation time is caught here rather than discovered at spawn time.
+  codex_home="${CODEX_HOME:-$HOME/.codex}"
+  profiles=$(jq -r '
+    def use_profiles($u):
+      if ($u | type) == "array" then $u
+      elif ($u | type) == "object" then [$u]
+      else []
+      end;
+    ([(.rules // [])[]? | use_profiles(.use?)[]? | select(.harness == "codex" and has("harness_profile")) | .harness_profile]
+      + (if (.default? | type) == "object" and .default.harness == "codex" and (.default | has("harness_profile")) then [.default.harness_profile] else [] end))
+    | unique[]
+  ' "$file" 2>/dev/null || true)
+  if [ -n "$profiles" ]; then
+    missing=()
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      [ -r "$codex_home/$name.config.toml" ] || missing+=("$name")
+    done <<< "$profiles"
+    if [ "${#missing[@]}" -gt 0 ]; then
+      echo "CREW_DISPATCH: invalid config/crew-dispatch.json - harness_profile config missing or unreadable under $codex_home: $(IFS=,; echo "${missing[*]}")"
+      return 0
+    fi
   fi
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ]; then
     jq -r '
