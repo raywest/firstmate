@@ -22,6 +22,12 @@
 #   fmx_context_registry_set <state> <request_id> <platform> <reply-max> [refresh]
 #                                - persist the durable per-request reply context;
 #                                refresh=1 resets its retention timestamp
+#   fmx_offer_registry_delivery_state <state> <request_id> - print the durable
+#                                offer state: absent, pending, delivered, or legacy
+#   fmx_offer_registry_claim <state> <request_id> - atomically create a pending
+#                                offer marker; 0=new, 1=existing, 2=error
+#   fmx_offer_registry_acknowledge <state> <request_id> - record that the watcher
+#                                durably queued the pending offer
 #   fmx_context_registry_prune <state> - remove records older than seven days
 #   fmx_context_registry_get <state> <request_id> - read the durable per-request
 #                                reply context, or the empty shape when absent
@@ -174,6 +180,44 @@ fmx_private_artifact_publish_stdin() {
     rm -f -- "$dest"
     return 1
   fi
+}
+
+# Publish stdin as a new private artifact without replacing an existing path.
+# The hard-link claim is atomic within the prepared directory, so concurrent
+# callers cannot both create the destination. Returns 0 when this caller created
+# it, 1 when another valid private artifact already owns the path, and 2 on an
+# unsafe path or publication failure.
+fmx_private_artifact_publish_stdin_once() {
+  local dir=$1 base=$2 mode=$3 device tmp dest
+  case "$base" in
+    ''|.*|*/*) return 2 ;;
+  esac
+  case "$mode" in
+    600|700) ;;
+    *) return 2 ;;
+  esac
+  device=$(fmx_private_artifact_dir_prepare "$dir") || return 2
+  dest="$dir/$base"
+  tmp=$(umask 077; mktemp "$dir/.${base}.fm-x.XXXXXX" 2>/dev/null) || return 2
+  if ! cat > "$tmp" \
+    || ! chmod "$mode" "$tmp" 2>/dev/null \
+    || ! fmx_single_link_file_mode_valid "$tmp" "$mode" "$device"; then
+    rm -f -- "$tmp"
+    return 2
+  fi
+  if ln -- "$tmp" "$dest" 2>/dev/null; then
+    rm -f -- "$tmp"
+    if fmx_single_link_file_mode_valid "$dest" "$mode" "$device"; then
+      return 0
+    fi
+    rm -f -- "$dest"
+    return 2
+  fi
+  rm -f -- "$tmp"
+  if fmx_single_link_file_mode_valid "$dest" "$mode" "$device"; then
+    return 1
+  fi
+  return 2
 }
 
 fmx_private_artifact_file_valid() {
@@ -492,6 +536,79 @@ fmx_context_registry_set() {
     --argjson recorded_at "$recorded_at" \
     '{request_id:$rid, platform:$platform, reply_max_chars:$max, recorded_at:$recorded_at}' \
     | fmx_private_artifact_publish_stdin "$dir" "$rid.json" 600) || return 1
+}
+
+fmx_offer_registry_delivery_state() {
+  local state=$1 rid=$2 dir file delivery
+  case "$rid" in
+    ''|.*|*[!A-Za-z0-9._-]*) return 2 ;;
+  esac
+  dir="$state/x-context"
+  file="$dir/$rid.offered.json"
+  if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then
+    printf 'absent\n'
+    return 0
+  fi
+  fmx_private_artifact_dir_device "$dir" >/dev/null || return 2
+  if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+    printf 'absent\n'
+    return 0
+  fi
+  fmx_private_artifact_file_valid "$dir" "$rid.offered.json" 600 || return 2
+  delivery=$(jq -r --arg rid "$rid" '
+    if .request_id != $rid then empty
+    elif .delivery_state == null then "legacy"
+    elif .delivery_state == "pending" or .delivery_state == "delivered" then .delivery_state
+    else empty end
+  ' "$file" 2>/dev/null) || return 2
+  case "$delivery" in
+    pending|delivered|legacy) printf '%s\n' "$delivery" ;;
+    *) return 2 ;;
+  esac
+}
+
+fmx_offer_registry_claim() {
+  local state=$1 rid=$2 dir now record rc
+  case "$rid" in
+    ''|.*|*[!A-Za-z0-9._-]*) return 2 ;;
+  esac
+  fmx_context_registry_prune "$state"
+  now=${FMX_NOW_OVERRIDE:-$(date +%s)}
+  case "$now" in
+    ''|*[!0-9]*) return 2 ;;
+  esac
+  [ "${#now}" -le 18 ] || return 2
+  record=$(jq -cn --arg rid "$rid" --argjson recorded_at "$now" \
+    '{request_id:$rid, recorded_at:$recorded_at, delivery_state:"pending"}') || return 2
+  dir="$state/x-context"
+  printf '%s\n' "$record" \
+    | fmx_private_artifact_publish_stdin_once "$dir" "$rid.offered.json" 600
+  rc=$?
+  return "$rc"
+}
+
+fmx_offer_registry_acknowledge() {
+  local state=$1 rid=$2 dir file delivery now recorded_at record
+  case "$rid" in
+    ''|.*|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  now=${FMX_NOW_OVERRIDE:-$(date +%s)}
+  case "$now" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "${#now}" -le 18 ] || return 1
+  delivery=$(fmx_offer_registry_delivery_state "$state" "$rid") || return 1
+  [ "$delivery" = delivered ] && return 0
+  dir="$state/x-context"
+  file="$dir/$rid.offered.json"
+  recorded_at=$now
+  if [ "$delivery" != absent ]; then
+    recorded_at=$(fmx_context_registry_recorded_at "$file" "$now") || return 1
+  fi
+  record=$(jq -cn --arg rid "$rid" --argjson recorded_at "$recorded_at" \
+    '{request_id:$rid, recorded_at:$recorded_at, delivery_state:"delivered"}') || return 1
+  printf '%s\n' "$record" \
+    | fmx_private_artifact_publish_stdin "$dir" "$rid.offered.json" 600
 }
 
 # fmx_context_registry_get <state> <request_id>: print the durable per-request
