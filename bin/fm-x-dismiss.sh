@@ -5,10 +5,11 @@
 #
 # When firstmate decides NOT to reply to a mention (a pure acknowledgment, or any
 # mention it judges not worth a reply), clearing only the local inbox file is not
-# enough: the relay keeps re-offering that request on every poll until it times
-# out to a polite "offline" auto-reply. Dismiss tells the relay to drop the
-# request outright - it posts nothing and stops re-offering it - so a skipped
-# mention causes no re-offer churn and no offline auto-reply.
+# enough: the durable offer marker suppresses duplicate local wakes only for its
+# bounded retention and does not tell the relay to drop the request or prevent an
+# offline auto-reply. Dismiss tells the relay to drop the request outright - it
+# posts nothing and stops re-offering it - so a skipped mention causes no later
+# re-offer churn and no offline auto-reply.
 #
 # POSTs {"request_id":"<id>"} (no text - a dismiss has no body) to
 # $RELAY/connector/dismiss with the bearer token. On success (2xx) it echoes ONLY
