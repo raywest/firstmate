@@ -122,11 +122,12 @@ Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`,
 ## Dispatch profiles
 
 Crewmate and scout dispatch can stay on the static crewmate harness resolved by `config/crew-harness`, or it can use local dispatch profiles in `config/crew-dispatch.json`.
-The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching rule, resolves that rule directly or through a supported selector, and passes only concrete `--harness`, `--model`, and `--effort` axes to `fm-spawn.sh`.
-The shell scripts validate the JSON shape and verified harness/effort combinations, and `fm-dispatch-select.sh` owns deterministic selector behavior, but they do not parse task intent or match the natural-language rules.
+The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching rule, resolves that rule directly or through a supported selector, and passes the selected concrete profile to `fm-spawn.sh`.
+The shell scripts validate the JSON shape and applicable profile/harness combinations, and `fm-dispatch-select.sh` owns deterministic selector behavior, but they do not parse task intent or match the natural-language rules.
+The schema and axis semantics are owned by [configuration.md](configuration.md#crew-dispatch-profiles-configcrew-dispatchjson).
 The session-start bootstrap step surfaces either the active rule block or a concise invalid-config line at startup.
 When the file exists, `fm-spawn.sh` refuses crewmate and scout launches without an explicit harness, so `config/crew-harness` is only automatic when no dispatch profile file is active.
-Secondmate launches are exempt because they resolve the secondmate harness and any optional secondmate model or effort tokens instead.
+Secondmate launches are exempt and resolve their separate launch configuration through `config/secondmate-harness`.
 Unsupported effort values are still recorded in task meta when passed to `fm-spawn.sh`, but the launch template omits any effort flag that the selected harness does not accept.
 That keeps every verified crewmate/scout launch template compatible while preserving the requested profile for later audit.
 

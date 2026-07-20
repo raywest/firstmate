@@ -20,9 +20,9 @@
       "why": "Use a strong coding profile for broad design and implementation work."
     },
     {
-      "when": "The task is real but low-stakes coding work suitable for the GLM audition seat; never production-gate work on this profile.",
+      "when": "The task is eligible for the configured GLM provider variant under the harness-adapters skill's codex guidance.",
       "use": { "harness": "codex", "harness_profile": "glm" },
-      "why": "GLM 5.2 via OpenRouter is on an audition seat (pay-per-token); low-stakes coding work builds evidence toward a permanent bench spot, logged to DevTeam/AUDITIONS.md."
+      "why": "Select the glm Codex provider profile; the harness-adapters skill owns its standing operating rules."
     }
   ],
   "default": { "harness": "codex", "model": "gpt-5.5", "effort": "medium" }
