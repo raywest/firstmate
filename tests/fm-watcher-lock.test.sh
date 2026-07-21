@@ -624,6 +624,62 @@ test_attached_arm_reports_queued_wake_without_visible_reason() {
   pass "attached arm reports an already-queued wake accurately instead of a false FAILED"
 }
 
+test_attached_arm_carries_boundary_through_replacement() {
+  local dir state fakebin first_out second_out armout first_pid second_pid armpid i status
+  dir=$(make_case arm-attach-replacement-boundary)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  first_out="$dir/first-watch.out"
+  second_out="$dir/second-watch.out"
+  armout="$dir/arm.out"
+  mark_pr_check_migration_complete "$state"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$first_out" &
+  first_pid=$!
+  i=0
+  while [ "$i" -lt 60 ]; do
+    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$first_pid" ] && [ -e "$state/.last-watcher-beat" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$first_pid" ] || fail "first watcher did not take the lock"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_ARM_ATTACH_POLL=2 FM_ARM_CONFIRM_TIMEOUT=0 "$WATCH_ARM" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$first_pid" "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: attached pid=$first_pid" "$armout" || fail "arm did not attach to the first watcher"
+  kill "$first_pid" 2>/dev/null || true
+  wait "$first_pid" 2>/dev/null || true
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$second_out" &
+  second_pid=$!
+  i=0
+  while [ "$i" -lt 60 ]; do
+    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$second_pid" ] && [ -e "$state/.last-watcher-beat" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$second_pid" || fail "replacement watcher did not take the lock"
+  append_wake "$state" signal replacement-wake 'signal: replacement wake'
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$second_pid" "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF "watcher: attached pid=$second_pid" "$armout" || fail "arm did not adopt the replacement watcher"
+  kill "$second_pid" 2>/dev/null || true
+  wait "$second_pid" 2>/dev/null || true
+  wait_for_exit "$armpid" 80
+  status=$?
+  [ "$status" -eq 4 ] || fail "a hidden replacement wake must use the queued-wake result, got $status: $(cat "$armout")"
+  ! grep -qF 'watcher: FAILED' "$armout" || fail "a hidden replacement wake was misreported as FAILED: $(cat "$armout")"
+  grep -qF 'wake(s) already queued' "$armout" || fail "a hidden replacement wake was not reported as queued: $(cat "$armout")"
+  pass "attached arm carries its queue boundary through a replacement watcher"
+}
+
 # A queue record that predates an arm cycle is not evidence of a wake from that
 # cycle. Keep every date +%s call in this case in one fixed second so the old
 # epoch-window classification would deterministically misidentify the record.
@@ -1173,6 +1229,7 @@ test_watcher_self_evicts_on_lock_takeover
 test_arm_self_eviction_is_loud_without_successor
 test_arm_attaches_and_waits_for_live_fresh_watcher
 test_attached_arm_reports_queued_wake_without_visible_reason
+test_attached_arm_carries_boundary_through_replacement
 test_attached_arm_ignores_precycle_same_second_wake
 test_owned_arm_reports_queued_wake_on_signal_exit
 test_owned_arm_captures_queue_boundary_before_child_start
