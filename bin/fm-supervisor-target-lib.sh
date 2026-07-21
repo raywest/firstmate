@@ -14,10 +14,16 @@
 # in bin/fm-supervise-daemon.sh, so its unit tests (tests/fm-daemon.test.sh)
 # keep exercising the same names after the daemon sources this file.
 
-# Default supervisor pane target/backend when nothing is configured or detected.
-# "firstmate:0" is a tmux session:window name, so the bare fallback (nothing
-# configured, nothing detected) assumes tmux - matching the daemon's pre-herdr
-# behavior byte-for-byte when run outside both tmux and herdr.
+# Default supervisor pane target/backend when nothing is configured or
+# detected. "firstmate:0" is a tmux session:window name, so the bare fallback
+# (nothing configured, nothing detected) assumes tmux - matching the daemon's
+# pre-herdr behavior byte-for-byte when run outside both tmux and herdr. This
+# stays an independent literal, unaffected by bin/backends/tmux.sh's per-home
+# default session name (fm_backend_tmux_session_name): firstmate running
+# inside tmux always has $TMUX_PANE set, which discover_supervisor_target
+# checks first and which needs no session-name guess at all, so this fallback
+# only fires in the degraded case this function's caller already treats as an
+# unreliable guess (return 1, caller warns).
 FM_SUPERVISOR_TARGET_DEFAULT="firstmate:0"
 FM_SUPERVISOR_BACKEND_DEFAULT="tmux"
 
