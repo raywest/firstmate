@@ -280,8 +280,7 @@ spawn_abort_cleanup() {
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
   fi
   if [ -n "$KIMI_CONFIG_SNAPSHOT" ]; then
-    mv -f "$KIMI_CONFIG_SNAPSHOT" "$KIMI_CONFIG" 2>/dev/null || rm -f "$KIMI_CONFIG_SNAPSHOT"
-    KIMI_CONFIG_SNAPSHOT=
+    restore_kimi_config_snapshot || true
   fi
   if [ "$KIMI_CONFIG_LOCK_HELD" -eq 1 ]; then
     fm_lock_release "$KIMI_CONFIG_LOCK"
@@ -679,6 +678,18 @@ release_kimi_config_lock() {
   [ "$KIMI_CONFIG_LOCK_HELD" -eq 1 ] || return 0
   fm_lock_release "$KIMI_CONFIG_LOCK"
   KIMI_CONFIG_LOCK_HELD=0
+}
+
+restore_kimi_config_snapshot() {
+  [ -n "$KIMI_CONFIG_SNAPSHOT" ] || return 0
+  if cat "$KIMI_CONFIG_SNAPSHOT" > "$KIMI_CONFIG"; then
+    if rm -f "$KIMI_CONFIG_SNAPSHOT"; then
+      KIMI_CONFIG_SNAPSHOT=
+      return 0
+    fi
+  fi
+  echo "warning: kimi config.toml backup retained at $KIMI_CONFIG_SNAPSHOT" >&2
+  return 1
 }
 
 resolved_existing_dir() {
@@ -1413,7 +1424,7 @@ EOF
       acquire_kimi_config_lock || exit 1
       if ! grep -qF "hooks/fm-turn-end.sh" "$KIMI_CONFIG"; then
         KIMI_CONFIG_SNAPSHOT=$(mktemp "$KIMI_CONFIG.fm-prehook.XXXXXXXXXXXX")
-        if ! cp "$KIMI_CONFIG" "$KIMI_CONFIG_SNAPSHOT"; then
+        if ! cat "$KIMI_CONFIG" > "$KIMI_CONFIG_SNAPSHOT"; then
           rm -f "$KIMI_CONFIG_SNAPSHOT"
           KIMI_CONFIG_SNAPSHOT=
           exit 1
@@ -1424,10 +1435,13 @@ EOF
           printf '[[hooks]]\nevent = "Stop"\ncommand = "bash %s"\ntimeout = 5\n' "$(shell_quote "$KIMI_HOOKS_DIR/fm-turn-end.sh")"
         } >> "$KIMI_CONFIG"
         if ! kimi doctor >/dev/null 2>&1; then
-          mv "$KIMI_CONFIG_SNAPSHOT" "$KIMI_CONFIG"
-          KIMI_CONFIG_SNAPSHOT=
+          if restore_kimi_config_snapshot; then
+            restore_message="config restored from backup"
+          else
+            restore_message="config backup retained after restoration failed"
+          fi
           release_kimi_config_lock
-          echo "error: kimi rejected config.toml after the firstmate turn-end hook append; config restored from backup, spawn aborted" >&2
+          echo "error: kimi rejected config.toml after the firstmate turn-end hook append; $restore_message, spawn aborted" >&2
           exit 1
         fi
         rm -f "$KIMI_CONFIG_SNAPSHOT"

@@ -201,7 +201,7 @@ EOF
 }
 
 test_kimi_config_append_is_idempotent_and_brief_is_pasted() {
-  local rec case_dir home proj wt fakebin kimi_home id out status count log
+  local rec case_dir home proj wt second_wt fakebin kimi_home id second_id out status count log
   rec=$(make_spawn_case idempotent)
   IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
 $rec
@@ -215,32 +215,43 @@ EOF
   grep -q 'paste-buffer' "$log" || fail "kimi brief was not delivered with tmux paste-buffer"
   grep -q 'paste-buffer.*-p' "$log" || fail "kimi brief paste was not bracketed (-p)"
 
-  rm -f "$home/state/$id.meta" "$home/state/$id.kimi-turnend-token"
-  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" 2>&1) || true
+  second_id="${id%x1}x2"
+  second_wt="$case_dir/wt-second"
+  mkdir -p "$home/data/$second_id"
+  printf 'brief line one\nbrief line two\n' > "$home/data/$second_id/brief.md"
+  git -C "$proj" worktree add --quiet -b "fm/$second_id" "$second_wt"
+  out=$(run_kimi_spawn "$home" "$proj" "$second_wt" "$fakebin" "$kimi_home" "$second_id")
+  status=$?
+  expect_code 0 "$status" "second kimi spawn should succeed: $out"
   count=$(grep -c 'hooks/fm-turn-end.sh' "$kimi_home/config.toml")
   [ "$count" -eq 1 ] || fail "config.toml hook append is not idempotent (found $count entries)"
   pass "kimi config append is idempotent and the brief goes over as a bracketed paste"
 }
 
 test_kimi_doctor_failure_restores_config_and_aborts() {
-  local rec case_dir home proj wt fakebin kimi_home id out status token
+  local rec case_dir home proj wt fakebin kimi_home id target backup out status token
   rec=$(make_spawn_case doctor-fail)
   IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
 $rec
 EOF
+  target="$kimi_home/managed-config.toml"
+  mv "$kimi_home/config.toml" "$target"
+  ln -s "${target##*/}" "$kimi_home/config.toml"
   out=$(FM_FAKE_KIMI_DOCTOR_EXIT=1 run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
   status=$?
   [ "$status" -ne 0 ] || fail "kimi spawn should abort when kimi doctor rejects the config append"
   assert_contains "$out" "config restored from backup" "doctor failure did not report the restore"
-  assert_no_grep 'hooks/fm-turn-end.sh' "$kimi_home/config.toml" "rejected hook append was left in config.toml"
-  assert_absent "$kimi_home/config.toml.fm-prehook-backup" "config backup file was left behind"
+  [ -L "$kimi_home/config.toml" ] || fail "doctor failure replaced the managed config.toml symlink"
+  assert_no_grep 'hooks/fm-turn-end.sh' "$target" "rejected hook append was left in config.toml"
+  backup=$(find "$kimi_home" -maxdepth 1 -type f -name 'config.toml.fm-prehook.*' -print -quit)
+  [ -z "$backup" ] || fail "config backup file was left behind"
   assert_present "$home/state/$id.meta" "doctor failure did not preserve task metadata for teardown"
   token=$(cat "$home/state/$id.kimi-turnend-token")
   env -u KIMI_CODE_HOME FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     PATH="$fakebin:$PATH" "$TEARDOWN" "$id" --force >/dev/null 2>&1 \
     || fail "kimi doctor failure metadata could not be torn down"
   assert_absent "$kimi_home/hooks/fm-turn-end.d/$token" "doctor failure token survived metadata-based teardown"
-  pass "kimi doctor failure restores config.toml and leaves recoverable state"
+  pass "kimi doctor failure restores a managed config.toml symlink with recoverable state"
 }
 
 test_kimi_teardown_removes_pointer_and_token() {
