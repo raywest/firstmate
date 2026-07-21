@@ -250,56 +250,6 @@ test_real_text_with_trailing_ghost_is_pending() {
   pass "fm_pane_input_pending: real text plus a trailing ghost run is still pending"
 }
 
-# --- kimi composer fixtures (captured live, kimi-code 0.27.0, 2026-07-18) ----
-
-test_kimi_idle_composer_reads_empty() {
-  local dir fb capture out
-  dir="$TMP_ROOT/kimi-idle"; mkdir -p "$dir"
-  fb=$(make_fake_tmux "$dir")
-  capture="$dir/styled.txt"
-  # kimi's idle composer row as captured live: dark truecolor box border
-  # (38;2;90;90;90, luminance 90 -> ghost-stripped), a default-foreground `>`
-  # glyph, and a reverse-video cursor block. The plain row keeps the border, so
-  # the bordered `>` classifies empty with NO kimi-specific override.
-  printf ' \033[38;2;90;90;90m\xe2\x94\x82\033[39m > \033[7m \033[0m%*s\033[38;2;90;90;90m\xe2\x94\x82\033[39m\n' 40 '' > "$capture"
-  out=$(PATH="$fb:$PATH" FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 fm_tmux_composer_state "fakepane")
-  [ "$out" = empty ] || fail "kimi idle composer must read empty, got '$out'"
-  pass "fm_tmux_composer_state: kimi's idle bordered '| > |' composer reads empty"
-}
-
-test_kimi_composer_with_text_is_pending() {
-  local dir fb capture out
-  dir="$TMP_ROOT/kimi-pending"; mkdir -p "$dir"
-  fb=$(make_fake_tmux "$dir")
-  capture="$dir/styled.txt"
-  # The same kimi composer row holding real (default-foreground) typed text,
-  # e.g. a pasted brief line that has not submitted yet.
-  printf ' \033[38;2;90;90;90m\xe2\x94\x82\033[39m > Reply with exactly OK.%*s\033[38;2;90;90;90m\xe2\x94\x82\033[39m\n' 20 '' > "$capture"
-  out=$(PATH="$fb:$PATH" FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 fm_tmux_composer_state "fakepane")
-  [ "$out" = pending ] || fail "kimi composer with typed text must read pending, got '$out'"
-  pass "fm_tmux_composer_state: kimi's composer holding unsubmitted text reads pending"
-}
-
-test_kimi_and_grok_busy_hints_match_default_regex() {
-  local dir fb capture
-  dir="$TMP_ROOT/kimi-busy"; mkdir -p "$dir"
-  fb=$(make_fake_tmux "$dir")
-  capture="$dir/styled.txt"
-  # kimi's mid-turn footer hint has a space after the colon ("ctrl+c: cancel");
-  # grok's has none ("Ctrl+c:cancel"). The one default pattern must match both.
-  printf 'yolo  K3 thinking: max  .../probe  main   shift+enter: newline | ctrl+c: cancel\n' > "$capture"
-  PATH="$fb:$PATH" FM_FAKE_STYLED="$capture" fm_pane_is_busy "fakepane" \
-    || fail "kimi's 'ctrl+c: cancel' footer did not match FM_TMUX_BUSY_REGEX_DEFAULT"
-  printf 'Shift+Tab:mode | Ctrl+c:cancel\n' > "$capture"
-  PATH="$fb:$PATH" FM_FAKE_STYLED="$capture" fm_pane_is_busy "fakepane" \
-    || fail "grok's 'Ctrl+c:cancel' footer no longer matches FM_TMUX_BUSY_REGEX_DEFAULT"
-  printf 'yolo  K3 thinking: max  .../probe  main   Try /dance for a hidden Easter egg\n' > "$capture"
-  if PATH="$fb:$PATH" FM_FAKE_STYLED="$capture" fm_pane_is_busy "fakepane"; then
-    fail "kimi's idle rotating-hint footer falsely matched the busy regex"
-  fi
-  pass "fm_pane_is_busy: kimi 'ctrl+c: cancel' and grok 'Ctrl+c:cancel' both match; kimi idle hints do not"
-}
-
 # --- fm-peek.sh stays escape-free (LLM-facing path) -------------------------
 
 test_peek_output_is_escape_free() {
@@ -337,7 +287,4 @@ test_colored_text_with_2_payload_still_pending
 test_dark_truecolor_ghost_only_composer_is_not_pending
 test_dark_truecolor_bare_shell_prompt_is_unknown
 test_real_text_with_trailing_ghost_is_pending
-test_kimi_idle_composer_reads_empty
-test_kimi_composer_with_text_is_pending
-test_kimi_and_grok_busy_hints_match_default_regex
 test_peek_output_is_escape_free

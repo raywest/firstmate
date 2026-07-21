@@ -79,6 +79,11 @@ if [ "${1:-}" = "capture-pane" ]; then
   fi
   exit 0
 fi
+if [ "${1:-}" = "display-message" ]; then
+  case "$*" in
+    *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}"; exit 0 ;;
+  esac
+fi
 exit 1
 SH
   chmod +x "$fakebin/tmux"
@@ -104,7 +109,6 @@ id=${1:-}
 key=$(printf '%s' "$id" | tr -c 'A-Za-z0-9' '_')
 var="FM_FAKE_CREW_STATE_$key"
 val=${!var:-${FM_FAKE_CREW_STATE:-}}
-[ -z "${FM_FAKE_CREW_STATE_READS:-}" ] || printf '%s\n' "$id" >> "$FM_FAKE_CREW_STATE_READS"
 printf '%s\n' "${val:-state: unknown · source: none · fake default}"
 exit 0
 SH

@@ -183,14 +183,12 @@ test_spawn_refuses_and_admits() {
   expect_code 3 "$rc" "spawn: NO_MISTAKES_GATE must refuse"
   assert_contains "$out" "$ENV_MSG" "spawn: env-marker refusal message"
   assert_absent "$home/state/spawn-envmark.meta" "spawn: refused env-marker launch must not record meta"
-  assert_absent "$home/state" "spawn: refused env-marker launch must not create state"
 
   # path-backstop refuse: gate-worktree cwd, marker UNSET.
   out=$(run_spawn "$GATE_WT" "$home" spawn-backstop "$proj" "$wt" "$fakebin"); rc=$?
   expect_code 3 "$rc" "spawn: gate-worktree cwd must refuse with the marker unset"
   assert_contains "$out" "$PATH_MSG" "spawn: path-backstop refusal message"
   assert_absent "$home/state/spawn-backstop.meta" "spawn: refused backstop launch must not record meta"
-  assert_absent "$home/state" "spawn: refused backstop launch must not create state"
 
   # no-regression: neutral cwd, marker UNSET, genuine isolated worktree.
   out=$(run_spawn "$NORMAL_CWD" "$home" spawn-ok "$proj" "$wt" "$fakebin"); rc=$?

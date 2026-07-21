@@ -48,12 +48,8 @@
 
 # Busy footers per harness (mirror fm-watch.sh). claude/codex: "esc to
 # interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel"
-# (grok's mid-turn cancel hint, shown iff a turn is running - verified grok
-# 0.2.73); kimi: "ctrl+c: cancel" (same cancel hint with a space after the
-# colon, shown iff a turn is running - verified kimi-code 0.27.0, present in
-# 30/30 mid-turn samples and absent idle). One case-insensitive pattern with an
-# optional space covers both grok and kimi.
-FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c: ?cancel'
+# (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73).
+FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
 
 # fm_tmux_strip_ghost: thin adapter over the shared, fleet-wide ghost extractor
 # fm_composer_strip_ghost (bin/fm-composer-lib.sh). It drops de-emphasised
