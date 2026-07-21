@@ -594,15 +594,9 @@ kimi_default_model_alias() {
 }
 
 # kimi_model_supports_effort: does the resolved model's own `[models."<alias>"]`
-# block in config.toml declare EFFORT in its `support_efforts` array? Kimi's
-# `KIMI_MODEL_THINKING_EFFORT` env override bypasses that declared list rather
-# than validating against it (confirmed 2026-07-21 on kimi-code 0.28.1: an
-# out-of-list value reaches the provider live and comes back
-# `provider.api_error: 400 Invalid request Error`), so fm-spawn checks it here
-# instead - emitting the env var only when the resolved model is known to accept
-# EFFORT keeps an unsupported mapped value from ever reaching a live turn. A
-# model block this cannot confidently parse (nested `.overrides` tables,
-# multi-line arrays) reads as unsupported, which is the fail-safe direction.
+# block in config.toml declare EFFORT in its `support_efforts` array? The env
+# override bypasses that declared list, so emit it only after this check proves
+# the selected model supports it. An unparseable block reads as unsupported.
 kimi_model_supports_effort() {
   local config=$1 alias=$2 effort=$3
   [ -n "$alias" ] || return 1
@@ -649,11 +643,8 @@ kimi_model_supports_effort() {
   ' "$config"
 }
 
-# kimi_thinking_effort_for_profile: firstmate's shared low|medium|high|xhigh|max
-# axis, mapped to kimi's own low|high|max vocabulary (0.28.1 has no `medium` or
-# `xhigh` tier). Capped at `high` per the standing effort policy (harness-adapters
-# skill); `max` is reachable only when EFFORT is already `max`, which fm-spawn's
-# callers only set on explicit captain preference.
+# kimi_thinking_effort_for_profile: map the shared low|medium|high|xhigh|max
+# axis to kimi's low|high|max vocabulary; medium and xhigh cap at high.
 kimi_thinking_effort_for_profile() {
   case "$1" in
     low) printf low ;;
@@ -699,18 +690,9 @@ effort_flag_for_harness() {
     # flag but no verified effort flag. Its `opencode run --variant` flag belongs
     # to a different, non-interactive launch mode, so fm-spawn does not pass it.
     kimi)
-      # kimi still has NO CLI effort flag on 0.28.1 (--effort/--thinking/
-      # --reasoning-effort are all "unknown option", reverified 2026-07-21), but
-      # 0.28.1 added a documented KIMI_MODEL_THINKING_EFFORT env override that
-      # forces the wire-level thinking effort per invocation - verified live
-      # 2026-07-21 (harness-adapters skill, kimi section): the wire log for a
-      # `low` launch showed `"thinkingEffort":"low"` (18 output tokens), a `max`
-      # launch showed `"thinkingEffort":"max"` (31 output tokens, visible
-      # reasoning trace), and an unsupported value produced a live
-      # `provider.api_error: 400`. This is a pure env prefix - no config.toml
-      # write, no lock, no race with a concurrent kimi session. $KIMI_CONFIG and
-      # $MODEL are the same globals the preflight above already resolved for
-      # this harness.
+      # Kimi's effort override is an env prefix, not a CLI flag or config write.
+      # It bypasses the declared support list, so resolve the selected model and
+      # inject it only when the parser below confirms the mapped value is listed.
       local mapped resolved_alias
       mapped=$(kimi_thinking_effort_for_profile "$effort")
       [ -n "$mapped" ] || return 0
