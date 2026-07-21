@@ -118,7 +118,7 @@ EOF
 }
 
 test_grok_pointer_symlink_is_refused() {
-  local rec case_dir home proj wt fakebin grok_home id sentinel out status
+  local rec case_dir home proj wt fakebin grok_home id sentinel out status token
   rec=$(make_spawn_case pointer-symlink)
   IFS='|' read -r case_dir home proj wt fakebin grok_home id <<EOF
 $rec
@@ -131,7 +131,16 @@ EOF
   [ "$status" -ne 0 ] || fail "grok spawn must refuse a symlinked token pointer"
   assert_contains "$out" "worktree pointer must not be a symlink" "grok did not identify the unsafe pointer"
   assert_grep 'preserved' "$sentinel" "grok spawn overwrote the symlink target"
-  pass "grok refuses symlinked worktree token pointers"
+  assert_present "$home/state/$id.meta" "grok pointer refusal did not preserve task metadata for teardown"
+  token=$(cat "$home/state/$id.grok-turnend-token")
+  assert_present "$grok_home/hooks/fm-turn-end.d/$token" "grok pointer refusal did not preserve its recovery token"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    GROK_HOME="$grok_home" PATH="$fakebin:$PATH" \
+    "$TEARDOWN" "$id" --force >/dev/null 2>&1 \
+    || fail "grok pointer refusal metadata could not be torn down"
+  assert_absent "$grok_home/hooks/fm-turn-end.d/$token" "grok pointer refusal token survived teardown"
+  assert_absent "$home/state/$id.grok-turnend-token" "grok pointer refusal state token survived teardown"
+  pass "grok pointer refusal preserves recoverable task state"
 }
 
 test_fm_lock_recognizes_grok_holder() {

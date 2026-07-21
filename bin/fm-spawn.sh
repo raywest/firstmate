@@ -1356,7 +1356,7 @@ write_task_meta() {
 }
 
 case "$HARNESS" in
-  kimi*) write_task_meta ;;
+  grok*|kimi*) write_task_meta ;;
 esac
 
 # Per-harness turn-end hook: a file that touches state/<id>.turn-ended when the
@@ -1559,7 +1559,7 @@ EOF
 fi
 
 case "$HARNESS" in
-  kimi*) ;;
+  grok*|kimi*) ;;
   *) write_task_meta ;;
 esac
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
