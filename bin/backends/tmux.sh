@@ -81,17 +81,18 @@ fm_backend_tmux_session_name() {
 }
 
 # fm_backend_tmux_container_ensure: reuse the current tmux session when
-# firstmate itself runs inside tmux, else ensure the dedicated detached session
-# named by fm_backend_tmux_session_name exists. Mirrors fm-spawn.sh's
+# firstmate itself runs inside tmux unless FM_TMUX_SESSION explicitly selects
+# a session; otherwise ensure the detached session named by
+# fm_backend_tmux_session_name exists. Mirrors fm-spawn.sh's
 # container-ensure block; prints the resolved session name.
 fm_backend_tmux_container_ensure() {
-  if [ -n "${TMUX:-}" ]; then
-    tmux display-message -p '#S'
-  else
+  if [ -z "${TMUX:-}" ] || [ -n "${FM_TMUX_SESSION:-}" ]; then
     local ses
     ses=$(fm_backend_tmux_session_name)
     tmux has-session -t "$ses" 2>/dev/null || tmux new-session -d -s "$ses"
     printf '%s' "$ses"
+  else
+    tmux display-message -p '#S'
   fi
 }
 

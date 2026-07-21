@@ -145,7 +145,7 @@ test_session_name_honors_explicit_override() {
   pass "fm_backend_tmux_session_name: FM_TMUX_SESSION explicit override wins over the derived default"
 }
 
-# --- container_ensure: create-vs-reuse + override precedence over creation --
+# --- container_ensure: create-vs-reuse + override precedence ----------------
 
 test_container_ensure_creates_derived_session_when_absent() {
   local dir fb log out expected
@@ -186,6 +186,19 @@ test_container_ensure_honors_override_over_creation() {
   pass "fm_backend_tmux_container_ensure: FM_TMUX_SESSION override wins over the derived default when creating a new session"
 }
 
+test_container_ensure_honors_override_when_nested() {
+  local dir fb log out
+  dir="$TMP_ROOT/ensure-nested-override"; mkdir -p "$dir"
+  fb=$(make_tmux_fakebin "$dir")
+  log="$dir/tmux.log"
+  out=$( PATH="$fb:$PATH" FM_TMUX_LOG="$log" FM_TMUX_EXISTING=fm-pinned-nested FM_TMUX_SESSION=fm-pinned-nested FM_HOME="$dir" TMUX=/tmp/fake-tmux-socket,1,0 FM_TMUX_CURRENT_SESSION=captains-own-session \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_source tmux; fm_backend_tmux_container_ensure' "$ROOT" )
+  [ "$out" = fm-pinned-nested ] || fail "container_ensure should honor FM_TMUX_SESSION while nested, got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f'"has-session"$'\x1f' "container_ensure did not check the pinned session while nested"
+  assert_not_contains "$(cat "$log")" $'\x1f'"display-message"$'\x1f' "container_ensure must not reuse the current session when FM_TMUX_SESSION is set"
+  pass "fm_backend_tmux_container_ensure: FM_TMUX_SESSION override wins over the current nested tmux session"
+}
+
 test_container_ensure_reuses_current_session_when_nested() {
   local dir fb log out
   dir="$TMP_ROOT/ensure-nested"; mkdir -p "$dir"
@@ -195,7 +208,7 @@ test_container_ensure_reuses_current_session_when_nested() {
     bash -c '. "$0/bin/fm-backend.sh"; fm_backend_source tmux; fm_backend_tmux_container_ensure' "$ROOT" )
   [ "$out" = captains-own-session ] || fail "container_ensure should reuse the current tmux session when nested, got '$out'"
   assert_not_contains "$(cat "$log")" $'\x1f'"new-session"$'\x1f' "container_ensure must not create a session when already nested inside one"
-  pass "fm_backend_tmux_container_ensure: unchanged - reuses whatever session firstmate is already nested inside, ignoring the derived default"
+  pass "fm_backend_tmux_container_ensure: without FM_TMUX_SESSION, reuses the current nested tmux session"
 }
 
 # --- backward compatibility: an old-recorded target keeps resolving --------
@@ -225,5 +238,6 @@ test_session_name_honors_explicit_override
 test_container_ensure_creates_derived_session_when_absent
 test_container_ensure_reuses_existing_derived_session
 test_container_ensure_honors_override_over_creation
+test_container_ensure_honors_override_when_nested
 test_container_ensure_reuses_current_session_when_nested
 test_old_recorded_target_still_resolves
