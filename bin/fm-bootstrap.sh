@@ -454,6 +454,10 @@ secondmate_liveness_sweep() {
     target=$(fm_backend_target_of_meta "$meta")
     [ -n "$target" ] || target="$window"
     verdict=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null) || verdict="unknown"
+    # kimi is deliberately absent: it is verified for crewmate/scout duty only,
+    # so a kind=secondmate meta naming kimi is already an unverified shape and a
+    # dead reading for it must not trigger the kill-and-respawn path (fm-spawn's
+    # Kimi template refuses a --secondmate respawn anyway; harness-adapters skill).
     case "$harness" in
       claude|codex|opencode|pi|grok) ;;
       *) [ "$verdict" = dead ] && verdict=unknown ;;
@@ -711,7 +715,7 @@ crew_dispatch_validate() {
     return 0
   fi
   err=$(jq -r '
-    def verified($h): ["claude","codex","opencode","pi","grok"] | index($h);
+    def verified($h): ["claude","codex","opencode","pi","grok","kimi"] | index($h);
     def effort_ok($h; $e):
       if $e == null then true
       elif ($e | type) != "string" then false
@@ -720,6 +724,7 @@ crew_dispatch_validate() {
       elif $h == "grok" then (["low","medium","high"] | index($e))
       elif $h == "pi" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "opencode" then false
+      elif $h == "kimi" then false
       else true
       end;
     def use_profiles($u):

@@ -142,9 +142,11 @@ fm_backend_tmux_current_command() {  # <target>
 # idle shell passes THAT check as "alive" - the secondmate-liveness gap
 # AGENTS.md's session-start guarantee closes). See docs/tmux-backend.md
 # "Agent liveness probe" for the empirical basis. Prints one of:
-#   alive   - the foreground command is one of the verified harness binaries
-#             (claude, codex, opencode, grok - each confirmed to run as its
-#             own process name, never wrapped by a generic interpreter).
+#   alive   - the foreground command is one of the verified secondmate-capable
+#             harness binaries (claude, codex, opencode, grok - each confirmed
+#             to run as its own process name, never wrapped by a generic
+#             interpreter). Kimi is intentionally absent because it is verified
+#             only for crewmate/scout duty and cannot be a secondmate.
 #   dead    - the foreground command is a bare shell: nothing is running in
 #             the pane, so a prior agent process has exited.
 #   unknown - anything else, INCLUDING a bare "node"/"python" interpreter

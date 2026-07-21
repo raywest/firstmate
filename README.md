@@ -58,7 +58,8 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 
 ### Requirements
 
-- A verified agent harness: Claude Code, Grok, Pi, Codex, or OpenCode.
+- A verified primary agent harness: Claude Code, Grok, Pi, Codex, or OpenCode.
+- Optional for Kimi Code crew tasks: Kimi Code, supported only for tmux crewmate/scout dispatch and not the primary or a secondmate.
 - Git and the GitHub CLI, authenticated through `gh auth login`.
 - tmux, for the reference session backend.
 
