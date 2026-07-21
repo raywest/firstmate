@@ -731,6 +731,47 @@ test_owned_arm_reports_queued_wake_on_signal_exit() {
   pass "owned arm reports an already-queued wake accurately instead of a false FAILED when its child dies from a signal"
 }
 
+test_owned_arm_captures_queue_boundary_before_child_start() {
+  local dir state fakebin fixture armout status
+  dir=$(make_case arm-owned-boundary)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  fixture="$dir/fixture"
+  armout="$dir/arm.out"
+  mkdir -p "$fixture/bin"
+  cp "$ROOT/bin/fm-watch-arm.sh" "$fixture/bin/fm-watch-arm.sh"
+  cp "$ROOT/bin/fm-wake-lib.sh" "$fixture/bin/fm-wake-lib.sh"
+  cat > "$fixture/bin/fm-watch.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export FM_TEST_CHILD=1
+. "$SCRIPT_DIR/fm-wake-lib.sh"
+fm_wake_append signal boundary-wake 'signal: boundary wake'
+: > "$STATE/child-appended"
+SH
+  chmod +x "$fixture/bin/fm-watch.sh"
+  cat > "$fakebin/date" <<'SH'
+#!/usr/bin/env bash
+if [ "${FM_TEST_CHILD:-}" != 1 ] && [ "${1:-}" = +%s ]; then
+  i=0
+  while [ ! -e "$FM_TEST_CHILD_APPENDED" ] && [ "$i" -lt 100 ]; do
+    /bin/sleep 0.01
+    i=$((i + 1))
+  done
+fi
+exec /bin/date "$@"
+SH
+  chmod +x "$fakebin/date"
+  status=0
+  FM_STATE_OVERRIDE="$state" FM_ARM_CONFIRM_TIMEOUT=0 FM_TEST_CHILD_APPENDED="$state/child-appended" PATH="$fakebin:$PATH" "$fixture/bin/fm-watch-arm.sh" > "$armout" || status=$?
+  [ "$status" -eq 4 ] || fail "a child wake before cycle setup must use the queued-wake result, got $status: $(cat "$armout")"
+  [ "$(cat "$state/.wake-queue.seq" 2>/dev/null || true)" = 1 ] || fail "boundary child did not append exactly one wake"
+  ! grep -qF 'watcher: FAILED' "$armout" || fail "a child wake before cycle setup was misreported as FAILED: $(cat "$armout")"
+  grep -qF 'wake(s) already queued' "$armout" || fail "a child wake before cycle setup was not reported as queued: $(cat "$armout")"
+  pass "owned arm snapshots the queue before starting its watcher child"
+}
+
 test_attached_arm_signal_is_recorded_in_cycle_ledger() {
   local dir state fakebin out armout i wpid armpid status
   dir=$(make_case attached-arm-signal-ledger)
@@ -1134,6 +1175,7 @@ test_arm_attaches_and_waits_for_live_fresh_watcher
 test_attached_arm_reports_queued_wake_without_visible_reason
 test_attached_arm_ignores_precycle_same_second_wake
 test_owned_arm_reports_queued_wake_on_signal_exit
+test_owned_arm_captures_queue_boundary_before_child_start
 test_attached_arm_signal_is_recorded_in_cycle_ledger
 test_arm_starts_and_self_heals
 test_arm_hup_cleans_child_and_temp_output

@@ -96,6 +96,17 @@ fi
 grep -q 'absorbed push' "$STATE_DIR/.watch-triage.log" 2>/dev/null || fail "the paused absorb should be logged to the triage log"
 pass "handle_push_transition: a declared-pause crew is absorbed (no fast wake), left to the poll loop's long cadence"
 
+reset_state
+fm_write_meta "$STATE_DIR/tk2.meta" "window=default:wG:pQ" "backend=herdr" "kind=ship"
+printf 'paused: waiting on the upstream release\n' > "$STATE_DIR/tk2.status"
+fm_backend_events_capable() { return 0; }
+fm_backend_wait_transition() { mkrec wG:pQ blocked; return 0; }
+fm_backend_commit_transition() { return 1; }
+event_wait_or_sleep
+[ ! -e "$STATE_DIR/.herdr-escalated-default_wG_pQ" ] || fail "a failed paused-transition marker commit must remain retryable"
+grep -q 'SLEEP' "$SLEEP_LOG" || fail "a failed paused-transition marker commit must back off before reconciling again"
+pass "event_wait_or_sleep: a failed paused-transition marker commit backs off before retrying"
+
 # --- event_wait_or_sleep: secondmate windows are excluded from the pane list --
 
 reset_state

@@ -641,7 +641,9 @@ event_wait_or_sleep() {
   case "$rc" in
     0)
       _event_cap_fails=0
-      handle_push_transition "$first_backend" "$first_session" "$rec"
+      if ! handle_push_transition "$first_backend" "$first_session" "$rec"; then
+        sleep "$POLL"
+      fi
       ;;
     2)
       # Event path unusable this cycle (connect/subscribe failure). Sleep the
@@ -677,8 +679,10 @@ handle_push_transition() {  # <backend> <session> <record>
   task=$(window_to_task "$window" "$STATE")
   if status_is_paused "$(last_status_line "$STATE/$task.status")"; then
     triage_log "absorbed push $to (declared pause, awaiting external): $window"
-    fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" \
-      || triage_log "commit-transition failed for $window (paused push absorbed, no wake queued)"
+    if ! fm_backend_commit_transition "$backend" "$STATE" "$session" "$record"; then
+      triage_log "commit-transition failed for $window (paused push absorbed, no wake queued)"
+      return 1
+    fi
     return
   fi
   reason="stale: $window (herdr: agent $to - waiting on human, escalated immediately, not via wedge timer)"
