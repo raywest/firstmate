@@ -401,6 +401,33 @@ test_multi_file_actionable_signal_all_appended() {
   pass "multi-file signal loop: two simultaneous actionable files are both appended and both named in the reason"
 }
 
+# Regression coverage for the unique-file partial-append fix: scan_signals runs
+# once before the grace sleep and once after, so an unchanged pending file is
+# listed twice in $pending (the .seen-* marker that would suppress the repeat
+# only advances once the wake is queued). Before the fix, the append loop and
+# the pending_total diagnostic both iterated raw pending lines rather than
+# unique files, so a single unchanged file was durably appended twice.
+test_multi_file_actionable_signal_dedupes_repeated_scan_entries() {
+  local dir state fakebin out status_file1 status_file2 pid count1 count2
+  dir=$(make_case multi-file-actionable-dedupe); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  status_file1="$state/task-one.status"
+  status_file2="$state/task-two.status"
+  printf 'needs-decision: pick A or B\n' > "$status_file1"
+  printf 'blocked: waiting on credentials\n' > "$status_file2"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "watcher did not exit for two simultaneous actionable signals"
+  ! grep -F "partial-append-failure" "$out" >/dev/null || fail "watcher reported a partial-append failure on the ordinary all-succeed path: $(cat "$out")"
+  # Check the raw durable queue, not a drain: fm-wake-drain.sh collapses obvious
+  # duplicate records before printing, which would hide a double-append here.
+  count1=$(grep -cF "$(printf '\tsignal\ttask-one.status\t')" "$state/.wake-queue")
+  count2=$(grep -cF "$(printf '\tsignal\ttask-two.status\t')" "$state/.wake-queue")
+  [ "$count1" -eq 1 ] || fail "task-one was durably queued $count1 times instead of once (grace-period rescan re-listed the unchanged file)"
+  [ "$count2" -eq 1 ] || fail "task-two was durably queued $count2 times instead of once (grace-period rescan re-listed the unchanged file)"
+  pass "multi-file signal loop appends each unique file once despite the grace-period rescan re-listing it"
+}
+
 test_terminal_stale_surfaced() {
   local dir state fakebin out drain_out capture_file window key pane_hash sig pid
   dir=$(make_case terminal-stale); state="$dir/state"; fakebin="$dir/fakebin"
@@ -1335,6 +1362,7 @@ test_turn_ended_not_working_surfaced
 test_working_note_not_working_surfaced
 test_actionable_signal_surfaced
 test_multi_file_actionable_signal_all_appended
+test_multi_file_actionable_signal_dedupes_repeated_scan_entries
 test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated

@@ -851,8 +851,10 @@ while :; do
     pending_total=0
     while IFS=$(printf '\t') read -r sf sig f; do
       [ -n "$sf" ] || continue
-      pending_total=$((pending_total + 1))
-      case " $files " in *" $f "*) ;; *) files="$files $f" ;; esac
+      case " $files " in
+        *" $f "*) ;;
+        *) files="$files $f"; pending_total=$((pending_total + 1)) ;;
+      esac
     done <<EOF
 $pending
 EOF
@@ -873,10 +875,15 @@ EOF
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
     if afk_present || signal_reason_is_actionable $files || ! signal_crew_provably_working $files; then
       appended=0
+      appended_files=""
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
+        # The re-scan above can re-list an already-pending file, so this must
+        # append once per unique file, never once per raw pending line.
+        case " $appended_files " in *" $f "*) continue ;; esac
         if fm_wake_append signal "$(basename "$f")" "$reason"; then
           appended=$((appended + 1))
+          appended_files="$appended_files $f"
         else
           # At least one append already landed durably before this one failed -
           # never exit silently on top of an orphaned wake; give a downstream
