@@ -105,9 +105,9 @@
 # kimi uses a firstmate-owned guarded script under
 # ${KIMI_CODE_HOME:-$HOME/.kimi-code}/hooks plus one idempotent, doctor-validated
 # [[hooks]] Stop append to kimi's config.toml, a gitignored .fm-kimi-turnend
-# worktree pointer, and a state token; kimi's brief is delivered post-launch by
-# bracketed paste because kimi rejects a positional prompt (crewmate/scout on
-# tmux only).
+# worktree pointer, a state token, and `kimi_home=` task metadata.
+# `kimi_home=` lets teardown find that home even if KIMI_CODE_HOME is later unset.
+# Kimi's brief is delivered post-launch by bracketed paste because kimi rejects a positional prompt (crewmate/scout on tmux only).
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> window=<backend-target> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
