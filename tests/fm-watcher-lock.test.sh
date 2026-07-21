@@ -661,7 +661,7 @@ test_attached_arm_carries_boundary_through_replacement() {
     sleep 0.1
     i=$((i + 1))
   done
-  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$second_pid" || fail "replacement watcher did not take the lock"
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$second_pid" ] || fail "replacement watcher did not take the lock"
   append_wake "$state" signal replacement-wake 'signal: replacement wake'
   i=0
   while [ "$i" -lt 80 ]; do
