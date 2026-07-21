@@ -397,11 +397,12 @@ EOF
     "$SPAWN" "$id" "$proj" kimi --backend zellij 2>&1)
   status=$?
   [ "$status" -ne 0 ] || fail "a kimi spawn on a non-tmux backend must be refused"
-  assert_contains "$out" "tmux backend only" "kimi non-tmux refusal message missing"
+  assert_contains "$out" "bracketed paste to arrive as one atomic turn" "kimi non-tmux refusal message missing"
+  assert_contains "$out" "backend=zellij" "kimi non-tmux refusal did not name the offending backend"
   pass "kimi spawn on a non-tmux backend is refused loudly"
 }
 
-test_raw_kimi_scope_gates_are_exempt() {
+test_raw_kimi_secondmate_scope_is_exempt_but_backend_gate_is_not() {
   local rec case_dir home proj wt fakebin kimi_home id out status
   rec=$(make_spawn_case raw-scope)
   IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
@@ -434,10 +435,10 @@ $rec
 EOF
   out=$(run_raw_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" "kimi --yolo" --backend zellij)
   status=$?
-  [ "$status" -ne 0 ] || fail "raw kimi on zellij should reach normal backend handling"
-  assert_not_contains "$out" "tmux backend only" "raw kimi on zellij hit the template-only scope gate"
-  assert_contains "$out" "backend=zellij selected" "raw kimi on zellij did not reach backend handling"
-  pass "raw kimi launches bypass template-only scope gates"
+  [ "$status" -ne 0 ] || fail "raw kimi on a non-tmux backend must still be refused - the brief-delivery gate is not scope-exempt"
+  assert_contains "$out" "bracketed paste to arrive as one atomic turn" "raw kimi on zellij did not hit the backend brief-delivery gate"
+  assert_contains "$out" "backend=zellij" "raw kimi on zellij refusal did not name the offending backend"
+  pass "raw kimi launches bypass only the secondmate-scope gate, never the backend brief-delivery gate"
 }
 
 test_kimi_config_lock_waits_and_reclaims_stale_locks() {
@@ -504,6 +505,6 @@ test_kimi_teardown_removes_pointer_and_token
 test_kimi_unverified_brief_submission_aborts
 test_kimi_secondmate_spawn_is_refused
 test_kimi_non_tmux_backend_is_refused
-test_raw_kimi_scope_gates_are_exempt
+test_raw_kimi_secondmate_scope_is_exempt_but_backend_gate_is_not
 test_kimi_config_lock_waits_and_reclaims_stale_locks
 test_kimi_hook_survives_shellcheck_shape

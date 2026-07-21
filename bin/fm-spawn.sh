@@ -518,14 +518,14 @@ case "$ARG3" in
     ;;
 esac
 
-# kimi scope gates (fail closed): kimi is verified for crewmate/scout duty on the
-# tmux backend only. A Kimi template secondmate launch and a Kimi template launch
-# on any other backend are unverified paths - the post-launch brief delivery and
-# the guarded turn-end hook were validated against tmux bracketed paste and a live
-# crewmate supervision cycle, nothing else. Refuse loudly instead of launching a
-# shape no evidence covers (harness-adapters skill, kimi section). This is
-# deliberately template-only: raw launch commands remain the adapter-verification
-# escape hatch.
+# kimi secondmate scope gate (fail closed, template launches only): kimi is
+# verified for crewmate/scout duty only - the guarded turn-end hook was
+# validated against a live crewmate supervision cycle, nothing else. Refuse
+# loudly instead of launching a shape no evidence covers (harness-adapters
+# skill, kimi section). Deliberately template-only: raw launch commands
+# remain the adapter-verification escape hatch for this specific check, per
+# the captain's standing decision (kimi-raw-scope-bypass) not to touch
+# raw-command harness parsing.
 if [ "$LAUNCH_SOURCE" = template ]; then
   case "$HARNESS" in
     kimi*)
@@ -533,13 +533,33 @@ if [ "$LAUNCH_SOURCE" = template ]; then
         echo "error: kimi is verified for crewmate/scout duty only; a kimi --secondmate launch is unverified. Pick a verified secondmate harness (claude|codex|opencode|pi|grok)." >&2
         exit 1
       fi
-      if [ "$BACKEND" != tmux ]; then
-        echo "error: kimi spawns are verified on the tmux backend only (post-launch brief delivery uses tmux bracketed paste); backend=$BACKEND is unverified for kimi." >&2
-        exit 1
-      fi
       ;;
   esac
 fi
+
+# kimi brief-delivery backend gate (fail closed, ALL launch sources): kimi's
+# post-launch brief must arrive as one atomic multi-line turn - kimi rejects
+# a positional prompt, and its composer holds pasted newlines unsubmitted
+# only under tmux's bracketed paste (`load-buffer` + `paste-buffer -p -d`).
+# Empirically verified 2026-07-21 in an isolated herdr lab session: plain
+# `send-keys -l` (tmux, no bracketed paste) AND herdr's `pane send-text`
+# both execute per embedded newline as it arrives instead of holding the
+# text unsubmitted, so neither is a safe drop-in for the shared
+# fm_backend_send_text_submit primitive here - a real capability gap, not a
+# wiring gap (harness-adapters skill, kimi section has the dated evidence).
+# Applies to BOTH template and raw launches: the raw escape hatch bypasses
+# the secondmate-scope check above but must still land on a backend that can
+# actually deliver the brief correctly, or refuse loudly here instead of
+# wedging 45s on a composer wait that can never resolve and leaving an
+# orphaned task for manual cleanup.
+case "$HARNESS" in
+  kimi*)
+    if [ "$BACKEND" != tmux ]; then
+      echo "error: kimi's post-launch brief delivery requires tmux's bracketed paste to arrive as one atomic turn; backend=$BACKEND has no verified equivalent (empirically confirmed unsafe on herdr - see harness-adapters skill, kimi section) and would fragment the brief or wedge the launch." >&2
+      exit 1
+    fi
+    ;;
+esac
 
 KIMI_HOME_DIR=
 KIMI_CONFIG=
@@ -1563,21 +1583,24 @@ fi
 
 # kimi post-launch brief delivery: kimi rejects a positional prompt (verified
 # 0.27.0), so the brief could not ride the launch command above. Wait for the
-# TUI's composer to render (the shared composer classifier reads kimi's idle
-# bordered "| > |" box as empty, verified), then hand the multi-line brief over
-# as ONE message via tmux bracketed paste - kimi's composer holds pasted
-# newlines unsubmitted (verified) - and submit with the verify-and-retry Enter
-# from fm-tmux-lib.sh. Bounded and fail-loud: a composer that never appears or
-# a paste that never submits aborts with the window to inspect (the most likely
-# cause of a never-appearing composer is a first-run dialog, e.g. kimi's
-# migrate-from-kimi-cli wizard on a fresh KIMI_CODE_HOME - harness-adapters
-# skill, kimi section). Template launches are scoped to the tmux backend by the
-# kimi gates above; raw launch commands deliberately remain the verification escape
-# hatch and are not scope-gated here.
+# TUI's composer to render (fm_backend_composer_state, the shared classifier
+# also used by fm-send.sh and the away-mode daemon; reads kimi's idle bordered
+# "| > |" box as empty, verified), then hand the multi-line brief over as ONE
+# message via tmux bracketed paste - kimi's composer holds pasted newlines
+# unsubmitted only under bracketed paste (verified; plain literal send and
+# herdr's pane send-text both execute per embedded newline instead, so this
+# stays a direct tmux call rather than the shared send-text-submit primitive)
+# - and submit with the verify-and-retry Enter from fm-tmux-lib.sh. Bounded
+# and fail-loud: a composer that never appears or a paste that never submits
+# aborts with the window to inspect (the most likely cause of a never-
+# appearing composer is a first-run dialog, e.g. kimi's migrate-from-kimi-cli
+# wizard on a fresh KIMI_CODE_HOME - harness-adapters skill, kimi section).
+# The backend gate above already refused any non-tmux launch (template AND
+# raw) before this function is ever reached, so BACKEND is always tmux here.
 deliver_kimi_brief() {  # <target> <brief-path>
   local target=$1 brief=$2 state='' verdict
   for _ in $(seq 1 45); do
-    state=$(fm_tmux_composer_state "$target")
+    state=$(fm_backend_composer_state "$BACKEND" "$target")
     [ "$state" = empty ] && break
     sleep 1
   done
