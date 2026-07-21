@@ -4,9 +4,10 @@
 # Reference backend (AGENTS.md section 8; data/fm-backend-design-d7). P1 moves
 # the tmux command sequences that fm-send.sh, fm-peek.sh, fm-watch.sh,
 # fm-spawn.sh, and fm-teardown.sh already ran inline into named functions
-# here, running the EXACT same commands in the EXACT same order, so the
-# default (tmux, `backend=` absent) path stays byte-identical. Sourced only
-# through bin/fm-backend.sh's fm_backend_source, never directly.
+# here with the same command ordering for their existing task-endpoint
+# operations. Session selection is an adapter-owned concern and may evolve
+# independently. Sourced only through bin/fm-backend.sh's fm_backend_source,
+# never directly.
 #
 # Worktree acquisition (running `treehouse get` inside the pane, and polling
 # its cwd) is unchanged by this extraction: P1 scopes only the session
@@ -70,8 +71,8 @@ fm_backend_tmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
 # for an ambient `tmux kill-session` run by some OTHER tool sharing the same
 # tmux server. A window recorded under the old literal keeps resolving exactly
 # as before (fm_backend_resolve_selector reads the recorded target verbatim,
-# never reconstructing it from this function) - only a NEW spawn on a machine
-# with no existing session by this name picks up the new default.
+# never reconstructing it from this function). Only new non-nested spawns
+# without FM_TMUX_SESSION derive this default.
 fm_backend_tmux_session_name() {
   if [ -n "${FM_TMUX_SESSION:-}" ]; then
     printf '%s' "$FM_TMUX_SESSION"

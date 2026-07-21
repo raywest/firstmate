@@ -28,7 +28,7 @@ The first crewmate spawn creates whatever tmux session and window it needs.
 
 ## Run inside tmux for the best experience
 
-Launch your harness from inside a tmux session (`tmux new -s firstmate` or similar, then start your agent).
+Launch your harness from inside a tmux session (for example, `tmux new -s my-firstmate`, then start your agent).
 Without an `FM_TMUX_SESSION` override, every crewmate window then lands in that same session, where you can watch the crew work in real time or type into any window to intervene.
 When following the commands below, use that session's actual name.
 Inside tmux, `tmux display-message -p '#S'` prints it.
@@ -52,7 +52,8 @@ tmux attach -t "$(sed -n 's/^window=\([^:]*\):.*/\1/p' "${FM_HOME:-"$PWD"}/state
 Set `FM_TMUX_SESSION` to pin an exact literal instead of the derived default (an explicit operator choice always wins, whether firstmate is running inside tmux or not); that literal is the session to attach to.
 
 Before this per-home naming, every installation on a machine shared one hardcoded session name (`firstmate`, and before that the even more generic `default`) - a soft target for an unrelated tool's ambient `tmux kill-session` sharing the same tmux server, and a real collision when two homes on one machine both fell back to it (`data/fm-killsweep-scout-s3/report.md`, referenced from `AGENTS.md` section 1).
-A window recorded under the old shared name keeps resolving exactly as before; only a new spawn on a machine with no existing session by the new name picks up the home-unique default.
+Existing windows recorded under `firstmate:` or `default:` continue to resolve from their metadata without state-file migration.
+Without `FM_TMUX_SESSION`, new spawns outside tmux use the home-unique default.
 
 ## Watching and typing into crew windows
 
@@ -63,7 +64,7 @@ tmux list-windows -t <session-name>          # see every crew window
 tmux select-window -t <session-name>:fm-<id> # jump to one, or use ctrl-b <n>
 ```
 
-Use the session from the task's recorded target above; without `FM_TMUX_SESSION`, it is the current tmux session for the inside-tmux path and this installation's `fm-<hometag>` session for the detached outside-tmux path.
+Use the recorded session described above.
 Typing directly into an attached window is authoritative direct intervention - the first mate treats it the same as any other captain instruction and reconciles at the next heartbeat.
 You do not need to attach at all for routine supervision: from an active firstmate session, the first mate reads crew windows itself with `bin/fm-peek.sh fm-<id>` (a bounded, read-only capture) and steers a crew with `FM_HOME=<this-firstmate-home> bin/fm-send.sh fm-<id> "<text>"` unless `FM_HOME` is already set to the active firstmate home.
 
@@ -75,7 +76,7 @@ Ask the first mate for any small piece of work, or spawn a trivial scout task, a
 tmux list-windows -t <session-name>
 ```
 
-Use the session from the task's recorded target above; without `FM_TMUX_SESSION`, it is the current tmux session for the inside-tmux path and this installation's `fm-<hometag>` session for the detached outside-tmux path.
+Use the recorded session described above.
 You should see a `fm-<id>` window for the task, live and updating as the crewmate works.
 
 ## Agent liveness probe
