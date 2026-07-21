@@ -396,6 +396,131 @@ EOF
   pass "kimi config append waits for live locks and reclaims stale locks"
 }
 
+write_kimi_model_config() {  # <config-path> <support-efforts-csv-or-empty>
+  local config=$1 efforts=$2 comment=${3-} body=''
+  if [ -n "$efforts" ]; then
+    body=$(printf 'support_efforts = [ %s ]%s\ndefault_effort = "high"\n' "$efforts" "$comment")
+  fi
+  {
+    printf 'default_model = "kimi-code/k3"\n\n'
+    printf '[models."kimi-code/k3"]\n'
+    printf 'provider = "managed:kimi-code"\n'
+    printf 'model = "k3"\n'
+    printf '%s' "$body"
+  } > "$config"
+}
+
+test_kimi_effort_env_override_when_model_declares_support() {
+  local rec case_dir home proj wt fakebin kimi_home id out status log
+  rec=$(make_spawn_case effort-supported)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  write_kimi_model_config "$kimi_home/config.toml" '"low", "high", "max"'
+  log="$case_dir/tmux.log"
+  : > "$log"
+  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort high)
+  status=$?
+  expect_code 0 "$status" "kimi spawn with a model-supported effort should succeed: $out"
+  assert_grep "KIMI_MODEL_THINKING_EFFORT='high' kimi --yolo" "$log" "kimi launch did not carry the mapped effort env override before the binary name"
+  assert_grep 'effort=high' "$home/state/$id.meta" "kimi meta did not record the requested effort"
+  pass "kimi spawn emits the effort env override when the resolved model declares support"
+}
+
+test_kimi_effort_maps_medium_and_xhigh_to_high() {
+  local rec case_dir home proj wt fakebin kimi_home id out status log
+  rec=$(make_spawn_case effort-medium)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  write_kimi_model_config "$kimi_home/config.toml" '"low", "high", "max"'
+  log="$case_dir/tmux.log"
+  : > "$log"
+  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort medium)
+  status=$?
+  expect_code 0 "$status" "kimi spawn with effort=medium should succeed: $out"
+  assert_grep "KIMI_MODEL_THINKING_EFFORT='high' kimi --yolo" "$log" "kimi did not cap medium at kimi's high tier"
+
+  rec=$(make_spawn_case effort-xhigh)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  write_kimi_model_config "$kimi_home/config.toml" '"low", "high", "max"'
+  log="$case_dir/tmux.log"
+  : > "$log"
+  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort xhigh)
+  status=$?
+  expect_code 0 "$status" "kimi spawn with effort=xhigh should succeed: $out"
+  assert_grep "KIMI_MODEL_THINKING_EFFORT='high' kimi --yolo" "$log" "kimi did not cap xhigh at kimi's high tier"
+  pass "kimi maps medium and xhigh to its own high tier"
+}
+
+test_kimi_effort_max_only_when_requested() {
+  local rec case_dir home proj wt fakebin kimi_home id out status log
+  rec=$(make_spawn_case effort-max)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  write_kimi_model_config "$kimi_home/config.toml" '"low", "high", "max"'
+  log="$case_dir/tmux.log"
+  : > "$log"
+  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort max)
+  status=$?
+  expect_code 0 "$status" "kimi spawn with effort=max should succeed: $out"
+  assert_grep "KIMI_MODEL_THINKING_EFFORT='max' kimi --yolo" "$log" "kimi did not pass through an explicitly requested max"
+  pass "kimi passes max through only when explicitly requested"
+}
+
+test_kimi_effort_falls_back_when_model_lacks_declared_support() {
+  local rec case_dir home proj wt fakebin kimi_home id out status log
+  rec=$(make_spawn_case effort-unsupported)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  write_kimi_model_config "$kimi_home/config.toml" '"low"'
+  log="$case_dir/tmux.log"
+  : > "$log"
+  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort high)
+  status=$?
+  expect_code 0 "$status" "kimi spawn should still succeed when the mapped effort isn't declared: $out"
+  assert_no_grep 'KIMI_MODEL_THINKING_EFFORT' "$log" "kimi launch emitted an effort override the resolved model does not declare supporting"
+  assert_grep 'effort=high' "$home/state/$id.meta" "kimi meta did not record the requested effort even without a launch override"
+  pass "kimi falls back to record-only when the resolved model does not declare support for the mapped effort"
+}
+
+test_kimi_effort_falls_back_when_inline_comment_names_unsupported_effort() {
+  local rec case_dir home proj wt fakebin kimi_home id out status log
+  rec=$(make_spawn_case effort-commented-unsupported)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  write_kimi_model_config "$kimi_home/config.toml" '"low"' ' # "high" unsupported'
+  log="$case_dir/tmux.log"
+  : > "$log"
+  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort high)
+  status=$?
+  expect_code 0 "$status" "kimi spawn should still succeed when only a comment names the mapped effort: $out"
+  assert_no_grep 'KIMI_MODEL_THINKING_EFFORT' "$log" "kimi launch emitted an effort override named only in an inline TOML comment"
+  assert_grep 'effort=high' "$home/state/$id.meta" "kimi meta did not record the requested effort after the inline-comment fallback"
+  pass "kimi ignores inline comments when checking declared effort support"
+}
+
+test_kimi_effort_falls_back_without_a_models_block() {
+  local rec case_dir home proj wt fakebin kimi_home id out status log
+  rec=$(make_spawn_case effort-no-model-block)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  log="$case_dir/tmux.log"
+  : > "$log"
+  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort high)
+  status=$?
+  expect_code 0 "$status" "kimi spawn should still succeed with no [models.*] block: $out"
+  assert_no_grep 'KIMI_MODEL_THINKING_EFFORT' "$log" "kimi launch emitted an effort override with no model catalog to prove support"
+  assert_grep 'effort=high' "$home/state/$id.meta" "kimi meta did not record the requested effort"
+  pass "kimi falls back to record-only when config.toml has no matching [models.*] block"
+}
+
 test_kimi_hook_survives_shellcheck_shape() {
   local rec case_dir home proj wt fakebin kimi_home id out status
   rec=$(make_spawn_case hookshape)
@@ -420,4 +545,10 @@ test_kimi_secondmate_spawn_is_refused
 test_kimi_non_tmux_backend_is_refused
 test_raw_kimi_scope_gates_are_exempt
 test_kimi_config_lock_waits_and_reclaims_stale_locks
+test_kimi_effort_env_override_when_model_declares_support
+test_kimi_effort_maps_medium_and_xhigh_to_high
+test_kimi_effort_max_only_when_requested
+test_kimi_effort_falls_back_when_model_lacks_declared_support
+test_kimi_effort_falls_back_when_inline_comment_names_unsupported_effort
+test_kimi_effort_falls_back_without_a_models_block
 test_kimi_hook_survives_shellcheck_shape

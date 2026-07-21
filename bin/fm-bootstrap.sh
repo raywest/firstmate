@@ -662,6 +662,11 @@ crew_dispatch_validate() {
     def verified($h): ["claude","codex","opencode","pi","grok","kimi"] | index($h);
     def plain_profile_name:
       if type == "string" then test("^[A-Za-z0-9_-]+$") else false end;
+    # kimi has no CLI effort flag, but fm-spawn.sh maps this full vocabulary onto
+    # its KIMI_MODEL_THINKING_EFFORT env override (capping medium/xhigh at high),
+    # gated at launch time on the resolved model config.toml declaring support -
+    # so every value here is a valid profile choice even though not every value
+    # reaches a live launch flag.
     def effort_ok($h; $e):
       if $e == null then true
       elif ($e | type) != "string" then false
@@ -670,7 +675,7 @@ crew_dispatch_validate() {
       elif $h == "grok" then (["low","medium","high"] | index($e))
       elif $h == "pi" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "opencode" then false
-      elif $h == "kimi" then false
+      elif $h == "kimi" then (["low","medium","high","xhigh","max"] | index($e))
       else true
       end;
     def use_profiles($u):
