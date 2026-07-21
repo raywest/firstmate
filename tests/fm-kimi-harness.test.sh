@@ -397,9 +397,9 @@ EOF
 }
 
 write_kimi_model_config() {  # <config-path> <support-efforts-csv-or-empty>
-  local config=$1 efforts=$2 body=''
+  local config=$1 efforts=$2 comment=${3-} body=''
   if [ -n "$efforts" ]; then
-    body=$(printf 'support_efforts = [ %s ]\ndefault_effort = "high"\n' "$efforts")
+    body=$(printf 'support_efforts = [ %s ]%s\ndefault_effort = "high"\n' "$efforts" "$comment")
   fi
   {
     printf 'default_model = "kimi-code/k3"\n\n'
@@ -488,6 +488,23 @@ EOF
   pass "kimi falls back to record-only when the resolved model does not declare support for the mapped effort"
 }
 
+test_kimi_effort_falls_back_when_inline_comment_names_unsupported_effort() {
+  local rec case_dir home proj wt fakebin kimi_home id out status log
+  rec=$(make_spawn_case effort-commented-unsupported)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  write_kimi_model_config "$kimi_home/config.toml" '"low"' ' # "high" unsupported'
+  log="$case_dir/tmux.log"
+  : > "$log"
+  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort high)
+  status=$?
+  expect_code 0 "$status" "kimi spawn should still succeed when only a comment names the mapped effort: $out"
+  assert_no_grep 'KIMI_MODEL_THINKING_EFFORT' "$log" "kimi launch emitted an effort override named only in an inline TOML comment"
+  assert_grep 'effort=high' "$home/state/$id.meta" "kimi meta did not record the requested effort after the inline-comment fallback"
+  pass "kimi ignores inline comments when checking declared effort support"
+}
+
 test_kimi_effort_falls_back_without_a_models_block() {
   local rec case_dir home proj wt fakebin kimi_home id out status log
   rec=$(make_spawn_case effort-no-model-block)
@@ -532,5 +549,6 @@ test_kimi_effort_env_override_when_model_declares_support
 test_kimi_effort_maps_medium_and_xhigh_to_high
 test_kimi_effort_max_only_when_requested
 test_kimi_effort_falls_back_when_model_lacks_declared_support
+test_kimi_effort_falls_back_when_inline_comment_names_unsupported_effort
 test_kimi_effort_falls_back_without_a_models_block
 test_kimi_hook_survives_shellcheck_shape

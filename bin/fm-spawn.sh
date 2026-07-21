@@ -607,18 +607,43 @@ kimi_model_supports_effort() {
   local config=$1 alias=$2 effort=$3
   [ -n "$alias" ] || return 1
   awk -v alias="$alias" -v effort="$effort" '
-    /^\[models\./ {
-      key = $0
-      sub(/^\[models\./, "", key)
+    function strip_toml_comment(line, i, char, quote, escaped) {
+      quote = ""
+      escaped = 0
+      for (i = 1; i <= length(line); i++) {
+        char = substr(line, i, 1)
+        if (quote != "") {
+          if (quote == "\"" && char == "\\") {
+            escaped = !escaped
+            continue
+          }
+          if (char == quote && !escaped) quote = ""
+          escaped = 0
+          continue
+        }
+        if (char == "\"" || char == "'"'"'") {
+          quote = char
+          continue
+        }
+        if (char == "#") return substr(line, 1, i - 1)
+      }
+      return line
+    }
+    {
+      line = strip_toml_comment($0)
+    }
+    line ~ /^[[:space:]]*\[models\./ {
+      key = line
+      sub(/^[[:space:]]*\[models\./, "", key)
       sub(/\][[:space:]]*$/, "", key)
       gsub(/^"|"$/, "", key)
       gsub(/^'"'"'|'"'"'$/, "", key)
       in_block = (key == alias) ? 1 : 0
       next
     }
-    /^\[/ { in_block = 0 }
-    in_block && /support_efforts[[:space:]]*=/ {
-      if (index($0, "\"" effort "\"") > 0) found = 1
+    line ~ /^[[:space:]]*\[/ { in_block = 0 }
+    in_block && line ~ /^[[:space:]]*support_efforts[[:space:]]*=/ {
+      if (index(line, "\"" effort "\"") > 0) found = 1
     }
     END { exit(found ? 0 : 1) }
   ' "$config"
