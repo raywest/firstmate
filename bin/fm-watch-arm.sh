@@ -131,11 +131,15 @@ wake_queue_seq() {
 }
 
 cycle_begin() {
+  local queue_seq=$3
   cycle_watcher_pid=$1
   cycle_origin=$2
   cycle_started_at=$(date +%s)
   cycle_lock_before=$(lock_snapshot)
-  cycle_queue_seq_before=$(wake_queue_seq)
+  case "$queue_seq" in
+    ''|*[!0-9]*) queue_seq=0 ;;
+  esac
+  cycle_queue_seq_before=$queue_seq
   cycle_active=1
 }
 
@@ -329,8 +333,8 @@ attach_and_wait() {
       if [ "$HEALTHY_PID" != "$attached_pid" ]; then
         cycle_log_append unknown unknown lock-replaced "attached:$HEALTHY_PID"
         attached_pid=$HEALTHY_PID
+        cycle_begin "$attached_pid" attached "$cycle_queue_seq_before"
         report_attached
-        cycle_begin "$attached_pid" attached
       fi
       sleep "$ATTACH_POLL"
       continue
@@ -338,8 +342,8 @@ attach_and_wait() {
     if wait_for_healthy_successor; then
       cycle_log_append unknown unknown attached-cycle-ended "attached:$HEALTHY_PID"
       attached_pid=$HEALTHY_PID
+      cycle_begin "$attached_pid" attached "$cycle_queue_seq_before"
       report_attached
-      cycle_begin "$attached_pid" attached
       continue
     fi
     cycle_log_append unknown unknown attached-cycle-ended none
@@ -413,12 +417,15 @@ fi
 # one - attach to that cycle and wait until it ends so the harness notify fires
 # then, not as an immediate empty wake. (--restart skips this: it just stopped
 # this home's watcher and wants a fresh one.)
-if [ "$mode" = arm ] && healthy_watcher; then
-  cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
-  report_attached
-  cycle_begin "$HEALTHY_PID" attached
-  attach_and_wait "$HEALTHY_PID"
-  exit $?
+if [ "$mode" = arm ]; then
+  cycle_queue_seq=$(wake_queue_seq)
+  if healthy_watcher; then
+    cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
+    cycle_begin "$HEALTHY_PID" attached "$cycle_queue_seq"
+    report_attached
+    attach_and_wait "$HEALTHY_PID"
+    exit $?
+  fi
 fi
 
 # Start a watcher as a tracked child and confirm it before settling in. The child
@@ -457,9 +464,10 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
+cycle_queue_seq=$(wake_queue_seq)
 "$WATCH" >"$child_out" &
 child=$!
-cycle_begin "$child" started
+cycle_begin "$child" started "$cycle_queue_seq"
 child_done=0
 
 owned_child_finished() {
@@ -484,7 +492,7 @@ owned_child_finished() {
       child_out=
       cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
       report_attached
-      cycle_begin "$HEALTHY_PID" attached
+      cycle_begin "$HEALTHY_PID" attached "$cycle_queue_seq_before"
       attach_and_wait "$HEALTHY_PID"
       return $?
     fi

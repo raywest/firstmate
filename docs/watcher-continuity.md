@@ -35,7 +35,9 @@ A zero/empty child return rechecks the home lock and beacon, and attaches to a v
 An attached arm follows verified identity-matched successors the same way.
 
 When neither an owned child's output nor a verified successor explains a cycle's end, the arm layer does not assume nothing happened.
-`cycle_begin` snapshots `state/.wake-queue.seq` under the queue lock when it starts owning or following a pid; at cycle end, a valid `state/.wake-queue` row with a later sequence proves a real wake landed durably even though this process could not see its reason text (an attached arm never captures the owning watcher's stdout, and an owned child can die between a successful `fm_wake_append` and its own `wake()` call).
+Immediately before forking a watcher or attempting to attach to one, the arm snapshots `state/.wake-queue.seq` under the queue lock.
+`cycle_begin` receives that snapshot rather than reading the queue itself, and replacement watchers retain the original cycle baseline.
+At cycle end, a valid `state/.wake-queue` row with a later sequence proves a real wake landed durably even though this process could not see its reason text (an attached arm never captures the owning watcher's stdout, and an owned child can die between a successful `fm_wake_append` and its own `wake()` call).
 That case reports `watcher: cycle ended - N wake(s) already queued ...` and exits nonzero (re-arm is still needed - no watcher is running) but is never the literal `watcher: FAILED` text, so a caller keying on that exact string does not treat it as an alarm.
 Only a cycle with no valid queue row after its sequence snapshot still emits the typed `watcher: FAILED - cycle ended without an actionable reason` result.
 
