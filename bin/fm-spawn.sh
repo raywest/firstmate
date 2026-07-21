@@ -392,12 +392,14 @@ launch_template() {
     # fully unattended tool execution, no permission gate); the brief is then
     # delivered post-launch by deliver_kimi_brief below via tmux bracketed paste,
     # which kimi's composer holds as one multi-line message until Enter (verified).
-    # No effort flag exists on 0.27.0 (--effort/--thinking/--reasoning-effort are
-    # all "unknown option"), so effort is record-only in meta - no __EFFORTFLAG__.
+    # Still no CLI effort flag on 0.28.1 (--effort/--thinking/--reasoning-effort
+    # are all "unknown option"), but __EFFORTFLAG__ here carries a
+    # KIMI_MODEL_THINKING_EFFORT=<level> env prefix instead of a trailing arg
+    # (effort_flag_for_harness's kimi case), so it sits before the binary name.
     # kimi's turn-end signal is a Stop-event [[hooks]] entry installed below
     # (guarded global hook + per-task pointer, the grok pattern). Verified for
     # crewmate/scout duty on the tmux backend only; --secondmate is refused.
-    kimi) printf '%s' 'kimi --yolo __MODELFLAG__' ;;
+    kimi) printf '%s' '__EFFORTFLAG__kimi --yolo __MODELFLAG__' ;;
     *) return 1 ;;
   esac
 }
@@ -583,6 +585,58 @@ model_flag_for_harness() {
   esac
 }
 
+# kimi_default_model_alias: the config.toml `default_model` value, kimi's own
+# fallback when no `-m <alias>` is passed at launch (verified 0.28.1: `-m` outranks
+# it). Matches a double- or single-quoted value; empty when the key is absent.
+kimi_default_model_alias() {
+  local config=$1
+  sed -n 's/^default_model[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p;s/^default_model[[:space:]]*=[[:space:]]*'"'"'\(.*\)'"'"'[[:space:]]*$/\1/p' "$config" | head -1
+}
+
+# kimi_model_supports_effort: does the resolved model's own `[models."<alias>"]`
+# block in config.toml declare EFFORT in its `support_efforts` array? Kimi's
+# `KIMI_MODEL_THINKING_EFFORT` env override bypasses that declared list rather
+# than validating against it (confirmed 2026-07-21 on kimi-code 0.28.1: an
+# out-of-list value reaches the provider live and comes back
+# `provider.api_error: 400 Invalid request Error`), so fm-spawn checks it here
+# instead - emitting the env var only when the resolved model is known to accept
+# EFFORT keeps an unsupported mapped value from ever reaching a live turn. A
+# model block this cannot confidently parse (nested `.overrides` tables,
+# multi-line arrays) reads as unsupported, which is the fail-safe direction.
+kimi_model_supports_effort() {
+  local config=$1 alias=$2 effort=$3
+  [ -n "$alias" ] || return 1
+  awk -v alias="$alias" -v effort="$effort" '
+    /^\[models\./ {
+      key = $0
+      sub(/^\[models\./, "", key)
+      sub(/\][[:space:]]*$/, "", key)
+      gsub(/^"|"$/, "", key)
+      gsub(/^'"'"'|'"'"'$/, "", key)
+      in_block = (key == alias) ? 1 : 0
+      next
+    }
+    /^\[/ { in_block = 0 }
+    in_block && /support_efforts[[:space:]]*=/ {
+      if (index($0, "\"" effort "\"") > 0) found = 1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$config"
+}
+
+# kimi_thinking_effort_for_profile: firstmate's shared low|medium|high|xhigh|max
+# axis, mapped to kimi's own low|high|max vocabulary (0.28.1 has no `medium` or
+# `xhigh` tier). Capped at `high` per the standing effort policy (harness-adapters
+# skill); `max` is reachable only when EFFORT is already `max`, which fm-spawn's
+# callers only set on explicit captain preference.
+kimi_thinking_effort_for_profile() {
+  case "$1" in
+    low) printf low ;;
+    medium|high|xhigh) printf high ;;
+    max) printf max ;;
+  esac
+}
+
 effort_flag_for_harness() {
   local harness=$1 effort=$2
   [ -n "$effort" ] && [ "$effort" != default ] || return 0
@@ -619,10 +673,34 @@ effort_flag_for_harness() {
     # opencode's interactive `opencode --prompt` launch has a verified --model
     # flag but no verified effort flag. Its `opencode run --variant` flag belongs
     # to a different, non-interactive launch mode, so fm-spawn does not pass it.
-    # kimi has NO effort flag at all on 0.27.0 (--effort, --thinking, and
-    # --reasoning-effort are all rejected as "unknown option"); a requested effort
-    # is recorded in meta but no flag is emitted (the record-only pattern above).
-    # kimi's own per-model default_effort in config.toml governs the launch.
+    kimi)
+      # kimi still has NO CLI effort flag on 0.28.1 (--effort/--thinking/
+      # --reasoning-effort are all "unknown option", reverified 2026-07-21), but
+      # 0.28.1 added a documented KIMI_MODEL_THINKING_EFFORT env override that
+      # forces the wire-level thinking effort per invocation - verified live
+      # 2026-07-21 (harness-adapters skill, kimi section): the wire log for a
+      # `low` launch showed `"thinkingEffort":"low"` (18 output tokens), a `max`
+      # launch showed `"thinkingEffort":"max"` (31 output tokens, visible
+      # reasoning trace), and an unsupported value produced a live
+      # `provider.api_error: 400`. This is a pure env prefix - no config.toml
+      # write, no lock, no race with a concurrent kimi session. $KIMI_CONFIG and
+      # $MODEL are the same globals the preflight above already resolved for
+      # this harness.
+      local mapped resolved_alias
+      mapped=$(kimi_thinking_effort_for_profile "$effort")
+      [ -n "$mapped" ] || return 0
+      resolved_alias=$MODEL
+      if [ -z "$resolved_alias" ] || [ "$resolved_alias" = default ]; then
+        resolved_alias=$(kimi_default_model_alias "$KIMI_CONFIG")
+      fi
+      # Fail-safe: the resolved model's config.toml entry must declare it accepts
+      # this effort. Absent that proof (no matching block, no support_efforts, or
+      # the value not listed), fall back to today's behavior - record-only in
+      # meta, no override, launch unchanged.
+      if kimi_model_supports_effort "$KIMI_CONFIG" "$resolved_alias" "$mapped"; then
+        printf -- 'KIMI_MODEL_THINKING_EFFORT=%s ' "$(shell_quote "$mapped")"
+      fi
+      ;;
   esac
 }
 
