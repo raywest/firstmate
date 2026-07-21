@@ -20,6 +20,8 @@
 # duplicating it, so the two consumers cannot drift apart.
 # shellcheck source=bin/fm-tmux-lib.sh
 . "$FM_BACKEND_LIB_DIR/fm-tmux-lib.sh"
+# shellcheck source=bin/fm-backend-hometag-lib.sh
+. "$FM_BACKEND_LIB_DIR/fm-backend-hometag-lib.sh"
 
 # fm_backend_tmux_resolve_bare_selector: the live-window-listing fallback for a
 # selector that is neither an explicit target nor a task selector routed
@@ -54,16 +56,42 @@ fm_backend_tmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
   fm_tmux_submit_core "$@"
 }
 
+# fm_backend_tmux_session_name: the detached session name a NEW container-ensure
+# creates or reuses when firstmate is NOT already running inside tmux.
+# FM_TMUX_SESSION is an explicit operator escape hatch (mirrors FM_ZELLIJ_SESSION/
+# HERDR_SESSION) and always wins. Absent that, the name is "fm-<hometag>"
+# (bin/fm-backend-hometag-lib.sh, the same per-installation collision-avoidance
+# tag already used by the cmux and zellij adapters) - deterministic from this
+# home's own FM_HOME/FM_ROOT, so a later respawn or recovery derives the exact
+# same name again, and two homes on one machine never end up sharing a session.
+# This replaces the old hardcoded literal "firstmate": a fleet-wide incident
+# (data/fm-killsweep-scout-s3/report.md, referenced from AGENTS.md section 1)
+# showed a session name generic enough to be shared or guessed is a soft target
+# for an ambient `tmux kill-session` run by some OTHER tool sharing the same
+# tmux server. A window recorded under the old literal keeps resolving exactly
+# as before (fm_backend_resolve_selector reads the recorded target verbatim,
+# never reconstructing it from this function) - only a NEW spawn on a machine
+# with no existing session by this name picks up the new default.
+fm_backend_tmux_session_name() {
+  if [ -n "${FM_TMUX_SESSION:-}" ]; then
+    printf '%s' "$FM_TMUX_SESSION"
+    return 0
+  fi
+  printf 'fm-%s' "$(fm_backend_hometag)"
+}
+
 # fm_backend_tmux_container_ensure: reuse the current tmux session when
-# firstmate itself runs inside tmux, else ensure a dedicated detached
-# "firstmate" session exists. Mirrors fm-spawn.sh's container-ensure block;
-# prints the resolved session name.
+# firstmate itself runs inside tmux, else ensure the dedicated detached session
+# named by fm_backend_tmux_session_name exists. Mirrors fm-spawn.sh's
+# container-ensure block; prints the resolved session name.
 fm_backend_tmux_container_ensure() {
   if [ -n "${TMUX:-}" ]; then
     tmux display-message -p '#S'
   else
-    tmux has-session -t firstmate 2>/dev/null || tmux new-session -d -s firstmate
-    printf 'firstmate'
+    local ses
+    ses=$(fm_backend_tmux_session_name)
+    tmux has-session -t "$ses" 2>/dev/null || tmux new-session -d -s "$ses"
+    printf '%s' "$ses"
   fi
 }
 
