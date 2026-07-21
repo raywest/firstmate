@@ -565,7 +565,11 @@ KIMI_HOME_DIR=
 KIMI_CONFIG=
 case "$HARNESS" in
   kimi*)
-    KIMI_HOME_DIR="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+    kimi_home_input="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+    KIMI_HOME_DIR=$(cd "$kimi_home_input" 2>/dev/null && pwd -P) || {
+      echo "error: kimi is not initialized (no config.toml at $kimi_home_input/config.toml); run kimi once and authenticate before dispatching kimi crewmates" >&2
+      exit 1
+    }
     KIMI_CONFIG="$KIMI_HOME_DIR/config.toml"
     if ! command -v kimi >/dev/null 2>&1; then
       echo "error: kimi is not on PATH; install kimi-code before dispatching kimi crewmates" >&2
@@ -678,6 +682,38 @@ effort_flag_for_harness() {
 
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+write_worktree_token_pointer() {
+  local worktree=$1 name=$2 token=$3 pointer temp
+  pointer="$worktree/$name"
+  if [ -L "$pointer" ]; then
+    echo "error: $name worktree pointer must not be a symlink: $pointer" >&2
+    return 1
+  fi
+  if [ -d "$pointer" ]; then
+    echo "error: $name worktree pointer must not be a directory: $pointer" >&2
+    return 1
+  fi
+  temp=$(mktemp "$worktree/.${name#.}.XXXXXXXXXXXX") || {
+    echo "error: could not create temporary $name worktree pointer in $worktree" >&2
+    return 1
+  }
+  if ! printf 'token=%s\n' "$token" > "$temp"; then
+    rm -f "$temp"
+    echo "error: could not write temporary $name worktree pointer in $worktree" >&2
+    return 1
+  fi
+  if [ -L "$pointer" ] || [ -d "$pointer" ]; then
+    rm -f "$temp"
+    echo "error: $name worktree pointer changed to an unsafe path: $pointer" >&2
+    return 1
+  fi
+  if ! mv -f "$temp" "$pointer"; then
+    rm -f "$temp"
+    echo "error: could not install $name worktree pointer at $pointer" >&2
+    return 1
+  fi
 }
 
 toml_basic_string_escape() {
@@ -1419,7 +1455,7 @@ EOF
       chmod +x "$GROK_HOOKS_DIR/fm-turn-end.sh"
       hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-turn-end.sh")")
       printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" > "$GROK_HOOKS_DIR/fm-turn-end.json"
-      printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
+      write_worktree_token_pointer "$WT" '.fm-grok-turnend' "${auth_file##*/}" || exit 1
       exclude_path '.fm-grok-turnend'
       ;;
     kimi*)
@@ -1516,7 +1552,7 @@ EOF
         KIMI_CONFIG_SNAPSHOT=
       fi
       release_kimi_config_lock
-      printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
+      write_worktree_token_pointer "$WT" '.fm-kimi-turnend' "${auth_file##*/}" || exit 1
       exclude_path '.fm-kimi-turnend'
       ;;
   esac
@@ -1546,17 +1582,9 @@ if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
 fi
-# kimi: the preflight above resolved ${KIMI_CODE_HOME:-$HOME/.kimi-code} for the
-# config append and token registry, so when the operator has KIMI_CODE_HOME set,
-# the launched kimi must read the SAME home or it will load a config without the
-# firstmate hook entry (and its hook process would resolve a different registry).
-# Propagate it into the pane launch; unset means both sides already agree on
-# ~/.kimi-code and nothing is prefixed.
 case "$HARNESS" in
   kimi*)
-    if [ -n "${KIMI_CODE_HOME:-}" ]; then
-      LAUNCH="KIMI_CODE_HOME=$(shell_quote "$KIMI_CODE_HOME") $LAUNCH"
-    fi
+    LAUNCH="KIMI_CODE_HOME=$(shell_quote "$KIMI_HOME_DIR") $LAUNCH"
     ;;
 esac
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child

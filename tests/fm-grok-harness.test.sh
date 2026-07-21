@@ -117,6 +117,23 @@ EOF
   pass "grok teardown removes pointer and token state"
 }
 
+test_grok_pointer_symlink_is_refused() {
+  local rec case_dir home proj wt fakebin grok_home id sentinel out status
+  rec=$(make_spawn_case pointer-symlink)
+  IFS='|' read -r case_dir home proj wt fakebin grok_home id <<EOF
+$rec
+EOF
+  sentinel="$case_dir/sentinel"
+  printf 'preserved\n' > "$sentinel"
+  ln -s "$sentinel" "$wt/.fm-grok-turnend"
+  out=$(run_grok_spawn "$home" "$proj" "$wt" "$fakebin" "$grok_home" "$id")
+  status=$?
+  [ "$status" -ne 0 ] || fail "grok spawn must refuse a symlinked token pointer"
+  assert_contains "$out" "worktree pointer must not be a symlink" "grok did not identify the unsafe pointer"
+  assert_grep 'preserved' "$sentinel" "grok spawn overwrote the symlink target"
+  pass "grok refuses symlinked worktree token pointers"
+}
+
 test_fm_lock_recognizes_grok_holder() {
   local home fakebin out
   home="$TMP_ROOT/lock-home"
@@ -139,4 +156,5 @@ SH
 
 test_grok_hook_requires_registered_token
 test_grok_teardown_removes_pointer_and_token
+test_grok_pointer_symlink_is_refused
 test_fm_lock_recognizes_grok_holder

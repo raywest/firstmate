@@ -165,11 +165,12 @@ EOF
 }
 
 test_kimi_hook_requires_registered_token() {
-  local rec case_dir home proj wt fakebin kimi_home id out status hook token target evil evil_target
+  local rec case_dir home proj wt fakebin kimi_home canonical_kimi_home id out status hook token target evil evil_target
   rec=$(make_spawn_case hook-auth)
   IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
 $rec
 EOF
+  canonical_kimi_home=$(cd "$kimi_home" && pwd -P)
   out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
   status=$?
   expect_code 0 "$status" "kimi spawn should succeed: $out"
@@ -183,7 +184,7 @@ EOF
   token=$(sed -n 's/^token=//p' "$wt/.fm-kimi-turnend")
   assert_present "$kimi_home/hooks/fm-turn-end.d/$token" "kimi auth registry entry was not written"
   assert_grep 'hooks/fm-turn-end.sh' "$kimi_home/config.toml" "config.toml did not get the [[hooks]] Stop append"
-  assert_grep "kimi_home=$kimi_home" "$home/state/$id.meta" "kimi meta did not record its resolved home"
+  assert_grep "kimi_home=$canonical_kimi_home" "$home/state/$id.meta" "kimi meta did not record its resolved home"
 
   # An unregistered workspace pointing a payload cwd at an arbitrary target must be a no-op.
   evil="$case_dir/evil"
@@ -266,7 +267,7 @@ EOF
 }
 
 test_kimi_hook_command_escapes_toml() {
-  local rec case_dir home proj wt fakebin kimi_home id special_kimi_home out status command expected
+  local rec case_dir home proj wt fakebin kimi_home canonical_kimi_home id special_kimi_home out status command expected
   rec=$(make_spawn_case quoted-home)
   IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
 $rec
@@ -274,13 +275,50 @@ EOF
   special_kimi_home="${kimi_home}'\"quoted"
   mv "$kimi_home" "$special_kimi_home"
   kimi_home=$special_kimi_home
+  canonical_kimi_home=$(cd "$kimi_home" && pwd -P)
   out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
   status=$?
   expect_code 0 "$status" "kimi spawn should support quote characters in KIMI_CODE_HOME: $out"
-  command="bash $(quote_for_shell "$kimi_home/hooks/fm-turn-end.sh")"
+  command="bash $(quote_for_shell "$canonical_kimi_home/hooks/fm-turn-end.sh")"
   expected=$(printf 'command = "%s"' "$(toml_basic_string_escape "$command")")
   assert_grep "$expected" "$kimi_home/config.toml" "kimi hook command was not TOML-escaped"
   pass "kimi hook command escapes quote characters for TOML"
+}
+
+test_kimi_pointer_symlink_is_refused() {
+  local rec case_dir home proj wt fakebin kimi_home id sentinel out status
+  rec=$(make_spawn_case pointer-symlink)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  sentinel="$case_dir/sentinel"
+  printf 'preserved\n' > "$sentinel"
+  ln -s "$sentinel" "$wt/.fm-kimi-turnend"
+  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
+  status=$?
+  [ "$status" -ne 0 ] || fail "kimi spawn must refuse a symlinked token pointer"
+  assert_contains "$out" "worktree pointer must not be a symlink" "kimi did not identify the unsafe pointer"
+  assert_grep 'preserved' "$sentinel" "kimi spawn overwrote the symlink target"
+  pass "kimi refuses symlinked worktree token pointers"
+}
+
+test_kimi_relative_home_is_canonicalized_for_launch() {
+  local rec case_dir home proj wt fakebin kimi_home canonical_kimi_home quoted_kimi_home id relative_home log out status
+  rec=$(make_spawn_case relative-home)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  canonical_kimi_home=$(cd "$kimi_home" && pwd -P)
+  quoted_kimi_home=$(quote_for_shell "$canonical_kimi_home")
+  relative_home=kimi
+  log="$case_dir/tmux.log"
+  : > "$log"
+  out=$(cd "$case_dir" && FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$relative_home" "$id")
+  status=$?
+  expect_code 0 "$status" "kimi spawn should accept a relative KIMI_CODE_HOME: $out"
+  assert_grep "kimi_home=$canonical_kimi_home" "$home/state/$id.meta" "kimi metadata did not record the canonical home"
+  assert_grep "KIMI_CODE_HOME=$quoted_kimi_home" "$log" "kimi launch did not receive the canonical home"
+  pass "kimi canonicalizes a relative home before launch"
 }
 
 test_kimi_config_append_redirection_failure_aborts_with_recovery_metadata() {
@@ -499,6 +537,8 @@ test_kimi_hook_requires_registered_token
 test_kimi_config_append_is_idempotent_and_brief_is_pasted
 test_kimi_hook_detection_requires_active_firstmate_stanza
 test_kimi_hook_command_escapes_toml
+test_kimi_pointer_symlink_is_refused
+test_kimi_relative_home_is_canonicalized_for_launch
 test_kimi_config_append_redirection_failure_aborts_with_recovery_metadata
 test_kimi_doctor_failure_restores_config_and_aborts
 test_kimi_teardown_removes_pointer_and_token
