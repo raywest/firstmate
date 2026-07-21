@@ -664,6 +664,41 @@ toml_basic_string_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+kimi_config_has_turnend_hook() {
+  local config=$1 command_line=$2
+  KIMI_HOOK_COMMAND_LINE=$command_line awk '
+    function trim(value) {
+      sub(/^[[:space:]]*/, "", value)
+      sub(/[[:space:]]*$/, "", value)
+      return value
+    }
+    function finish_hook() {
+      if (in_hook && is_stop && has_command) found = 1
+      in_hook = 0
+      is_stop = 0
+      has_command = 0
+    }
+    /^[[:space:]]*\[\[hooks\]\][[:space:]]*(#.*)?$/ {
+      finish_hook()
+      in_hook = 1
+      next
+    }
+    /^[[:space:]]*\[/ {
+      finish_hook()
+      next
+    }
+    in_hook {
+      line = trim($0)
+      if (line == "event = \"Stop\"") is_stop = 1
+      if (line == ENVIRON["KIMI_HOOK_COMMAND_LINE"]) has_command = 1
+    }
+    END {
+      finish_hook()
+      exit(found ? 0 : 1)
+    }
+  ' "$config"
+}
+
 acquire_kimi_config_lock() {
   local attempt=0
   while [ "$attempt" -lt 100 ]; do
@@ -1426,16 +1461,18 @@ EOF
       . "$SCRIPT_DIR/fm-wake-lib.sh"
       KIMI_CONFIG_LOCK="$KIMI_CONFIG.fm-prehook.lock"
       acquire_kimi_config_lock || exit 1
-      if ! grep -qF "hooks/fm-turn-end.sh" "$KIMI_CONFIG"; then
+      kimi_hook_command="bash $(shell_quote "$KIMI_HOOKS_DIR/fm-turn-end.sh")"
+      kimi_hook_toml_value=$(toml_basic_string_escape "$kimi_hook_command")
+      kimi_hook_toml_command="command = \"$kimi_hook_toml_value\""
+      if ! kimi_config_has_turnend_hook "$KIMI_CONFIG" "$kimi_hook_toml_command"; then
         KIMI_CONFIG_SNAPSHOT=$(mktemp "$KIMI_CONFIG.fm-prehook.XXXXXXXXXXXX")
         if ! cat "$KIMI_CONFIG" > "$KIMI_CONFIG_SNAPSHOT"; then
           rm -f "$KIMI_CONFIG_SNAPSHOT"
           KIMI_CONFIG_SNAPSHOT=
           exit 1
         fi
-        kimi_hook_command="bash $(shell_quote "$KIMI_HOOKS_DIR/fm-turn-end.sh")"
         if ! printf '\n# firstmate-owned turn-end hook: a token-guarded no-op for every kimi\n# session firstmate did not launch (see fm-turn-end.sh next to config.toml).\n[[hooks]]\nevent = "Stop"\ncommand = "%s"\ntimeout = 5\n' \
-          "$(toml_basic_string_escape "$kimi_hook_command")" >> "$KIMI_CONFIG"; then
+          "$kimi_hook_toml_value" >> "$KIMI_CONFIG"; then
           if restore_kimi_config_snapshot; then
             restore_message="config restored from backup"
           else

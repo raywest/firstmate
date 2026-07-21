@@ -55,7 +55,10 @@ SH
   cat > "$fakebin/kimi" <<'SH'
 #!/usr/bin/env bash
 case "${1:-}" in
-  doctor) exit "${FM_FAKE_KIMI_DOCTOR_EXIT:-0}" ;;
+  doctor)
+    [ -z "${FM_FAKE_KIMI_DOCTOR_LOG:-}" ] || printf 'doctor\n' >> "$FM_FAKE_KIMI_DOCTOR_LOG"
+    exit "${FM_FAKE_KIMI_DOCTOR_EXIT:-0}"
+    ;;
 esac
 exit 0
 SH
@@ -236,6 +239,30 @@ EOF
   count=$(grep -c 'hooks/fm-turn-end.sh' "$kimi_home/config.toml")
   [ "$count" -eq 1 ] || fail "config.toml hook append is not idempotent (found $count entries)"
   pass "kimi config append is idempotent and the brief goes over as a bracketed paste"
+}
+
+test_kimi_hook_detection_requires_active_firstmate_stanza() {
+  local rec case_dir home proj wt fakebin kimi_home id doctor_log out status hook_count
+  rec=$(make_spawn_case hook-detection)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  doctor_log="$case_dir/kimi-doctor.log"
+  cat >> "$kimi_home/config.toml" <<'EOF'
+# historical reference: hooks/fm-turn-end.sh
+[[hooks]]
+event = "Stop"
+command = "bash /tmp/other/hooks/fm-turn-end.sh"
+timeout = 5
+EOF
+  out=$(FM_FAKE_KIMI_DOCTOR_LOG="$doctor_log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
+  status=$?
+  expect_code 0 "$status" "kimi spawn should install its hook after unrelated references: $out"
+  hook_count=$(grep -c '^\[\[hooks\]\]$' "$kimi_home/config.toml")
+  [ "$hook_count" -eq 2 ] || fail "kimi config detection treated a comment or unrelated hook as its active hook"
+  assert_grep '# firstmate-owned turn-end hook:' "$kimi_home/config.toml" "kimi did not append its owned hook stanza"
+  grep -qx 'doctor' "$doctor_log" || fail "kimi did not validate the appended owned hook stanza"
+  pass "kimi hook detection requires an active firstmate hook stanza"
 }
 
 test_kimi_hook_command_escapes_toml() {
@@ -469,6 +496,7 @@ test_kimi_preflight_refuses_before_task_resources
 test_kimi_creates_missing_state_before_metadata
 test_kimi_hook_requires_registered_token
 test_kimi_config_append_is_idempotent_and_brief_is_pasted
+test_kimi_hook_detection_requires_active_firstmate_stanza
 test_kimi_hook_command_escapes_toml
 test_kimi_config_append_redirection_failure_aborts_with_recovery_metadata
 test_kimi_doctor_failure_restores_config_and_aborts
