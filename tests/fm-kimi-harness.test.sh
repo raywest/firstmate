@@ -256,6 +256,23 @@ EOF
   pass "kimi hook command escapes quote characters for TOML"
 }
 
+test_kimi_config_append_redirection_failure_aborts_with_recovery_metadata() {
+  local rec case_dir home proj wt fakebin kimi_home id out status
+  rec=$(make_spawn_case config-append-redirection)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  chmod 444 "$kimi_home/config.toml"
+  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
+  status=$?
+  chmod 600 "$kimi_home/config.toml"
+  [ "$status" -ne 0 ] || fail "kimi spawn should abort when config.toml cannot be appended: $out"
+  assert_contains "$out" "config backup retained after restoration failed" "kimi config append failure did not retain its backup after restoration failed"
+  assert_not_contains "$out" "spawned $id" "kimi reported spawn success after a config append redirection failure"
+  assert_present "$home/state/$id.meta" "kimi config append redirection failure did not preserve task metadata for teardown"
+  pass "kimi config append redirection failure aborts with recovery metadata"
+}
+
 test_kimi_doctor_failure_restores_config_and_aborts() {
   local rec case_dir home proj wt fakebin kimi_home id target backup out status token
   rec=$(make_spawn_case doctor-fail)
@@ -453,6 +470,7 @@ test_kimi_creates_missing_state_before_metadata
 test_kimi_hook_requires_registered_token
 test_kimi_config_append_is_idempotent_and_brief_is_pasted
 test_kimi_hook_command_escapes_toml
+test_kimi_config_append_redirection_failure_aborts_with_recovery_metadata
 test_kimi_doctor_failure_restores_config_and_aborts
 test_kimi_teardown_removes_pointer_and_token
 test_kimi_unverified_brief_submission_aborts

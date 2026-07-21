@@ -1433,12 +1433,18 @@ EOF
           KIMI_CONFIG_SNAPSHOT=
           exit 1
         fi
-        {
-          printf '\n# firstmate-owned turn-end hook: a token-guarded no-op for every kimi\n'
-          printf '# session firstmate did not launch (see fm-turn-end.sh next to config.toml).\n'
-          kimi_hook_command="bash $(shell_quote "$KIMI_HOOKS_DIR/fm-turn-end.sh")"
-          printf '[[hooks]]\nevent = "Stop"\ncommand = "%s"\ntimeout = 5\n' "$(toml_basic_string_escape "$kimi_hook_command")"
-        } >> "$KIMI_CONFIG"
+        kimi_hook_command="bash $(shell_quote "$KIMI_HOOKS_DIR/fm-turn-end.sh")"
+        if ! printf '\n# firstmate-owned turn-end hook: a token-guarded no-op for every kimi\n# session firstmate did not launch (see fm-turn-end.sh next to config.toml).\n[[hooks]]\nevent = "Stop"\ncommand = "%s"\ntimeout = 5\n' \
+          "$(toml_basic_string_escape "$kimi_hook_command")" >> "$KIMI_CONFIG"; then
+          if restore_kimi_config_snapshot; then
+            restore_message="config restored from backup"
+          else
+            restore_message="config backup retained after restoration failed"
+          fi
+          release_kimi_config_lock
+          echo "error: could not append the firstmate turn-end hook to kimi config.toml; $restore_message, spawn aborted" >&2
+          exit 1
+        fi
         if ! kimi doctor >/dev/null 2>&1; then
           if restore_kimi_config_snapshot; then
             restore_message="config restored from backup"
