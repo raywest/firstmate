@@ -36,16 +36,17 @@ Inside tmux, `tmux display-message -p '#S'` prints it.
 ## Outside tmux: the detached, home-unique session
 
 If you launch your harness outside of tmux, crewmate windows land in a detached session created on first use, named `fm-<hometag>` - a short, deterministic tag derived from this installation's own path (`fm_backend_tmux_session_name` in [`bin/backends/tmux.sh`](../bin/backends/tmux.sh); the tag itself is `bin/fm-backend-hometag-lib.sh`, shared with the cmux and zellij adapters).
-After spawning a task, use its recorded target to print this firstmate home's exact session name:
+After spawning a task, use its recorded target to print this firstmate home's exact session name.
+Run these commands from the firstmate repository root when `FM_HOME` is unset, or set `FM_HOME` to the active operational home:
 
 ```sh
-sed -n 's/^window=\([^:]*\):.*/\1/p' "$FM_HOME/state/<task-id>.meta"
+sed -n 's/^window=\([^:]*\):.*/\1/p' "${FM_HOME:-"$PWD"}/state/<task-id>.meta"
 ```
 
 Attach to the recorded session with:
 
 ```sh
-tmux attach -t "$(sed -n 's/^window=\([^:]*\):.*/\1/p' "$FM_HOME/state/<task-id>.meta")"
+tmux attach -t "$(sed -n 's/^window=\([^:]*\):.*/\1/p' "${FM_HOME:-"$PWD"}/state/<task-id>.meta")"
 ```
 
 Set `FM_TMUX_SESSION` to pin an exact literal instead of the derived default (an explicit operator choice always wins, whether firstmate is running inside tmux or not); that literal is the session to attach to.
