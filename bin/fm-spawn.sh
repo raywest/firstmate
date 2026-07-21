@@ -660,6 +660,10 @@ json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+toml_basic_string_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
 acquire_kimi_config_lock() {
   local attempt=0
   while [ "$attempt" -lt 100 ]; do
@@ -1432,7 +1436,8 @@ EOF
         {
           printf '\n# firstmate-owned turn-end hook: a token-guarded no-op for every kimi\n'
           printf '# session firstmate did not launch (see fm-turn-end.sh next to config.toml).\n'
-          printf '[[hooks]]\nevent = "Stop"\ncommand = "bash %s"\ntimeout = 5\n' "$(shell_quote "$KIMI_HOOKS_DIR/fm-turn-end.sh")"
+          kimi_hook_command="bash $(shell_quote "$KIMI_HOOKS_DIR/fm-turn-end.sh")"
+          printf '[[hooks]]\nevent = "Stop"\ncommand = "%s"\ntimeout = 5\n' "$(toml_basic_string_escape "$kimi_hook_command")"
         } >> "$KIMI_CONFIG"
         if ! kimi doctor >/dev/null 2>&1; then
           if restore_kimi_config_snapshot; then

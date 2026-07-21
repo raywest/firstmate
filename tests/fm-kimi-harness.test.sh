@@ -105,6 +105,16 @@ run_raw_kimi_spawn() {
     "$SPAWN" "$id" "$proj" "$@" 2>&1
 }
 
+quote_for_shell() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
+toml_basic_string_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
 test_kimi_preflight_refuses_before_task_resources() {
   local rec case_dir home proj wt fakebin kimi_home id out status log
   rec=$(make_spawn_case preflight-cli)
@@ -226,6 +236,24 @@ EOF
   count=$(grep -c 'hooks/fm-turn-end.sh' "$kimi_home/config.toml")
   [ "$count" -eq 1 ] || fail "config.toml hook append is not idempotent (found $count entries)"
   pass "kimi config append is idempotent and the brief goes over as a bracketed paste"
+}
+
+test_kimi_hook_command_escapes_toml() {
+  local rec case_dir home proj wt fakebin kimi_home id special_kimi_home out status command expected
+  rec=$(make_spawn_case quoted-home)
+  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
+$rec
+EOF
+  special_kimi_home="${kimi_home}'\"quoted"
+  mv "$kimi_home" "$special_kimi_home"
+  kimi_home=$special_kimi_home
+  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
+  status=$?
+  expect_code 0 "$status" "kimi spawn should support quote characters in KIMI_CODE_HOME: $out"
+  command="bash $(quote_for_shell "$kimi_home/hooks/fm-turn-end.sh")"
+  expected=$(printf 'command = "%s"' "$(toml_basic_string_escape "$command")")
+  assert_grep "$expected" "$kimi_home/config.toml" "kimi hook command was not TOML-escaped"
+  pass "kimi hook command escapes quote characters for TOML"
 }
 
 test_kimi_doctor_failure_restores_config_and_aborts() {
@@ -424,6 +452,7 @@ test_kimi_preflight_refuses_before_task_resources
 test_kimi_creates_missing_state_before_metadata
 test_kimi_hook_requires_registered_token
 test_kimi_config_append_is_idempotent_and_brief_is_pasted
+test_kimi_hook_command_escapes_toml
 test_kimi_doctor_failure_restores_config_and_aborts
 test_kimi_teardown_removes_pointer_and_token
 test_kimi_unverified_brief_submission_aborts
