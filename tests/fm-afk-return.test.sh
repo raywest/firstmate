@@ -222,19 +222,24 @@ test_check_retries_failed_style_flag_clear() {
 }
 
 test_supported_return_preserves_daemon() {
-  local dir out
-  dir="$TMP_ROOT/supported-return"
-  install_runner "$dir"
-  date +%s > "$dir/home/state/.afk"
-  : > "$dir/home/state/.afk-daemon-terminal"
-  : > "$dir/home/state/.fake-daemon-live"
-  out=$(run_return "$dir" begin) || fail "supported return should clear cleanly: $out"
-  [ ! -e "$dir/home/state/.afk" ] || fail "supported return left the away style flag behind"
-  [ -e "$dir/home/state/.afk-daemon-terminal" ] || fail "supported return stopped the daemon terminal"
-  [ -e "$dir/home/state/.fake-daemon-live" ] || fail "supported return stopped the live daemon fixture"
-  [ ! -e "$dir/home/stop.log" ] || fail "supported return called the legacy daemon stop"
-  [ "$(cat "$dir/home/exit.log")" = afk-exit ] || fail "supported return did not clear the style flag"
-  pass "supported return clears delivery style without stopping the daemon"
+  local harness backend dir out
+  for harness in claude codex; do
+    for backend in tmux herdr; do
+      dir="$TMP_ROOT/supported-return-$harness-$backend"
+      install_runner "$dir"
+      date +%s > "$dir/home/state/.afk"
+      : > "$dir/home/state/.afk-daemon-terminal"
+      : > "$dir/home/state/.fake-daemon-live"
+      out=$(FM_TEST_HARNESS="$harness" FM_TEST_BACKEND="$backend" run_return "$dir" begin) \
+        || fail "$harness/$backend supported return should clear cleanly: $out"
+      [ ! -e "$dir/home/state/.afk" ] || fail "$harness/$backend supported return left the away style flag behind"
+      [ -e "$dir/home/state/.afk-daemon-terminal" ] || fail "$harness/$backend supported return stopped the daemon terminal"
+      [ -e "$dir/home/state/.fake-daemon-live" ] || fail "$harness/$backend supported return stopped the live daemon fixture"
+      [ ! -e "$dir/home/stop.log" ] || fail "$harness/$backend supported return called the legacy daemon stop"
+      [ "$(cat "$dir/home/exit.log")" = afk-exit ] || fail "$harness/$backend supported return did not clear the style flag"
+    done
+  done
+  pass "supported returns clear delivery style without stopping the daemon"
 }
 
 test_unflipped_return_stops_daemon() {

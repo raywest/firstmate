@@ -55,7 +55,7 @@ On `attached` it stays live across identity-matched successors, and an unexplain
 The arm layer records one bounded lifecycle row per observed cycle in `state/.watch-cycle-exits.log`; `state/.watch-triage.log` remains exclusively the absorbed-wake debug log.
 Pi and OpenCode verify session-lock ownership and launch one singleton successor from their child-close handlers before delivering an actionable wake prompt, with bounded exponential retry for failed restoration.
 Unflipped Claude harness/backend combinations retain the tracked background-task protocol and its narrow PreToolUse continuity gate, which allows drain and arm recovery while refusing only other fleet commands when tasks are in flight and neither an identity-matched live watcher nor a live daemon holds the home lock.
-The turn-end guard remains the final backstop for every harness protocol, and a live daemon lock satisfies it alongside the watcher predicate on supported Claude tmux/herdr setups.
+The turn-end guard remains the final backstop for every harness protocol, and a live daemon lock satisfies it alongside the watcher predicate on supported claude or codex tmux/herdr setups.
 Its `--restart` mode signals only the watcher recorded in the current home's `state/.watch.lock`, so restarting one home cannot kill sibling secondmate watchers.
 A pull-based guard (`bin/fm-guard.sh`) warns through supervision tool output if the primary checkout is tangled, or if tasks are in flight and supervision is down or queued wakes are waiting to be drained.
 The drain script calls that guard after emptying the queue, which avoids repeating the queued-wakes warning for records it just consumed while still warning on stale watcher liveness.

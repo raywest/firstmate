@@ -13,8 +13,9 @@
 # ordinary captain request may proceed. `needs-decision:` is captain-owned and
 # is deliberately not part of this gate; normal reporting surfaces it.
 #
-# On the supported always-on combination (claude on tmux or herdr), return only
-# clears the away/present delivery-style flag (bin/fm-daemon-launch.sh afk-exit).
+# On the supported always-on combination (claude or codex on tmux or herdr),
+# return only clears the away/present delivery-style flag
+# (bin/fm-daemon-launch.sh afk-exit).
 # Every other harness/backend combination retains the legacy daemon stop before
 # clearing that flag. The durable state/.afk-return-catchup file is written
 # BEFORE either lifecycle transition, so a crash between it, draining, and
@@ -147,7 +148,10 @@ return_guard() {
 alwayson_supported() {
   local harness backend
   harness=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
-  [ "$harness" = claude ] || return 1
+  case "$harness" in
+    claude|codex) ;;
+    *) return 1 ;;
+  esac
   backend=${FM_SUPERVISOR_BACKEND:-$(fm_backend_detect 2>/dev/null || printf '')}
   case "$backend" in
     tmux|herdr) return 0 ;;
