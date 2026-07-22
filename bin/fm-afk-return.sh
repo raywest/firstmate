@@ -2,7 +2,7 @@
 # fm-afk-return.sh - deterministic away-mode return catch-up gate.
 #
 # Usage:
-#   fm-afk-return.sh          Stop away mode, drain catch-up, and open/check gate.
+#   fm-afk-return.sh          Clear the away-mode style flag, drain catch-up, and open/check gate.
 #   fm-afk-return.sh begin    Same as the default command.
 #   fm-afk-return.sh check    Re-drain and close the gate only after blockers resolve.
 #   fm-afk-return.sh guard    Read-only refusal while away or catch-up is pending.
@@ -13,8 +13,12 @@
 # ordinary captain request may proceed. `needs-decision:` is captain-owned and
 # is deliberately not part of this gate; normal reporting surfaces it.
 #
-# The durable state/.afk-return-catchup file is written BEFORE daemon shutdown,
-# so a crash between stopping, draining, and blocker handling fails closed. It
+# On the supported always-on combination (claude on tmux or herdr), return only
+# clears the away/present delivery-style flag (bin/fm-daemon-launch.sh afk-exit).
+# Every other harness/backend combination retains the legacy daemon stop before
+# clearing that flag. The durable state/.afk-return-catchup file is written
+# BEFORE either lifecycle transition, so a crash between it, draining, and
+# blocker handling fails closed. It
 # retains the drained wake, buffered-escalation, and wedge-marker evidence until
 # every live open blocker is closed and `check` succeeds. Repeated begin/check
 # calls are idempotent. `guard` never mutates state and is suitable for ordinary
@@ -140,16 +144,35 @@ return_guard() {
   return 0
 }
 
+alwayson_supported() {
+  local harness backend
+  harness=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
+  [ "$harness" = claude ] || return 1
+  backend=${FM_SUPERVISOR_BACKEND:-$(fm_backend_detect 2>/dev/null || printf '')}
+  case "$backend" in
+    tmux|herdr) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 return_reconcile() {
   local evidence blockers drained wedge escalations lifecycle_ok=1
   evidence=$(mktemp "$STATE/.afk-return-evidence.XXXXXX") || return 1
   blockers=$(mktemp "$STATE/.afk-return-blockers.XXXXXX") || { rm -f "$evidence"; return 1; }
   preserve_evidence "$evidence"
 
-  if [ -e "$STATE/.afk" ] || [ -e "$STATE/.afk-daemon-terminal" ]; then
+  if alwayson_supported; then
+    if [ -e "$STATE/.afk" ] && ! "$SCRIPT_DIR/fm-daemon-launch.sh" afk-exit; then
+      lifecycle_ok=0
+      append_evidence lifecycle 'clearing the away-mode style flag failed; retry catch-up before ordinary work' "$evidence"
+    fi
+  elif [ -e "$STATE/.afk" ] || [ -e "$STATE/.afk-daemon-terminal" ]; then
     if ! "$SCRIPT_DIR/fm-afk-launch.sh" stop; then
       lifecycle_ok=0
       append_evidence lifecycle 'away-mode shutdown failed; lifecycle state preserved for retry' "$evidence"
+    elif [ -e "$STATE/.afk" ] && ! "$SCRIPT_DIR/fm-daemon-launch.sh" afk-exit; then
+      lifecycle_ok=0
+      append_evidence lifecycle 'clearing the away-mode style flag failed; retry catch-up before ordinary work' "$evidence"
     fi
   fi
 
@@ -204,6 +227,8 @@ main() {
   . "$SCRIPT_DIR/fm-wake-lib.sh"
   # shellcheck source=bin/fm-classify-lib.sh
   . "$SCRIPT_DIR/fm-classify-lib.sh"
+  # shellcheck source=bin/fm-backend.sh
+  . "$SCRIPT_DIR/fm-backend.sh"
 
   mkdir -p "$STATE" || return 1
   fm_lock_acquire_wait "$LOCK"

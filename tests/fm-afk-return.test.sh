@@ -19,16 +19,26 @@ install_runner() {  # <case-dir>
   cp "$ROOT/bin/fm-afk-return.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-classify-lib.sh" "$dir/bin/"
+  cp "$ROOT/bin/fm-backend.sh" "$dir/bin/"
+  cat > "$dir/bin/fm-harness.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${FM_TEST_HARNESS:-claude}"
+SH
+  cat > "$dir/bin/fm-daemon-launch.sh" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = afk-exit ] || exit 2
+printf 'afk-exit\n' >> "$FM_HOME/exit.log"
+if [ -e "$FM_HOME/state/.fail-afk-exit-once" ]; then
+  rm -f "$FM_HOME/state/.fail-afk-exit-once"
+  exit 1
+fi
+rm -f "$FM_HOME/state/.afk"
+SH
   cat > "$dir/bin/fm-afk-launch.sh" <<'SH'
 #!/usr/bin/env bash
 [ "${1:-}" = stop ] || exit 2
 printf 'stop\n' >> "$FM_HOME/stop.log"
-rm -f "$FM_HOME/state/.afk"
-if [ -e "$FM_HOME/state/.fail-terminal-stop-once" ]; then
-  rm -f "$FM_HOME/state/.fail-terminal-stop-once"
-  exit 1
-fi
-rm -f "$FM_HOME/state/.afk-daemon-terminal"
+rm -f "$FM_HOME/state/.afk-daemon-terminal" "$FM_HOME/state/.fake-daemon-live"
 SH
   cat > "$dir/bin/fm-wake-drain.sh" <<'SH'
 #!/usr/bin/env bash
@@ -41,7 +51,9 @@ SH
 
 run_return() {  # <case-dir> <mode>
   local dir=$1 mode=$2
-  FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" "$dir/bin/fm-afk-return.sh" "$mode" 2>&1
+  FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" \
+    FM_TEST_HARNESS="${FM_TEST_HARNESS:-claude}" FM_SUPERVISOR_BACKEND="${FM_TEST_BACKEND:-tmux}" \
+    "$dir/bin/fm-afk-return.sh" "$mode" 2>&1
 }
 
 seed_live_blocker() {  # <case-dir> <backend> <key>
@@ -85,7 +97,7 @@ test_return_gate_orders_catchup_before_bearings() {
     || fail "the separate drain annotation was not retained as away-return evidence"
   grep -F $'evidence\twedge\tfm away-mode inject WEDGED: 4555s undelivered' "$gate" >/dev/null || fail "wedge evidence was not retained in the durable gate"
   grep -F $'evidence\tescalation\trepair-task.status: blocked synthetic dependency' "$gate" >/dev/null || fail "buffered escalation evidence was not retained in the durable gate"
-  [ "$(wc -l < "$dir/home/stop.log" | tr -d ' ')" -eq 1 ] || fail "return begin did not stop away mode exactly once"
+  [ "$(wc -l < "$dir/home/exit.log" | tr -d ' ')" -eq 1 ] || fail "return begin did not clear the away-mode style flag exactly once"
 
   # The exact incident regression: Bearings is an ordinary request and must
   # refuse before reading/rendering while this shared gate remains open.
@@ -103,7 +115,7 @@ test_return_gate_orders_catchup_before_bearings() {
   rc=$?
   set -e
   [ "$rc" -eq 3 ] || fail "repeated begin should preserve the unresolved gate"
-  [ "$(wc -l < "$dir/home/stop.log" | tr -d ' ')" -eq 1 ] || fail "repeated begin stopped an already-stopped daemon twice"
+  [ "$(wc -l < "$dir/home/exit.log" | tr -d ' ')" -eq 1 ] || fail "repeated begin cleared an already-cleared style flag twice"
   wake_count=$(grep -c $'^evidence\twake\t1784074271' "$gate" || true)
   [ "$wake_count" -eq 1 ] || fail "repeated begin duplicated retained wake evidence ($wake_count copies)"
   [ "$(grep -c $'^evidence\twedge\t' "$gate" || true)" -eq 1 ] || fail "repeated begin duplicated retained wedge evidence"
@@ -186,33 +198,65 @@ test_away_reentry_refuses_pending_return_gate() {
   pass "away-mode re-entry fails closed while the prior return catch-up is pending"
 }
 
-test_check_retries_recorded_terminal_teardown() {
+test_check_retries_failed_style_flag_clear() {
   local dir gate out rc
-  dir="$TMP_ROOT/terminal-teardown"
+  dir="$TMP_ROOT/flag-clear-retry"
   install_runner "$dir"
   gate="$dir/home/state/.afk-return-catchup"
   date +%s > "$dir/home/state/.afk"
-  printf 'herdr\tsynthetic:pane\tsynthetic-workspace\n' > "$dir/home/state/.afk-daemon-terminal"
-  touch "$dir/home/state/.fail-terminal-stop-once"
+  touch "$dir/home/state/.fail-afk-exit-once"
 
   set +e
   out=$(run_return "$dir" begin)
   rc=$?
   set -e
-  [ "$rc" -eq 3 ] || fail "failed terminal teardown should keep return catch-up gated (rc=$rc): $out"
-  [ -e "$gate" ] || fail "failed terminal teardown cleared the return gate"
-  [ -e "$dir/home/state/.afk-daemon-terminal" ] || fail "failed terminal teardown discarded its durable record"
-  [ ! -e "$dir/home/state/.afk" ] || fail "failed terminal teardown did not preserve stop ordering"
+  [ "$rc" -eq 3 ] || fail "a failed style-flag clear should keep return catch-up gated (rc=$rc): $out"
+  [ -e "$gate" ] || fail "a failed style-flag clear cleared the return gate"
+  [ -e "$dir/home/state/.afk" ] || fail "a failed style-flag clear removed the flag anyway (must retry, not partially succeed)"
 
-  out=$(run_return "$dir" check) || fail "check did not retry recorded terminal teardown: $out"
-  [ ! -e "$dir/home/state/.afk-daemon-terminal" ] || fail "successful check left the terminal teardown record behind"
-  [ ! -e "$gate" ] || fail "successful terminal teardown retry left the return gate behind"
-  [ "$(wc -l < "$dir/home/stop.log" | tr -d ' ')" -eq 2 ] || fail "check did not retry terminal teardown exactly once"
-  pass "check retries recorded terminal teardown and keeps catch-up gated until success"
+  out=$(run_return "$dir" check) || fail "check did not retry the failed style-flag clear: $out"
+  [ ! -e "$dir/home/state/.afk" ] || fail "successful check left the away-mode style flag behind"
+  [ ! -e "$gate" ] || fail "successful style-flag-clear retry left the return gate behind"
+  [ "$(wc -l < "$dir/home/exit.log" | tr -d ' ')" -eq 2 ] || fail "check did not retry the style-flag clear exactly once"
+  pass "check retries a failed style-flag clear and keeps catch-up gated until success"
+}
+
+test_supported_return_preserves_daemon() {
+  local dir out
+  dir="$TMP_ROOT/supported-return"
+  install_runner "$dir"
+  date +%s > "$dir/home/state/.afk"
+  : > "$dir/home/state/.afk-daemon-terminal"
+  : > "$dir/home/state/.fake-daemon-live"
+  out=$(run_return "$dir" begin) || fail "supported return should clear cleanly: $out"
+  [ ! -e "$dir/home/state/.afk" ] || fail "supported return left the away style flag behind"
+  [ -e "$dir/home/state/.afk-daemon-terminal" ] || fail "supported return stopped the daemon terminal"
+  [ -e "$dir/home/state/.fake-daemon-live" ] || fail "supported return stopped the live daemon fixture"
+  [ ! -e "$dir/home/stop.log" ] || fail "supported return called the legacy daemon stop"
+  [ "$(cat "$dir/home/exit.log")" = afk-exit ] || fail "supported return did not clear the style flag"
+  pass "supported return clears delivery style without stopping the daemon"
+}
+
+test_unflipped_return_stops_daemon() {
+  local dir out
+  dir="$TMP_ROOT/unflipped-return"
+  install_runner "$dir"
+  date +%s > "$dir/home/state/.afk"
+  : > "$dir/home/state/.afk-daemon-terminal"
+  : > "$dir/home/state/.fake-daemon-live"
+  out=$(FM_TEST_HARNESS=pi run_return "$dir" begin) || fail "unflipped return should clear cleanly: $out"
+  [ ! -e "$dir/home/state/.afk" ] || fail "unflipped return left the away style flag behind"
+  [ ! -e "$dir/home/state/.afk-daemon-terminal" ] || fail "unflipped return retained the daemon terminal"
+  [ ! -e "$dir/home/state/.fake-daemon-live" ] || fail "unflipped return retained the live daemon fixture"
+  [ "$(cat "$dir/home/stop.log")" = stop ] || fail "unflipped return did not stop the daemon"
+  [ "$(cat "$dir/home/exit.log")" = afk-exit ] || fail "unflipped return did not clear the style flag"
+  pass "unflipped return stops the legacy daemon before clearing delivery style"
 }
 
 test_return_gate_orders_catchup_before_bearings
 test_explicit_reclassification_requires_durable_reason
 test_captain_decision_does_not_masquerade_as_firstmate_blocker
 test_away_reentry_refuses_pending_return_gate
-test_check_retries_recorded_terminal_teardown
+test_check_retries_failed_style_flag_clear
+test_supported_return_preserves_daemon
+test_unflipped_return_stops_daemon

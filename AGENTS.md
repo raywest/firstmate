@@ -100,7 +100,7 @@ state/               volatile runtime signals; gitignored
   x-outbox/          generated X-mode dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
   x-poll.error x-poll.claim-error  generated X-mode relay and offer-claim diagnostic dedupe markers
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
-  .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
+  .afk               durable away-mode delivery-style flag; present = patient batching and active wedge alerts, absent = present-mode cadence (set by /afk, cleared on user return)
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
   .hash-* .count-* .stale-* .stale-since-* .paused-* .wedge-escalations-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
@@ -130,8 +130,9 @@ A lock-refused session must not spawn, steer, merge, drain the wake queue, repai
 1. **Lock** - acquires the per-home session lock first, before anything mutates shared state.
 2. **Bootstrap** - detect-only checks (tool/version problems, GitHub auth, the worktree-tangle check, harness override, dispatch-profile validation, backlog-backend status) always run, but routine confirmations stay silent by default.
    When the lock could not be acquired, the worktree-tangle check uses read-only advisory wording without a checkout repair command.
-   The five MUTATING sweeps - non-executing legacy PR-check migration, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, and X-mode artifact writes - run only when this session actually holds the lock from step 1.
+   The six MUTATING sweeps - non-executing legacy PR-check migration, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, the always-on daemon liveness sweep, and X-mode artifact writes - run only when this session actually holds the lock from step 1.
    The secondmate liveness sweep deterministically guarantees every registered secondmate is actually running: it probes each live secondmate's endpoint for a real agent process (not just pane presence), respawns only on a confident dead reading, and reports only skipped or failed guarantees as `SECONDMATE_LIVENESS:` lines (`bin/fm-bootstrap.sh`; `bin/fm-backend.sh`'s `fm_backend_agent_alive`).
+   The always-on daemon liveness sweep (docs/alwayson-triage.md) guarantees the triage daemon is running on a supported claude/tmux or claude/herdr primary: it launches `bin/fm-daemon-launch.sh start` when dead, restarts the daemon when the captain's pane has moved (retarget), and takes over a harness-armed watcher still holding the singleton from before the daemon existed - all home-scoped, never touching another home's state.
 3. **Wake queue** - when locked, drains the durable wake queue and prints the raw records prominently as this turn's first work queue; a bounded, clearly labeled historical status-event annotation may follow a valid `signal` record but never replaces it or current-state reconciliation, and a lapsed watcher chain still surfaces here via the same guard alarm.
    When the lock could not be acquired, the queue is left untouched because another session owns it, and the guard's tangle/watcher-liveness alarms still print in read-only advisory mode without drain, supervision repair, or checkout repair commands.
 4. **Context digest** - the full contents of `data/projects.md`, `data/secondmates.md`, `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md`, each clearly delimited.
@@ -345,16 +346,18 @@ Queued wakes must be drained before other action, stale liveness must be repaire
 The spawn assertion and generated ship brief must both enforce that project work starts in an isolated disposable worktree, never the primary checkout.
 Harness-aware turn-end guards are structural backstops, not permission to omit the live cycle.
 
-### Away-mode stub
+### Always-on triage stub
 
+On a supported combination (a claude primary on tmux or herdr), the sub-supervisor daemon is the PERMANENT wake consumer: it is already running, and escalations arrive as sentinel-marked messages typed directly into this pane, in both delivery styles.
+`docs/alwayson-triage.md` owns the full mechanism; `/afk` only owns the delivery-STYLE switch (never harness/backend combinations the daemon does not yet support - AGENTS.md section 4's harness-verification discipline still governs those, which keep today's per-wake protocol).
 Invoke the `/afk` skill when the captain says `/afk`, says they are going afk, `state/.afk` exists, an incoming message starts with `FM_INJECT_MARK`, or any `state/.subsuper-*` marker is involved.
-The skill owns the daemon procedure; these safety facts remain inline:
+The skill owns the style-switch procedure; these safety facts remain inline:
 
-- Every daemon injection starts with `FM_INJECT_MARK` plus U+2063 INVISIBLE SEPARATOR, which distinguishes internal escalation from captain input.
-- While `state/.afk` exists, the daemon owns supervision; do not arm a separate watcher.
-- A marked message while away mode is active is internal escalation and does not exit away mode.
+- Every daemon injection starts with `FM_INJECT_MARK` plus U+2063 INVISIBLE SEPARATOR, which distinguishes internal escalation from captain input, in both delivery styles.
+- The daemon owns supervision permanently; do not arm a separate watcher regardless of `state/.afk`.
+- A marked message is internal escalation and never exits away mode.
 - A message beginning `/afk` refreshes away mode.
-- Any other unmarked message means the captain returned; load `/afk`, run the return owner, and do not process that message as ordinary work until its durable catch-up gate clears.
+- Any other unmarked message means the captain returned; load `/afk`, run the return owner, and do not process that message as ordinary work until its durable catch-up gate clears. The daemon itself is never stopped by a return - only its delivery style changes.
 - Away mode never expands approval authority for merges, ask-user findings, destructive actions, irreversible actions, or security-sensitive choices.
 - Bias ambiguous input toward exit because a present captain takes precedence.
 

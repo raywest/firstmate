@@ -7,8 +7,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$REPO_ROOT}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DOC_DIR="$REPO_ROOT/docs/supervision-protocols"
+
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+FM_STATE_OVERRIDE="$STATE" . "$SCRIPT_DIR/fm-wake-lib.sh"
 
 HARNESS=
 READ_ONLY=0
@@ -80,8 +86,31 @@ if [ -z "$HARNESS" ]; then
   HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 fi
 
+# Always-on triage (fm-alwayson-triage-s5 phase 2): the daemon collapses the
+# per-harness wake protocol only on a verified combination - claude on tmux or
+# herdr, the daemon's own supported injection backends (bin/fm-supervise-daemon.sh
+# FM_SUPERVISOR_SUPPORTED_BACKENDS). Every other combination keeps today's block
+# unchanged, so this check gates a template swap, never a behavior change for an
+# unflipped harness/backend. FM_SUPERVISOR_BACKEND overrides auto-detection
+# (same override the daemon and launcher already honor), so a caller can pin the
+# backend explicitly instead of relying on the invoking shell's own TMUX/HERDR_ENV.
+FM_BACKEND="${FM_SUPERVISOR_BACKEND:-$(fm_backend_detect 2>/dev/null || printf '')}"
+ALWAYSON_SUPPORTED=0
+if [ "$HARNESS" = claude ]; then
+  case "$FM_BACKEND" in
+    tmux|herdr) ALWAYSON_SUPPORTED=1 ;;
+  esac
+fi
+
 case "$HARNESS" in
-  claude|codex|opencode|pi|grok) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
+  claude)
+    if [ "$ALWAYSON_SUPPORTED" -eq 1 ]; then
+      SNIPPET="$DOC_DIR/claude.md"
+    else
+      SNIPPET="$DOC_DIR/claude-legacy.md"
+    fi
+    ;;
+  codex|opencode|pi|grok) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
   *) HARNESS=unknown; SNIPPET="$DOC_DIR/unknown.md" ;;
 esac
 [ -f "$SNIPPET" ] || SNIPPET="$DOC_DIR/unknown.md"
@@ -117,6 +146,17 @@ render_snippet() {
 repair_line() {
   if [ "$READ_ONLY" -eq 1 ]; then
     printf '%s\n' 'Watcher repair belongs to the session holding the fleet lock; do not drain, arm, or repair from this read-only session.'
+    return 0
+  fi
+  if [ "$ALWAYSON_SUPPORTED" -eq 1 ]; then
+    # The daemon owns the watcher in BOTH delivery styles (always-on triage
+    # spec section 6), so the afk/present repair split collapses into one
+    # instruction: ensure the always-running daemon, never re-arm a watcher.
+    prefix=
+    if [ "$QUEUE_PENDING" -eq 1 ]; then
+      prefix='After draining queued wakes, '
+    fi
+    printf '%sensure the daemon with bin/fm-daemon-launch.sh start; never re-arm bin/fm-watch-arm.sh or use shell &.\n' "$prefix"
     return 0
   fi
   if [ "$AFK" -eq 1 ]; then
@@ -155,6 +195,10 @@ repair_line() {
 }
 
 ordinary_wake_line() {
+  if [ "$ALWAYSON_SUPPORTED" -eq 1 ]; then
+    printf '%s\n' '- Ordinary wake: escalations arrive as marked messages in this pane; drain queued wakes, handle it, then end the turn. Do not arm watchers.'
+    return 0
+  fi
   case "$HARNESS" in
     claude)
       printf '%s\n' '- Ordinary wake: re-arm exactly one bin/fm-watch-arm.sh Claude Code background task as directed below.'
@@ -192,10 +236,23 @@ if [ "$READ_ONLY" -eq 1 ]; then
 else
   printf '%s\n' '- Lock: held by this session; this session owns normal supervision unless away mode says otherwise.'
 fi
-if [ "$AFK" -eq 1 ]; then
-  printf '%s\n' '- Away mode: active; load /afk and keep normal harness supervision paused while the daemon owns the watcher.'
+if [ "$ALWAYSON_SUPPORTED" -eq 1 ]; then
+  if daemon_lock_held_by_live_daemon; then
+    printf '%s%s\n' '- Daemon: running pid=' "$(daemon_lock_pid 2>/dev/null || printf '?')"
+  else
+    printf '%s\n' '- Daemon: DOWN - ensure it with bin/fm-daemon-launch.sh start.'
+  fi
+  if [ "$AFK" -eq 1 ]; then
+    printf '%s\n' '- Away mode: active (delivery style only - the daemon above owns the watcher either way).'
+  else
+    printf '%s\n' '- Away mode: inactive (present-mode delivery style).'
+  fi
 else
-  printf '%s\n' '- Away mode: inactive.'
+  if [ "$AFK" -eq 1 ]; then
+    printf '%s\n' '- Away mode: active; load /afk and keep normal harness supervision paused while the daemon owns the watcher.'
+  else
+    printf '%s\n' '- Away mode: inactive.'
+  fi
 fi
 if [ "$X_MODE" -eq 1 ]; then
   printf '%s%s%s\n' '- X mode: active; source ' "$x_mode_env" ' before launching any watcher process so the 30s cadence is inherited.'

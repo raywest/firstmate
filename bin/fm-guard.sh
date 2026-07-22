@@ -158,10 +158,26 @@ fi
 
 [ -s "$FM_WAKE_QUEUE" ] && queue_pending=true
 
-# No fresh watcher with tasks in flight is the dangerous state: emit a prominent,
-# bordered banner FIRST so it reads as an alarm, not a buried stderr line. Later
-# calls in the same episode get a one-line reminder only.
-if [ "$watcher_fresh" = false ]; then
+# A live always-on triage daemon guarantees its child watcher restarts, so it
+# satisfies this guard through the brief gap between cycles the beacon-freshness
+# predicate alone would flag (fm-alwayson-triage-s5 phase 2) - same daemon-liveness
+# satisfier as the turn-end guard and continuity gate.
+daemon_alive=false
+daemon_lock_held_by_live_daemon && daemon_alive=true
+
+# Any of these records means a daemon has been part of this home's setup at some
+# point, so an unhealthy watcher with no live daemon here is specifically "the
+# daemon is down" - the new primary failure mode - not the generic watcher-armed
+# framing that never applied a daemon in the first place.
+daemon_expected=false
+if [ -d "$STATE/.supervise-daemon.lock" ] || [ -e "$STATE/.afk-daemon-terminal" ] || [ -e "$STATE/.afk" ]; then
+  daemon_expected=true
+fi
+
+# No fresh watcher AND no live daemon with tasks in flight is the dangerous
+# state: emit a prominent, bordered banner FIRST so it reads as an alarm, not a
+# buried stderr line. Later calls in the same episode get a one-line reminder only.
+if [ "$watcher_fresh" = false ] && [ "$daemon_alive" = false ]; then
   episode_key=$(fm_guard_stale_episode_key "$STATE")
   episode_key=${episode_key%$'\n'}
   print_full_banner=0
@@ -184,9 +200,14 @@ if [ "$watcher_fresh" = false ]; then
       --queue-pending "$queue_arg" \
       --repair-line 2>/dev/null || printf '%s\n' 'Repair missing watcher supervision according to the session-start operating block.')
     rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+    if [ "$daemon_expected" = true ]; then
+      title='THE ALWAYS-ON DAEMON IS DOWN - SUPERVISION IS OFF'
+    else
+      title='WATCHER DOWN - SUPERVISION IS OFF'
+    fi
     {
       printf '●%s\n' "$rule"
-      printf '●  WATCHER DOWN - SUPERVISION IS OFF\n'
+      printf '●  %s\n' "$title"
       printf '●  %s task(s) in flight, but no watcher has a fresh beacon (last beat: %s, grace %ss).\n' "$in_flight" "$beacon_desc" "$GRACE"
       if [ "$READ_ONLY" -eq 1 ]; then
         printf '●  This read-only session should report the lapse, not repair it.\n'
@@ -205,6 +226,15 @@ else
   # Healthy again while work is still in flight: end the episode so a later
   # restale re-prints the full banner.
   [ "$READ_ONLY" -eq 1 ] || fm_guard_clear_stale_banner
+fi
+
+# Present-mode wedge alerts skip the OS-level active alert on purpose (there is
+# a next turn to lean on there instead of afk's out-of-band channel), so the
+# durable marker is the primary signal - surface it on the very next guarded
+# turn instead of leaving it invisible until someone happens to look
+# (always-on triage spec section 3).
+if [ -s "$STATE/.subsuper-inject-wedged" ]; then
+  echo "WARNING: an escalation is undelivered (state/.subsuper-inject-wedged) - see the marker for buffered content." >&2
 fi
 
 # Queued wakes are an independent hazard; warn whenever they are pending, even if

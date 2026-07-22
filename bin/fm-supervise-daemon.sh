@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# fm-supervise-daemon.sh — presence-gated sub-supervisor (closes #27's P2).
+# fm-supervise-daemon.sh — the always-on triage daemon (fm-alwayson-triage-s5
+# phase 2; formerly a presence-gated away-mode-only sub-supervisor).
 #
 # Wraps bin/fm-watch.sh: runs it as a child, classifies each wake reason, and
 # either SELF-HANDLES the routine majority in bash (no firstmate turn) or
@@ -11,14 +12,19 @@
 # declared-pause recheck reach the LLM, and even then as one pre-read digest per
 # batch window.
 #
-# PRESENCE-GATING (the /afk contract). The daemon is the away-mode engine: it
-# injects ONLY when the durable away-mode flag state/.afk is present. Invoking
-# the /afk skill sets that flag and starts this daemon; any real (unmarked)
-# user message clears it and firstmate resumes full responsiveness.
-# When afk is off, normal fm-watch.sh always-on triage is the active mechanism.
-# Any buffered daemon escalations that remain while afk is off survive in
-# state/.subsuper-escalations and are flushed on the next "while you were out"
-# catch-up or when afk is re-entered.
+# PERMANENT WAKE CONSUMER, STYLE-SWITCHED BY /afk, on a supported claude/tmux
+# or claude/herdr primary. The daemon is started once (a session-start bootstrap
+# sweep, or the harness-native/terminal launch paths under
+# bin/fm-daemon-launch.sh) and never stops during normal operation - see
+# docs/alwayson-triage.md. The durable flag state/.afk no longer gates WHETHER
+# it injects; it only picks the delivery STYLE: away (long batch, OS-level
+# wedge alert, patient stale recheck) vs present (urgent-immediate + a short
+# routine batch, in-band wedge-marker surfacing only, first-sight stale
+# escalation). Invoking the /afk skill sets/clears that flag with
+# `bin/fm-daemon-launch.sh afk-enter`/`afk-exit`; it never starts or stops the
+# daemon itself. Unflipped combinations retain the legacy return stop. Any
+# buffered escalations that remain across an afk-exit survive in
+# state/.subsuper-escalations and flush on the next present-mode cycle.
 #
 # IN-BAND SENTINEL MARKER. Every daemon injection is prefixed with
 # FM_INJECT_MARK (U+2063 INVISIBLE SEPARATOR), a character a human cannot type
@@ -59,8 +65,8 @@
 # escalations before exit.
 #
 # Usage: fm-supervise-daemon.sh
-#          Long-lived background loop. Normally started by the /afk skill, which
-#          sets state/.afk first. Env knobs:
+#          Long-lived background loop. Normally started by the session-start
+#          bootstrap sweep; /afk controls state/.afk separately. Env knobs:
 #          FM_SUPERVISOR_TARGET     supervisor pane target (override; otherwise
 #                                   auto-discovered per backend - $TMUX_PANE
 #                                   under tmux, "<session>:<pane-id>" from
@@ -95,10 +101,7 @@
 #          FM_ESCALATE_BATCH_SECS_PRESENT  present-mode (afk inactive) routine
 #                                   batch window (default 30); a buffered urgent
 #                                   item still flushes immediately regardless of
-#                                   this window. INERT today: inject_msg's presence
-#                                   gate refuses whenever afk is inactive, so this
-#                                   knob is exercised by tests, not production, ahead
-#                                   of the phase that rewires that gate.
+#                                   this window.
 #          FM_WEDGE_DEMAND_INSPECT_COUNT  consecutive persistence-recheck wedge
 #                                   escalations (same pane) before the escalation
 #                                   carries a demand-deep-inspection marker
@@ -111,10 +114,15 @@
 #          FM_COMPOSER_IDLE_RE      empty-composer regex applied after dim-ghost
 #                                   and structural border stripping (default:
 #                                   bare prompt glyphs plus busy footers)
-#          FM_MAX_DEFER_SECS        max seconds a buffered escalation may sit
-#                                   undelivered before one normal flush attempt;
-#                                   if that cannot confirm a submit, a wedge
-#                                   alarm fires (default 300; 0 disables)
+#          FM_MAX_DEFER_SECS        afk-mode max seconds a buffered escalation
+#                                   may sit undelivered before one normal flush
+#                                   attempt; if that cannot confirm a submit, a
+#                                   wedge alarm fires (default 300; 0 disables)
+#          FM_MAX_DEFER_SECS_PRESENT  present-mode (afk inactive) max-defer
+#                                   threshold (default 900); its wedge alarm
+#                                   skips the OS-level active alert (there is a
+#                                   next turn to lean on) and relies on
+#                                   bin/fm-guard.sh surfacing the durable marker.
 #          FM_WEDGE_ALARM_CHANNEL   override config/wedge-alarm with a single
 #                                   active-alert directive for that wedge alarm
 #                                   (off|auto|osascript|herdr|command:<cmd>). An
@@ -194,10 +202,10 @@ INJECT_SKIP_DEFAULT="heartbeat"
 STALE_ESCALATE_SECS_DEFAULT=240
 ESCALATE_BATCH_SECS_DEFAULT=90
 # Present-mode (state/.afk absent) routine batch window - shorter than afk's,
-# so the fleet still feels live while coalescing bursts. INERT today: afk mode
-# (the daemon's only started mode) always uses ESCALATE_BATCH_SECS_DEFAULT
-# above regardless of urgency (housekeeping (1)); this knob is exercised
-# directly by tests ahead of the phase that flips inject_msg's presence gate.
+# so the fleet still feels live while coalescing bursts. afk mode always uses
+# ESCALATE_BATCH_SECS_DEFAULT above regardless of urgency (housekeeping (1));
+# present mode's two-tier cadence (an urgent item flushes immediately) uses
+# this window for routine-only buffers.
 ESCALATE_BATCH_SECS_PRESENT_DEFAULT=30
 HEARTBEAT_SCAN_SECS_DEFAULT=300
 HOUSEKEEPING_TICK_DEFAULT=15
@@ -211,6 +219,13 @@ WEDGE_DEMAND_INSPECT_COUNT_DEFAULT=3
 # the normal flush path and, if that cannot confirm a submit, raises a loud wedge
 # alarm. The escape hatch makes a guard false-positive visible instead of silent.
 MAX_DEFER_SECS_DEFAULT=300
+# Present-mode (state/.afk absent) max-defer threshold - longer than afk's,
+# because a present captain legitimately holds the composer for minutes
+# (always-on triage spec section 3). A present-mode max-defer alarm still
+# writes the durable marker and logs, but skips the OS-level active alert
+# (inject_wedge_alarm): the very next turn's bin/fm-guard.sh surfaces the
+# marker instead, since there IS a next turn to lean on (unlike afk mode).
+MAX_DEFER_SECS_PRESENT_DEFAULT=900
 WEDGE_ALARM_TIMEOUT_SECS_DEFAULT=10
 WEDGE_ALARM_LAST_EPOCH=0
 WEDGE_ALARM_NOTIFIER_PID=
@@ -440,17 +455,13 @@ classify_stale() {  # <window> <state>
     printf 'escalate|stale + terminal status: %s' "$last"
     return
   fi
-  # Non-terminal (or no status). AFK MODE (the only mode the daemon is ever
-  # started in today): defer to the persistence recheck, unchanged - housekeeping
-  # (2) ages the marker and escalates past FM_STALE_ESCALATE_SECS. PRESENT MODE
-  # (state/.afk absent) is the one deliberate mode-split threshold (always-on
-  # triage spec section 8.2): adopt the always-on watcher's own first-sight
-  # semantics via the same crew_absorb_class the watcher uses for a stopped
-  # crew, and escalate promptly instead of waiting out the recheck. Still
-  # behind the mode flag: the daemon is only ever launched with afk active
-  # (fm-afk-start.sh sets it first), so this branch is exercised directly by
-  # tests today, not by a running daemon, until a later phase flips the
-  # presence gate to a delivery-style switch.
+  # Non-terminal (or no status). AFK MODE: defer to the persistence recheck,
+  # unchanged - housekeeping (2) ages the marker and escalates past
+  # FM_STALE_ESCALATE_SECS. PRESENT MODE (state/.afk absent) is the one
+  # deliberate mode-split threshold (always-on triage spec section 8.2): adopt
+  # the always-on watcher's own first-sight semantics via the same
+  # crew_absorb_class the watcher uses for a stopped crew, and escalate
+  # promptly instead of waiting out the recheck.
   if ! afk_active "$state"; then
     class=$(crew_absorb_class "$task")
     case "$class" in
@@ -966,7 +977,11 @@ wedge_alarm_notify() {  # <summary> <marker>
 inject_wedge_alarm() {  # <state> <age-seconds>
   local state=$1 age=$2 marker target backend max_defer now notify=1
   marker="$state/.subsuper-inject-wedged"
-  max_defer="${FM_MAX_DEFER_SECS:-$MAX_DEFER_SECS_DEFAULT}"
+  if afk_active "$state"; then
+    max_defer="${FM_MAX_DEFER_SECS:-$MAX_DEFER_SECS_DEFAULT}"
+  else
+    max_defer="${FM_MAX_DEFER_SECS_PRESENT:-$MAX_DEFER_SECS_PRESENT_DEFAULT}"
+  fi
   # Re-alarm at most once per max-defer window so a long wedge does not spam.
   if [ "$(_file_age "$marker")" -lt "$max_defer" ]; then
     return 0
@@ -996,8 +1011,11 @@ inject_wedge_alarm() {  # <state> <age-seconds>
   # every non-tmux backend), this can reach the captain even when every pane and
   # its backend status-line is unreadable - the gap the 2026-07-10 overnight
   # incident fell through. Configurable and best-effort; the marker above stays
-  # the durable record whether or not any channel fires.
-  if [ "$notify" -eq 1 ]; then
+  # the durable record whether or not any channel fires. Present mode reserves
+  # the OS-level active alert for afk (there is no next turn to lean on there);
+  # in present mode the marker + log are the signal, surfaced on the very next
+  # turn by bin/fm-guard.sh (always-on triage spec section 3).
+  if [ "$notify" -eq 1 ] && afk_active "$state"; then
     wedge_alarm_notify "away-mode escalations WEDGED ${age}s undelivered - see $marker" "$marker"
   fi
 }
@@ -1015,17 +1033,14 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 
 # --- housekeeping (runs every tick while the watcher is mid-cycle) ----------
 # Four cheap jobs, each guarded so an empty/quiet fleet costs near zero:
-#  1) batch flush: AFK MODE (state/.afk present, the only mode the daemon is
-#     ever started in today) keeps its single ESCALATE_BATCH_SECS window,
-#     unchanged, regardless of urgency. PRESENT MODE (afk absent) is the
-#     two-tier cadence (always-on triage spec section 3): any buffered urgent
-#     item flushes immediately; a routine-only buffer waits out the shorter
-#     ESCALATE_BATCH_SECS_PRESENT window. Inert in production today - inject_msg's
-#     presence gate still refuses whenever afk is inactive - so this branch is
-#     exercised directly by tests ahead of the phase that rewires that gate.
-#  1b) max-defer escape: if the buffer is STILL undelivered past MAX_DEFER_SECS,
-#     attempt one normal delivery; if it cannot confirm, raise the wedge alarm.
-#     Never silently defer forever.
+#  1) batch flush: AFK MODE (state/.afk present) keeps its single
+#     ESCALATE_BATCH_SECS window, unchanged, regardless of urgency. PRESENT
+#     MODE (afk absent) is the two-tier cadence (always-on triage spec
+#     section 3): any buffered urgent item flushes immediately; a routine-only
+#     buffer waits out the shorter ESCALATE_BATCH_SECS_PRESENT window.
+#  1b) max-defer escape: if the buffer is STILL undelivered past the
+#     mode-appropriate max-defer threshold, attempt one normal delivery; if it
+#     cannot confirm, raise the wedge alarm. Never silently defer forever.
 #  2) stale recheck: for each pending stale marker past STALE_ESCALATE_SECS,
 #     re-peek the pane; still idle -> escalate (wedge, with a consecutive
 #     escalation count and a demand-deep-inspection marker at
@@ -1065,9 +1080,16 @@ housekeeping() {  # <state>
 
   # (1b) max-defer escape. If anything is still buffered past MAX_DEFER_SECS,
   # retry the normal delivery path. If that still cannot confirm, raise a loud
-  # wedge alarm while preserving the buffer.
-  max_defer=${FM_MAX_DEFER_SECS:-$MAX_DEFER_SECS_DEFAULT}
-  if afk_active "$state" && [ "$max_defer" -gt 0 ] && [ -s "$state/.subsuper-escalations" ]; then
+  # wedge alarm while preserving the buffer. Mode-aware threshold (always-on
+  # triage spec section 3): present mode uses a longer defer (a present captain
+  # legitimately holds the composer for minutes) and its wedge alarm skips the
+  # OS-level active alert - see inject_wedge_alarm.
+  if afk_active "$state"; then
+    max_defer=${FM_MAX_DEFER_SECS:-$MAX_DEFER_SECS_DEFAULT}
+  else
+    max_defer=${FM_MAX_DEFER_SECS_PRESENT:-$MAX_DEFER_SECS_PRESENT_DEFAULT}
+  fi
+  if [ "$max_defer" -gt 0 ] && [ -s "$state/.subsuper-escalations" ]; then
     oldest=$(_oldest_line_age "$state/.subsuper-escalations")
     # Throttle the alarm to once per max-defer window (the wedge marker doubles
     # as the throttle). A successful flush clears the buffer; a failed one alarms
@@ -1220,10 +1242,11 @@ window_for_task() {  # <task-key> [state]
 inject_msg() {  # <message> [state]
   local msg=$1 state target backend retries sleep_s verdict composer
   state="${2:-$(_state_root)}"
-  # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
-  # daemon self-handles and stays quiet; firstmate drives the normal always-on
-  # watcher triage. Escalations buffer and survive for the next catch-up flush.
-  afk_active "$state" || { log "inject deferred: afk inactive"; return 1; }
+  # (1) The daemon is the PERMANENT wake consumer (always-on-triage spec
+  # section 2): injection is allowed in both afk and present mode. state/.afk is
+  # a pure delivery-STYLE switch (batching tier, cadence - housekeeping (1)),
+  # never a presence gate. The busy-guard and composer-guard below are the real
+  # safety checks in every mode.
   # (2) Single-line digest: collapse any embedded newlines so submission via
   # send-keys + Enter is unambiguous regardless of how the TUI composer treats
   # them. Then prepend the sentinel marker - firstmate's afk-exit contract
@@ -1493,6 +1516,14 @@ fm_super_main() {
     exit 1
   fi
 
+  # Persist the resolved supervisor pane so the session-start bootstrap sweep
+  # can detect a retarget (the captain's pane moved - new window, reboot) by
+  # comparing this record against a fresh discover_supervisor_target call from
+  # its own env, without reading this process's environment (always-on triage
+  # spec section 5). Best-effort: a write failure only degrades retarget
+  # detection, never the daemon's own operation.
+  printf '%s\t%s\n' "$BACKEND" "$TARGET" > "$STATE/.supervisor-target" 2>/dev/null || true
+
   local afk_status="off"
   afk_active "$STATE" && afk_status="on"
   log "daemon starting (pid $$); target=$TARGET; target_source=$target_source; backend=$BACKEND; backend_source=$backend_source; afk=$afk_status; inject_skip='${FM_INJECT_SKIP:-$INJECT_SKIP_DEFAULT}'; stale_escalate=${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}s; batch=${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}s"
@@ -1540,7 +1571,12 @@ fm_super_main() {
 
   start_watcher() {
     CUR_TMP=$(mktemp "${TMPDIR:-/tmp}/fm-watch.XXXXXX") || { log "error: mktemp failed; retrying in 5s"; sleep 5; return 1; }
-    "$WATCH" >"$CUR_TMP" 2>>"$WATCH_ERR" &
+    # FM_WATCH_DAEMON_OWNED=1 makes the child one-shot (enqueue + exit on every
+    # wake) UNCONDITIONALLY, not just while state/.afk exists: this daemon is the
+    # permanent wake consumer in both delivery styles (always-on triage spec
+    # section 2), so its child watcher must never self-triage even in present
+    # mode - exactly one triage layer runs, ever.
+    FM_WATCH_DAEMON_OWNED=1 "$WATCH" >"$CUR_TMP" 2>>"$WATCH_ERR" &
     WATCHER_PID=$!
   }
 

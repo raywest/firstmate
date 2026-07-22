@@ -21,6 +21,13 @@ JQ_DIR=$(command -v jq 2>/dev/null) && JQ_DIR=$(dirname "$JQ_DIR") || JQ_DIR=
 [ -n "$JQ_DIR" ] && BASE_PATH="$JQ_DIR:$BASE_PATH"
 TMP_ROOT=$(fm_test_tmproot fm-x-mode-tests)
 
+# This suite invokes the real bin/fm-bootstrap.sh, which now includes the
+# always-on triage daemon_liveness_sweep (fm-alwayson-triage-s5 phase 2). That
+# sweep only activates on a claude-harness + tmux/herdr-backend combination;
+# clearing these here keeps its backend detection independent of whatever
+# backend actually hosts this test runner's own shell.
+unset TMUX HERDR_ENV CMUX_WORKSPACE_ID
+
 # A fakebin `curl` that mimics the relay: it reads its behavior from env
 # (FAKE_POLL_CODE/FAKE_POLL_BODY/FAKE_ANSWER_CODE, and
 # FAKE_REQCTX_CODE/FAKE_REQCTX_BODY for the request-context lookup), records each

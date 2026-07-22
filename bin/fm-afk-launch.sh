@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# fm-afk-launch.sh - the historical CLI entry point for the away-mode daemon
-# TERMINAL lifecycle (launch / stop / reconcile a non-visible tracked terminal
-# per backend). bin/fm-daemon-launch.sh is now the single owner of that
-# lifecycle - see its header for the full contract, usage, supported backends,
-# and test seams - and this script only sources it and reuses its functions and
-# CLI dispatch unchanged, so every existing afk entry path, record file, and
-# rollback behavior stays byte-equivalent (data/fm-alwayson-triage-s5/report.md
-# phase 0). Kept as a separate file/name because /afk, the afk skill, and their
-# tests call it by this path.
+# fm-afk-launch.sh - the historical compatibility CLI entry point for daemon
+# terminal lifecycle operations. bin/fm-daemon-launch.sh is the single owner of
+# launch, stop, terminal reconciliation, and the separate afk delivery-style
+# toggles; see its header for the full contract, usage, supported backends, and
+# test seams. This shim remains because legacy afk paths and their tests call it
+# by this name.
 set -u
 
 FM_AFK_LAUNCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

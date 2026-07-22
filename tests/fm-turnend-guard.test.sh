@@ -93,6 +93,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-backend.sh" "$dir/bin/fm-backend.sh"
   mkdir -p "$dir/docs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
   chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
@@ -169,7 +170,10 @@ make_secondmate_linked_home_dir() {
 run_hook() {
   local dir=$1 stop_active=$2 home
   home=$(cd "$dir" && pwd)
-  printf '{"stop_hook_active":%s}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+  # Pin backend detection to an unsupported value: these fixtures exercise the
+  # legacy claude wake protocol, and fm_backend_detect otherwise reads this
+  # runner's own ambient TMUX/HERDR_ENV (fm-alwayson-triage-s5 phase 2).
+  printf '{"stop_hook_active":%s}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" FM_SUPERVISOR_BACKEND=zellij bash "$dir/bin/fm-turnend-guard.sh" 2>&1
 }
 
 nonexistent_pid() {
@@ -214,6 +218,48 @@ test_hook_blocks_when_fresh_beacon_has_no_live_lock() {
   expect_code 2 "$status" "hook must block when a fresh beacon has no live watcher lock"
   assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
   pass "fm-turnend-guard: blocks when a fresh beacon has no live watcher lock"
+}
+
+# The always-on triage daemon guarantees its child watcher restarts, so a live
+# identity-matched daemon lock alone satisfies the guard even with NO watcher
+# lock at all and no fresh beacon - the brief gap between the daemon's own child
+# cycles (fm-alwayson-triage-s5 phase 2, section 6 "daemon-alive-allows").
+test_hook_silent_with_live_daemon_lock_and_no_watcher() {
+  local dir pid identity out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-daemon-alive")
+  : > "$dir/state/task1.meta"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify live daemon holder"
+  }
+  mkdir -p "$dir/state/.supervise-daemon.lock"
+  printf '%s' "$pid" > "$dir/state/.supervise-daemon.lock/pid"
+  printf '%s' "$identity" > "$dir/state/.supervise-daemon.lock/pid-identity"
+  out=$(run_hook "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "hook must exit 0 with a live identity-matched daemon lock, even with no watcher lock at all"
+  [ -z "$out" ] || fail "hook produced output despite a live daemon lock: $out"
+  pass "fm-turnend-guard: daemon-alive-allows - silent no-op with a live daemon lock and no watcher lock"
+}
+
+# A dead or reused-pid daemon lock must NOT satisfy the guard: it is exactly
+# as untrustworthy as a dead watcher lock.
+test_hook_blocks_when_daemon_lock_is_dead() {
+  local dir dead out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-daemon-dead")
+  dead=$(nonexistent_pid)
+  : > "$dir/state/task1.meta"
+  mkdir -p "$dir/state/.supervise-daemon.lock"
+  printf '%s' "$dead" > "$dir/state/.supervise-daemon.lock/pid"
+  printf 'dead daemon identity' > "$dir/state/.supervise-daemon.lock/pid-identity"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "hook must block when the daemon lock pid is dead"
+  assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
+  pass "fm-turnend-guard: a dead daemon lock does not satisfy daemon-alive-allows"
 }
 
 test_hook_blocks_when_dead_lock_has_fresh_beacon() {
@@ -288,7 +334,7 @@ test_hook_blocks_from_fm_home_state() {
   home="$TMP_ROOT/hook-fm-home-op"
   mkdir -p "$home/state"
   : > "$home/state/task1.meta"
-  out=$(printf '{"stop_hook_active":false}' | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
+  out=$(printf '{"stop_hook_active":false}' | CLAUDECODE=1 FM_HOME="$home" FM_SUPERVISOR_BACKEND=zellij bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
   expect_code 2 "$status" "hook must inspect the active FM_HOME state dir"
   assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
   pass "fm-turnend-guard: blocks from active FM_HOME state, not only repo-root state"
@@ -326,7 +372,7 @@ test_hook_uses_state_override() {
   state="$TMP_ROOT/hook-state-override-active"
   mkdir -p "$home/state" "$state"
   : > "$state/task1.meta"
-  out=$(printf '{"stop_hook_active":false}' | CLAUDECODE=1 FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
+  out=$(printf '{"stop_hook_active":false}' | CLAUDECODE=1 FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=zellij bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
   expect_code 2 "$status" "hook must let FM_STATE_OVERRIDE win over FM_HOME/state"
   assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
   pass "fm-turnend-guard: uses FM_STATE_OVERRIDE ahead of FM_HOME/state"
@@ -908,6 +954,8 @@ test_predicate_healthy_fresh_beacon
 test_predicate_queue_pending_flag
 test_hook_silent_when_no_work_in_flight
 test_hook_blocks_when_fresh_beacon_has_no_live_lock
+test_hook_silent_with_live_daemon_lock_and_no_watcher
+test_hook_blocks_when_daemon_lock_is_dead
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
 test_hook_blocks_with_live_lock_and_stale_beacon

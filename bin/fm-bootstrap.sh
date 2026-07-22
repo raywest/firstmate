@@ -16,6 +16,7 @@
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
 #                 "SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed: <reason>",
+#                 "DAEMON_LIVENESS: daemon start failed: <reason>|retarget stop failed: <reason>|retarget start failed: <reason>",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
 #          When a RUNNING secondmate worktree is fast-forwarded to firstmate's
 #          own current default-branch commit (a purely LOCAL fast-forward, never
@@ -40,6 +41,13 @@
 #          skipped means the probe could not confidently classify the endpoint,
 #          and respawn failed means relaunch did not complete. Already-live and
 #          successfully respawned secondmates are silent.
+#          The always-on triage daemon liveness sweep (docs/alwayson-triage.md)
+#          guarantees bin/fm-supervise-daemon.sh is running on a supported
+#          combination (claude on tmux or herdr): it launches the daemon when
+#          dead, takes over a harness-armed watcher singleton left from before
+#          the daemon existed, and restarts the daemon when the captain's pane
+#          has moved (retarget). Silent unless a launch/stop attempt fails.
+#          A no-op on every other harness/backend combination.
 #          A TANGLE line means the firstmate primary checkout (FM_ROOT) is stranded
 #          on a feature branch instead of its default branch - a crewmate's work
 #          landed in the primary instead of its own worktree; restore it per the line.
@@ -66,9 +74,9 @@
 #          refresh relays any completed fm-fleet-sync.sh output before the
 #          aggregate timeout skip line with timeout and elapsed seconds.
 #          Set FM_FLEET_PRUNE=0 to skip branch pruning during that refresh.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the five MUTATING sweeps
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the six MUTATING sweeps
 #          (PR-check migration, secondmate_sync, secondmate_liveness_sweep,
-#          x_mode_setup, fleet_sync) while still printing every read-only detect line
+#          daemon_liveness_sweep, x_mode_setup, fleet_sync) while still printing every read-only detect line
 #          above; the TANGLE line switches to advisory-only wording with no
 #          checkout command. Used by
 #          fm-session-start.sh's read-only path when another live session holds
@@ -100,6 +108,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-wake-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-supervisor-target-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -423,6 +435,79 @@ secondmate_liveness_sweep() {
         ;;
     esac
   done
+  return 0
+}
+
+daemon_liveness_sweep() {
+  # Guarantees the always-on triage daemon (docs/alwayson-triage.md) is running
+  # on a supported combination - claude on tmux or herdr, the daemon's own
+  # supported injection backends (bin/fm-supervise-daemon.sh
+  # FM_SUPERVISOR_SUPPORTED_BACKENDS). Session-start (locked) only, and every
+  # action here is scoped to THIS home's own $STATE - never another home's.
+  # Deterministic and idempotent (firstmate-coding-guidelines): the emitted
+  # supervision block only verifies and reports afterward; this sweep is the
+  # one place that launches or restarts the daemon.
+  local harness backend lock_pid i out
+  local recorded_line recorded_backend recorded_target current_target current_backend
+  harness=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
+  [ "$harness" = claude ] || return 0
+  backend=${FM_SUPERVISOR_BACKEND:-$(fm_backend_detect 2>/dev/null || printf '')}
+  case "$backend" in
+    tmux|herdr) ;;
+    *) return 0 ;;
+  esac
+  [ -d "$STATE" ] || return 0
+
+  if ! daemon_lock_held_by_live_daemon; then
+    # Harness-armed-watcher takeover: a watcher singleton left over from before
+    # this home ran the always-on daemon (or from an unflipped session) blocks
+    # the daemon's own child from acquiring the lock. TERM exactly this home's
+    # recorded watcher pid, home-scoped by identity match, mirroring
+    # bin/fm-watch-arm.sh --restart's own home-scoped stop. Safe by the
+    # enqueue-before-suppress contract: fm-watch.sh advances its .seen-*
+    # suppression markers only after a wake is surfaced or intentionally
+    # absorbed, so a TERM'd watcher never loses a wake - the next watcher
+    # re-detects it.
+    lock_pid=$(cat "$STATE/.watch.lock/pid" 2>/dev/null || true)
+    if fm_pid_alive "$lock_pid" \
+      && fm_watcher_lock_matches_pid "$STATE" "$SCRIPT_DIR/fm-watch.sh" "$lock_pid" "$FM_HOME"; then
+      kill -TERM "$lock_pid" 2>/dev/null || true
+      i=0
+      while [ "$i" -lt 50 ] && fm_pid_alive "$lock_pid"; do
+        sleep 0.1
+        i=$((i + 1))
+      done
+    fi
+    if ! out=$("$SCRIPT_DIR/fm-daemon-launch.sh" start 2>&1); then
+      echo "DAEMON_LIVENESS: daemon start failed: $(first_line "$out")"
+    fi
+    return 0
+  fi
+
+  # Pane-retarget restart: the daemon injects into the pane it resolved at its
+  # own launch; if the captain's firstmate pane has since changed (new window,
+  # reboot), compare that recorded pane against a fresh discovery from THIS
+  # session's own env and restart the daemon with the current pane on a
+  # mismatch (stop flushes buffered escalations safely via the daemon's own
+  # trapped cleanup). This closes a gap the away-mode-only daemon never had
+  # (it always launched fresh from the current pane).
+  recorded_line=$(cat "$STATE/.supervisor-target" 2>/dev/null || true)
+  [ -n "$recorded_line" ] || return 0
+  recorded_backend=${recorded_line%%"$(printf '\t')"*}
+  recorded_target=${recorded_line#*"$(printf '\t')"}
+  current_backend=$(discover_supervisor_backend 2>/dev/null || true)
+  current_target=$(discover_supervisor_target 2>/dev/null || true)
+  [ -n "$current_target" ] || return 0
+  if [ "$recorded_backend" = "$current_backend" ] && [ "$recorded_target" = "$current_target" ]; then
+    return 0
+  fi
+  if ! out=$("$SCRIPT_DIR/fm-daemon-launch.sh" stop 2>&1); then
+    echo "DAEMON_LIVENESS: retarget stop failed: $(first_line "$out")"
+    return 0
+  fi
+  if ! out=$("$SCRIPT_DIR/fm-daemon-launch.sh" start 2>&1); then
+    echo "DAEMON_LIVENESS: retarget start failed: $(first_line "$out")"
+  fi
   return 0
 }
 
@@ -850,6 +935,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   secondmate_sync
   secondmate_liveness_sweep
   x_mode_setup
+  daemon_liveness_sweep
   fleet_sync
 fi
 exit 0

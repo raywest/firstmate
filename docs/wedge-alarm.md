@@ -1,7 +1,8 @@
 # Away-mode injection wedge alarm - active alert channels
 
-The away-mode sub-supervisor (`bin/fm-supervise-daemon.sh`) buffers escalations and injects them into firstmate's own pane.
-When injection cannot confirm a submit past `FM_MAX_DEFER_SECS` (the pane is genuinely busy or wedged, or its Enter is swallowed), `inject_wedge_alarm` raises a loud, rate-limited alarm so the stall never stays invisible.
+The always-on triage daemon (`bin/fm-supervise-daemon.sh`) buffers escalations and injects them into firstmate's own pane.
+In away mode, when injection cannot confirm a submit past `FM_MAX_DEFER_SECS` (the pane is genuinely busy or wedged, or its Enter is swallowed), `inject_wedge_alarm` raises a loud, rate-limited active alert so the stall never stays invisible.
+Present mode writes the same durable marker after `FM_MAX_DEFER_SECS_PRESENT` but deliberately relies on `bin/fm-guard.sh` to surface it on the next turn; [`alwayson-triage.md`](alwayson-triage.md) owns that mode matrix.
 
 ## Why an active channel beyond the status-line flash
 
@@ -11,7 +12,7 @@ On 2026-07-10 a `claude`-on-`herdr` primary wedged past max-defer overnight: the
 Nothing surfaces that marker until the next fleet action, so 20 escalations sat buffered for roughly 8.5 hours with no active alert.
 The classifier-side half of that incident shipped separately (PR #429); this is the alarm-channel half.
 
-`inject_wedge_alarm` now also calls `wedge_alarm_notify`, a configurable active alert that does not depend on any pane or its backend status-line.
+In away mode, `inject_wedge_alarm` also calls `wedge_alarm_notify`, a configurable active alert that does not depend on any pane or its backend status-line.
 The durable marker and the tmux flash are unchanged; the active alert is added alongside them.
 
 ## Channels

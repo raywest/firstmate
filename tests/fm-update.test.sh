@@ -143,6 +143,63 @@ test_reread_gate_is_instruction_only() {
   pass "T3 reread gates on instruction surface, nudge on advancement"
 }
 
+# --- T-daemon: restart-daemon reflects bin/ change AND daemon liveness ------
+# The always-on triage daemon (docs/alwayson-triage.md) is a long-lived bash
+# process, so it needs an explicit restart when bin/ changes underneath it -
+# the one stop the daemon is ever supposed to see outside a captain request or
+# a pane retarget (fm-alwayson-triage-s5 phase 2).
+test_restart_daemon_no_without_live_daemon() {
+  local w out
+  w=$(new_world t-daemon-no-live)
+  bump_origin "$w" instr
+
+  out=$(run_update "$w")
+
+  assert_contains "$out" "reread-firstmate: yes" "instruction change (incl. bin/) triggers reread"
+  assert_contains "$out" "restart-daemon: no" "no live daemon means nothing to restart"
+  pass "T-daemon restart-daemon stays no when no daemon is alive, even though bin/ changed"
+}
+
+test_restart_daemon_yes_with_live_daemon_and_bin_change() {
+  local w out pid identity
+  w=$(new_world t-daemon-live-bin)
+  bump_origin "$w" instr
+  sleep 60 &
+  pid=$!
+  identity=$(FM_STATE_OVERRIDE="$w/home/state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$pid") \
+    || fail "could not identify the live daemon fixture"
+  mkdir -p "$w/home/state/.supervise-daemon.lock"
+  printf '%s' "$pid" > "$w/home/state/.supervise-daemon.lock/pid"
+  printf '%s' "$identity" > "$w/home/state/.supervise-daemon.lock/pid-identity"
+
+  out=$(run_update "$w")
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+
+  assert_contains "$out" "restart-daemon: yes" "a live daemon plus a bin/ change must signal a restart"
+  pass "T-daemon restart-daemon is yes when the daemon is alive and bin/ changed"
+}
+
+test_restart_daemon_no_with_live_daemon_but_no_bin_change() {
+  local w out pid identity
+  w=$(new_world t-daemon-live-readme)
+  bump_origin "$w" readme
+  sleep 60 &
+  pid=$!
+  identity=$(FM_STATE_OVERRIDE="$w/home/state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$pid") \
+    || fail "could not identify the live daemon fixture"
+  mkdir -p "$w/home/state/.supervise-daemon.lock"
+  printf '%s' "$pid" > "$w/home/state/.supervise-daemon.lock/pid"
+  printf '%s' "$identity" > "$w/home/state/.supervise-daemon.lock/pid-identity"
+
+  out=$(run_update "$w")
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+
+  assert_contains "$out" "restart-daemon: no" "a README-only change must not restart a live daemon"
+  pass "T-daemon restart-daemon stays no when the daemon is alive but bin/ did not change"
+}
+
 # --- T4: dirty secondmate is skipped, its edit preserved -------------------
 test_dirty_secondmate_skipped() {
   local w out
@@ -293,6 +350,9 @@ test_unsafe_secondmate_home_skipped_before_git_update() {
 
 test_updates_main_and_secondmate
 test_reread_gate_is_instruction_only
+test_restart_daemon_no_without_live_daemon
+test_restart_daemon_yes_with_live_daemon_and_bin_change
+test_restart_daemon_no_with_live_daemon_but_no_bin_change
 test_dirty_secondmate_skipped
 test_diverged_secondmate_skipped
 test_idempotent_already_current

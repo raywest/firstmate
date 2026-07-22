@@ -16,7 +16,7 @@
 # confirmed, fm-send exits NON-ZERO so the caller knows the steer did not land
 # instead of silently leaving an unsubmitted instruction.
 # Submission dispatches through the target's recorded backend; the tmux adapter
-# shares its composer/submit core with the away-mode daemon via bin/fm-tmux-lib.sh.
+# shares its composer/submit core with the triage daemon via bin/fm-tmux-lib.sh.
 # Tune with FM_SEND_RETRIES (default 3) / FM_SEND_SLEEP (0.4).
 # Slash commands, and codex `$...` skill invocations resolved through harness
 # meta, get a longer pre-Enter settle so completion popups do not swallow Enter.
@@ -31,7 +31,7 @@
 # 0 disables) before returning: submit confirmation only proves the text was
 # accepted, but the harness needs a beat to spin up the turn before its busy
 # footer appears, so an immediate peek would otherwise see the stale idle pane.
-# The pause is fm-send-only; the shared submit core (used by the away-mode daemon,
+# The pause is fm-send-only; the shared submit core (used by the triage daemon,
 # which only needs "submitted") does not pay it, and the --key path is unaffected.
 set -eu
 

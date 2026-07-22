@@ -21,7 +21,13 @@ run_command() {
   local command=$1 rc=0
   : > "$OUT"
   : > "$ERR"
+  # Pin backend detection to an unsupported value by default: most of these
+  # fixtures exercise the legacy recovery wording, and fm_backend_detect
+  # otherwise reads this runner's own ambient TMUX/HERDR_ENV
+  # (fm-alwayson-triage-s5 phase 2). Tests exercising the always-on wording
+  # override FM_SUPERVISOR_BACKEND explicitly.
   FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
+    FM_SUPERVISOR_BACKEND="${FM_SUPERVISOR_BACKEND:-zellij}" \
     "$CHECK" --command "$command" > "$OUT" 2> "$ERR" || rc=$?
   return "$rc"
 }
@@ -54,6 +60,7 @@ test_gate_scope_and_recovery_exceptions() {
   expect_allow "fleet-script text as data" "rg -n 'bin/fm-send.sh' docs"
   expect_allow "wake drain recovery" 'bin/fm-wake-drain.sh'
   expect_allow "watch arm recovery" 'bin/fm-watch-arm.sh'
+  expect_allow "daemon launch recovery" 'bin/fm-daemon-launch.sh start'
   expect_allow "drain then arm recovery" 'bin/fm-wake-drain.sh; bin/fm-watch-arm.sh'
   expect_deny "unrelated fleet command" 'bin/fm-crew-state.sh task' 'fm-crew-state.sh'
   expect_deny "recovery bundled with unrelated fleet command" 'bin/fm-wake-drain.sh; bin/fm-send.sh task hi' 'fm-send.sh'
@@ -80,6 +87,43 @@ test_live_lock_allows_fleet_command_even_with_stale_beacon() {
   [ "$rc" -eq 0 ] || fail "identity-matched live lock must allow fleet command even when its beacon is stale"
   [ ! -s "$ERR" ] || fail "live-lock allow wrote stderr: $(cat "$ERR")"
   pass "continuity gate classifies the lock by live PID identity rather than beacon age"
+}
+
+# The always-on triage daemon guarantees its child watcher restarts, so a live
+# identity-matched daemon lock alone allows a fleet command even with no
+# watcher lock at all (fm-alwayson-triage-s5 phase 2, "daemon-alive-allows").
+test_live_daemon_lock_allows_fleet_command_with_no_watcher_lock() {
+  local holder identity rc=0
+  rm -rf "$STATE/.watch.lock"
+  sleep 300 &
+  holder=$!
+  identity=$(FM_STATE_OVERRIDE="$STATE" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$holder") \
+    || fail "could not identify live continuity fixture"
+  mkdir -p "$STATE/.supervise-daemon.lock"
+  printf '%s\n' "$holder" > "$STATE/.supervise-daemon.lock/pid"
+  printf '%s\n' "$identity" > "$STATE/.supervise-daemon.lock/pid-identity"
+
+  run_command 'bin/fm-crew-state.sh task' || rc=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  rm -rf "$STATE/.supervise-daemon.lock"
+  [ "$rc" -eq 0 ] || fail "identity-matched live daemon lock must allow a fleet command with no watcher lock at all"
+  [ ! -s "$ERR" ] || fail "live-daemon-lock allow wrote stderr: $(cat "$ERR")"
+  pass "continuity gate: daemon-alive-allows - a live daemon lock alone allows fleet commands"
+}
+
+# On a supported combination (claude on tmux/herdr), the deny recovery wording
+# points at ensuring the daemon, not re-arming a watcher it already owns
+# permanently.
+test_deny_reason_on_supported_backend_points_at_daemon() {
+  local rc=0 expected actual
+  rm -rf "$STATE/.watch.lock" "$STATE/.supervise-daemon.lock"
+  FM_SUPERVISOR_BACKEND=tmux run_command 'bin/fm-crew-state.sh task' || rc=$?
+  [ "$rc" -eq 2 ] || fail "deny must still fire on a supported backend with no live daemon (rc=$rc)"
+  expected="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; ensure the daemon with bin/fm-daemon-launch.sh start before running other fleet commands (blocked: fm-crew-state.sh)"
+  actual=$(jq -r '.systemMessage' "$ERR")
+  [ "$actual" = "$expected" ] || fail "supported-backend recovery guidance changed: $actual"
+  pass "continuity gate: a supported backend's deny reason points at ensuring the daemon"
 }
 
 test_child_worktree_and_malformed_input_fail_open() {
@@ -115,5 +159,7 @@ test_claude_hook_registration_preserves_stop_backstop() {
 
 test_gate_scope_and_recovery_exceptions
 test_live_lock_allows_fleet_command_even_with_stale_beacon
+test_live_daemon_lock_allows_fleet_command_with_no_watcher_lock
+test_deny_reason_on_supported_backend_points_at_daemon
 test_child_worktree_and_malformed_input_fail_open
 test_claude_hook_registration_preserves_stop_backstop

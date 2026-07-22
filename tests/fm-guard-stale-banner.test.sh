@@ -106,6 +106,58 @@ test_healthy_recovery_rearms_next_stale_episode() {
   pass "fm-guard stale banner: healthy recovery rearms the next stale episode"
 }
 
+# A live always-on triage daemon guarantees its child watcher restarts, so it
+# satisfies the guard through the brief gap between cycles that would otherwise
+# read as a stale beacon (fm-alwayson-triage-s5 phase 2).
+test_live_daemon_lock_suppresses_banner_despite_stale_beacon() {
+  local dir home out pid identity
+  dir=$(make_guard_case daemon-alive)
+  home=$(case_home "$dir")
+  sleep 60 &
+  pid=$!
+  identity=$(FM_STATE_OVERRIDE="$home/state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$pid") \
+    || fail "could not identify live daemon fixture"
+  mkdir -p "$home/state/.supervise-daemon.lock"
+  printf '%s' "$pid" > "$home/state/.supervise-daemon.lock/pid"
+  printf '%s' "$identity" > "$home/state/.supervise-daemon.lock/pid-identity"
+  out=$(run_guard_case "$dir")
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  [ -z "$out" ] || fail "guard should be silent with a live daemon lock despite a stale beacon, got: $out"
+  pass "fm-guard stale banner: a live daemon lock suppresses the banner despite a stale beacon"
+}
+
+# When a daemon-related record exists (this home has a daemon in its setup) but
+# no live daemon holds the lock, the banner names the daemon specifically as the
+# new primary failure mode instead of the generic watcher-armed framing.
+test_daemon_expected_but_dead_prints_daemon_down_title() {
+  local dir home out
+  dir=$(make_guard_case daemon-expected-dead)
+  home=$(case_home "$dir")
+  : > "$home/state/.afk-daemon-terminal"
+  out=$(run_guard_case "$dir")
+  [ "$(count_text "$out" "THE ALWAYS-ON DAEMON IS DOWN - SUPERVISION IS OFF")" -eq 1 ] \
+    || fail "a home with a daemon record but no live daemon did not print the daemon-down title: $out"
+  assert_not_contains "$out" "WATCHER DOWN - SUPERVISION IS OFF" \
+    "the generic watcher-down title should not also print alongside the daemon-down title"
+  pass "fm-guard stale banner: a daemon-expected home with no live daemon names the daemon, not the watcher"
+}
+
+# A present-mode wedge alarm skips the OS-level active alert on purpose
+# (fm-supervise-daemon.sh inject_wedge_alarm), so the guard must surface the
+# durable marker on the very next turn instead of leaving it invisible.
+test_wedge_marker_surfaced_independently() {
+  local dir home out
+  dir=$(make_guard_case wedge-marker)
+  home=$(case_home "$dir")
+  touch "$home/state/.last-watcher-beat"
+  printf 'fm away-mode inject WEDGED: 900s undelivered\n' > "$home/state/.subsuper-inject-wedged"
+  out=$(run_guard_case "$dir")
+  assert_contains "$out" "state/.subsuper-inject-wedged" \
+    "guard did not surface the undelivered-escalation wedge marker"
+  pass "fm-guard stale banner: surfaces an undelivered-escalation wedge marker on the next turn"
+}
+
 test_concurrent_same_episode_prints_one_full_banner() {
   local dir out_dir i pids pid all full reminders
   dir=$(make_guard_case concurrent-stale)
@@ -243,6 +295,9 @@ test_read_only_never_mutates_stale_banner_state_files() {
 test_first_stale_call_prints_full_banner
 test_repeated_same_episode_prints_reminder_only
 test_healthy_recovery_rearms_next_stale_episode
+test_live_daemon_lock_suppresses_banner_despite_stale_beacon
+test_daemon_expected_but_dead_prints_daemon_down_title
+test_wedge_marker_surfaced_independently
 test_concurrent_same_episode_prints_one_full_banner
 test_home_isolation
 test_queued_wake_warning_stays_independent
