@@ -593,6 +593,7 @@ test_housekeeping_wedge_counter_survives_capture_failure() {
   echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
   printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
   (
+    # shellcheck disable=SC2329 # housekeeping invokes this test seam indirectly.
     fm_backend_capture() { return 1; }
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
   ) || fail "capture-failure stale housekeeping failed"
