@@ -9,8 +9,9 @@
 # working signal is never silently swallowed. A declared external-wait pause is
 # the separate idle absorb case and re-surfaces only on its long bounded cadence,
 # although its initial no-verb status signal still surfaces in normal mode.
-# While state/.afk exists, the daemon owns triage and this watcher queues and exits
-# on every wake. Printed reason lines:
+# While state/.afk exists (or FM_WATCH_DAEMON_OWNED is set, see daemon_owned()
+# below), the daemon owns triage and this watcher queues and exits on every
+# wake. Printed reason lines:
 #   signal: <file>...      status/turn-end signals, surfaced when a listed status
 #                          has a captain-relevant verb OR a no-verb signal's crew
 #                          is not provably working, unless afk is active
@@ -138,9 +139,9 @@ BUSY_REGEX=${FM_BUSY_REGEX:-'esc (to )?interrupt|Working\.\.\.|Ctrl\+c: ?cancel'
 # paused/captain-held cadence, a provably-working stale past the threshold, or
 # anything unknown) is written to the durable queue and exits, which is what wakes
 # the LLM through the background-task completion. The same classifier
-# (fm-classify-lib.sh) backs the away-mode daemon; while state/.afk exists the
-# daemon owns triage, so this watcher reverts to one-shot (enqueue + exit on every
-# wake) and never double-triages - and never runs the costly provably-working read.
+# (fm-classify-lib.sh) backs the away-mode daemon; while daemon_owned() is true
+# the daemon owns triage, so this watcher reverts to one-shot (enqueue + exit on
+# every wake) and never double-triages - and never runs the costly provably-working read.
 STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provably-working stale escalates as a possible wedge
 # A crew that declared a pause is idling on a known external wait, so its stale
 # pane is absorbed rather than wedge-escalated.
@@ -164,11 +165,15 @@ _event_cap_key=""
 _event_cap_ok=0
 _event_cap_fails=0
 
-# afk_present: 0 while the away-mode flag exists. When set, the daemon wraps this
-# watcher and owns triage, so the watcher must behave one-shot (enqueue + exit on
-# every wake) and let the daemon classify - never absorb here, or the daemon's
-# digest/injection layer would never see the wake.
-afk_present() { [ -e "$STATE/.afk" ]; }
+# daemon_owned: 0 while the away-mode flag exists OR FM_WATCH_DAEMON_OWNED is
+# set (the daemon spawns this watcher as its child with that env var - DORMANT
+# today, nothing sets it yet). When true, a daemon wraps this watcher and owns
+# triage, so the watcher must behave one-shot (enqueue + exit on every wake)
+# and let the daemon classify - never absorb here, or the daemon's
+# digest/injection layer would never see the wake. Env-based (not a file probe)
+# so a standalone recovery arm (bin/fm-watch-arm.sh by hand) still gets full
+# self-triage with zero extra probes per wake.
+daemon_owned() { [ -e "$STATE/.afk" ] || [ -n "${FM_WATCH_DAEMON_OWNED:-}" ]; }
 
 # Append one line to the triage debug log explaining an absorbed (benign) wake,
 # size-capped so a long benign stretch cannot grow it without bound. Best-effort:
@@ -873,7 +878,7 @@ EOF
     # check is the only costly one (it may run a bounded no-mistakes call), so the ||
     # ordering evaluates it ONLY for a non-afk, no-captain-verb signal.
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
-    if afk_present || signal_reason_is_actionable $files || ! signal_crew_provably_working $files; then
+    if daemon_owned || signal_reason_is_actionable $files || ! signal_crew_provably_working $files; then
       appended=0
       appended_files=""
       while IFS=$(printf '\t') read -r sf sig f; do
@@ -955,7 +960,7 @@ EOF
             paused) handle_paused_stale "$w" "$task" "$h" ;;
             *)      clear_pause_tracking "$w" ;;
           esac
-        elif afk_present; then
+        elif daemon_owned; then
           # Daemon owns triage: one-shot per distinct stale hash, as before.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             fm_wake_append stale "$w" "stale: $w" || exit 1
@@ -1062,7 +1067,7 @@ EOF
       echo 0 > "$cf"
       rm -f "$ssf" "$ewf"
       task=$(window_to_task "$w" "$STATE")
-      if ! afk_present && status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")" && ! window_is_busy "$w" "$tail40"; then
+      if ! daemon_owned && status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")" && ! window_is_busy "$w" "$tail40"; then
         case "$(pause_state_class "$w" "$task")" in
           working) clear_pause_tracking "$w" ;;
           *)       handle_paused_stale "$w" "$task" "$h" ;;
@@ -1087,7 +1092,7 @@ EOF
     # no-change case (advance the schedule and back off exactly as wake() would,
     # without exiting); the away-mode daemon, when present, owns triage and wants
     # every heartbeat.
-    if afk_present; then
+    if daemon_owned; then
       fm_wake_append heartbeat heartbeat heartbeat || exit 1
       touch "$STATE/.last-heartbeat"
       wake "heartbeat"

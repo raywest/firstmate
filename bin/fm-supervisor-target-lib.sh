@@ -3,8 +3,9 @@
 #
 # The away-mode daemon (bin/fm-supervise-daemon.sh) must know which pane runs
 # firstmate itself, both to inject escalations into it and, for the daemon, to
-# validate that target at startup. The script-owned away launcher
-# (bin/fm-afk-launch.sh) must resolve the SAME captain pane BEFORE it creates a
+# validate that target at startup. The daemon terminal lifecycle owner
+# (bin/fm-daemon-launch.sh, reached through the historical bin/fm-afk-launch.sh
+# CLI entry point) must resolve the SAME captain pane BEFORE it creates a
 # separate, non-visible terminal for the daemon, so it can pass that pane in as
 # FM_SUPERVISOR_TARGET (otherwise the daemon, running in its own terminal, would
 # auto-discover its OWN pane and inject there instead of into the captain's).
