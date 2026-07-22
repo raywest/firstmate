@@ -1355,6 +1355,9 @@ write_task_meta() {
   } > "$STATE/$ID.meta"
 }
 
+# Grok and Kimi write metadata before hook setup, which may create a registry
+# token before a pointer refusal or config-recovery failure.
+# That preserved metadata lets fm-teardown remove the partial hook setup.
 case "$HARNESS" in
   grok*|kimi*) write_task_meta ;;
 esac
