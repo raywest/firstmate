@@ -143,6 +143,19 @@ test_classify_signal_declared_pause_exempt_from_provably_working_guard() {
   pass "a declared pause self-handles regardless of provably-working (its own long recheck cadence owns it)"
 }
 
+test_classify_signal_mixed_pause_and_stopped_crew_escalates() {
+  local dir state fakebin out
+  dir=$(make_supercase signal-mixed-pause-stopped)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  printf 'paused: awaiting the upstream release\n' > "$state/pw-a4-paused.status"
+  printf 'working: step 1\n' > "$state/pw-a4-stopped.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
+    classify_signal "$state/pw-a4-paused.status $state/pw-a4-stopped.status" "$state")
+  case "$out" in escalate\|*) ;; *) fail "a paused status exempted a separate stopped crew from the no-verb guard: $out" ;; esac
+  pass "a declared pause exempts only its own crew from the no-verb guard"
+}
+
 # Delta (b): first-sight stopped-crew escalation. This is the ONE deliberate
 # mode-split threshold (report section 8.2): afk mode keeps waiting out the
 # 240s persistence recheck (housekeeping (2)); present mode (state/.afk
@@ -284,9 +297,11 @@ test_handle_wake_paused_records_pause_marker() {
   printf 'paused: awaiting the vendor rate-limit reset\n' > "$state/held-w10.status"
   key=$(printf '%s' "held-w10" | tr ':/.' '___')
   date +%s > "$state/.subsuper-stale-$key"
+  printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
   FM_STATE_OVERRIDE="$state" handle_wake "stale: $win" "$state"
   [ -e "$state/.subsuper-paused-$key" ] || fail "pause marker not recorded by handle_wake"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "wedge marker not cleared when the crew declared a pause"
+  [ ! -e "$state/.subsuper-wedge-escalations-$key" ] || fail "pause transition retained the wedge escalation count"
   [ ! -s "$state/.subsuper-escalations" ] || fail "a declared pause escalated on the wake itself (should defer to the long recheck)"
   pass "handle_wake on a paused stale records a pause marker, drops the wedge marker, and does not escalate"
 }
@@ -544,6 +559,19 @@ test_housekeeping_wedge_counter_clears_on_resume() {
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
   [ ! -e "$state/.subsuper-wedge-escalations-$key" ] || fail "resuming did not clear the wedge escalation count"
   pass "a resumed wedge clears its escalation counter, so a later re-wedge starts counting from 1"
+}
+
+test_housekeeping_wedge_counter_clears_when_window_gone() {
+  local dir state fakebin key
+  dir=$(make_supercase stale-wedge-counter-gone)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  key=$(printf '%s' "gone-w1" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" housekeeping "$state"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "gone window retained its stale marker"
+  [ ! -e "$state/.subsuper-wedge-escalations-$key" ] || fail "gone window retained its wedge escalation count"
+  pass "a gone wedge clears its escalation counter"
 }
 
 test_housekeeping_resumed_stale_cleared() {
@@ -1890,6 +1918,7 @@ test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
 test_classify_signal_no_verb_not_working_escalates
 test_classify_signal_declared_pause_exempt_from_provably_working_guard
+test_classify_signal_mixed_pause_and_stopped_crew_escalates
 test_classify_stale_present_mode_first_sight_stopped_crew_escalates
 test_classify_stale_present_mode_provably_working_self
 test_classify_stale_present_mode_paused_crew_pauses
@@ -1908,6 +1937,7 @@ test_housekeeping_seeds_pause_marker_from_status
 test_housekeeping_persistent_stale_escalates
 test_housekeeping_persistent_stale_repeats_with_counter_and_demand_deep_inspection
 test_housekeeping_wedge_counter_clears_on_resume
+test_housekeeping_wedge_counter_clears_when_window_gone
 test_housekeeping_resumed_stale_cleared
 test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_paused_resumed_cleared

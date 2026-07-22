@@ -348,9 +348,17 @@ _collapse_newlines() {  # <text>
 # summary firstmate would otherwise have to re-read.
 
 classify_signal() {  # <reason-after-colon> <state>
-  local reason=$1 state=$2 f last distilled="" rel="" paused="" all_seen=1 task seen
+  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen guard_task guard_last
+  local -a guard_files=()
   for f in $reason; do
     [ -e "$f" ] || continue
+    guard_task=$(basename "$f")
+    guard_task=${guard_task%.status}
+    guard_task=${guard_task%.turn-ended}
+    guard_last=$(last_status_line "$state/$guard_task.status")
+    if ! status_is_paused "$guard_last"; then
+      guard_files+=("$f")
+    fi
     last=$(last_status_line "$f")
     [ -n "$last" ] || continue
     distilled="${distilled}$(basename "$f"): ${last} | "
@@ -359,7 +367,6 @@ classify_signal() {  # <reason-after-colon> <state>
       # long recheck cadence (housekeeping (2b)) - it is never subject to the
       # swallowed-finish guard below, so it does not count toward "rel" and
       # does not trigger the provably-working check either.
-      paused=1
       continue
     fi
     status_is_captain_relevant "$last" || continue
@@ -383,10 +390,9 @@ classify_signal() {  # <reason-after-colon> <state>
     # without a done:/needs-decision: line is never silently swallowed in
     # either mode. Cost: the same bounded fm-crew-state.sh read the watcher
     # already pays today, still only on no-verb signals.
-    if [ -n "$paused" ]; then
+    if [ "${#guard_files[@]}" -eq 0 ]; then
       printf 'self|routine signal: %s' "$distilled"
-    # shellcheck disable=SC2086  # $reason is a space-separated status-path list (ids carry no spaces)
-    elif signal_crew_provably_working $reason; then
+    elif signal_crew_provably_working "${guard_files[@]}"; then
       printf 'self|routine signal: %s' "$distilled"
     else
       printf 'escalate|no-verb signal, crew not provably working: %s' "$distilled"
@@ -496,6 +502,13 @@ stale_marker_remove() {  # <window> <state>
   rm -f "$state/.subsuper-stale-$key"
 }
 
+stale_tracking_remove() {  # <window> <state>
+  local win=$1 state=$2 key
+  stale_marker_remove "$win" "$state"
+  key=$(_stale_key "$(window_to_task "$win" "$state")")
+  rm -f "$state/.subsuper-wedge-escalations-$key"
+}
+
 # Pause marker: state/.subsuper-paused-<key> holds the epoch a declared pause was
 # first observed idle. Housekeeping ages it against PAUSE_RESURFACE_SECS (much
 # longer than a wedge) and re-surfaces the pause once per window. Recording is
@@ -531,7 +544,7 @@ reconcile_pause_tracking() {  # <window> <state> <last-status-line>
   marker="$state/.subsuper-paused-$key"
   watcher_key=$(_stale_key "$win")
   if status_is_paused "$last"; then
-    stale_marker_remove "$win" "$state"
+    stale_tracking_remove "$win" "$state"
     pause_marker_record "$win" "$state"
   elif [ -e "$marker" ] || [ -e "$state/.paused-$watcher_key" ]; then
     clear_pause_tracking "$win" "$state"
@@ -1072,7 +1085,7 @@ housekeeping() {  # <state>
     win=$(window_for_task "$key" "$state" 2>/dev/null || true)
     if [ -z "$win" ]; then
       # Window gone (task torn down): drop the marker, nothing to escalate.
-      rm -f "$marker"; continue
+      rm -f "$marker" "$state/.subsuper-wedge-escalations-$key"; continue
     fi
     task=$(window_to_task "$win" "$state")
     last=$(last_status_line "$state/$task.status")
@@ -1320,7 +1333,7 @@ handle_wake() {  # <reason> <state>
       # transitioned working->paused is not still wedge-aged. Only stale produces
       # this action.
       if [ "$kind" = "stale" ]; then
-        stale_marker_remove "$arg" "$state"
+        stale_tracking_remove "$arg" "$state"
         pause_marker_record "$arg" "$state"
       fi
       log "self-handle (paused): $reason -> $distilled"
