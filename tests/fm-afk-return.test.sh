@@ -19,9 +19,11 @@ install_runner() {  # <case-dir>
   cp "$ROOT/bin/fm-afk-return.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-classify-lib.sh" "$dir/bin/"
-  # The daemon lives on across a return (always-on triage phase 2): the return
-  # gate only clears the away/present style flag via fm-daemon-launch.sh
-  # afk-exit, never stops the daemon terminal.
+  cp "$ROOT/bin/fm-backend.sh" "$dir/bin/"
+  cat > "$dir/bin/fm-harness.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${FM_TEST_HARNESS:-claude}"
+SH
   cat > "$dir/bin/fm-daemon-launch.sh" <<'SH'
 #!/usr/bin/env bash
 [ "${1:-}" = afk-exit ] || exit 2
@@ -31,6 +33,12 @@ if [ -e "$FM_HOME/state/.fail-afk-exit-once" ]; then
   exit 1
 fi
 rm -f "$FM_HOME/state/.afk"
+SH
+  cat > "$dir/bin/fm-afk-launch.sh" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = stop ] || exit 2
+printf 'stop\n' >> "$FM_HOME/stop.log"
+rm -f "$FM_HOME/state/.afk-daemon-terminal" "$FM_HOME/state/.fake-daemon-live"
 SH
   cat > "$dir/bin/fm-wake-drain.sh" <<'SH'
 #!/usr/bin/env bash
@@ -43,7 +51,9 @@ SH
 
 run_return() {  # <case-dir> <mode>
   local dir=$1 mode=$2
-  FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" "$dir/bin/fm-afk-return.sh" "$mode" 2>&1
+  FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" \
+    FM_TEST_HARNESS="${FM_TEST_HARNESS:-claude}" FM_SUPERVISOR_BACKEND="${FM_TEST_BACKEND:-tmux}" \
+    "$dir/bin/fm-afk-return.sh" "$mode" 2>&1
 }
 
 seed_live_blocker() {  # <case-dir> <backend> <key>
@@ -211,8 +221,42 @@ test_check_retries_failed_style_flag_clear() {
   pass "check retries a failed style-flag clear and keeps catch-up gated until success"
 }
 
+test_supported_return_preserves_daemon() {
+  local dir out
+  dir="$TMP_ROOT/supported-return"
+  install_runner "$dir"
+  date +%s > "$dir/home/state/.afk"
+  : > "$dir/home/state/.afk-daemon-terminal"
+  : > "$dir/home/state/.fake-daemon-live"
+  out=$(run_return "$dir" begin) || fail "supported return should clear cleanly: $out"
+  [ ! -e "$dir/home/state/.afk" ] || fail "supported return left the away style flag behind"
+  [ -e "$dir/home/state/.afk-daemon-terminal" ] || fail "supported return stopped the daemon terminal"
+  [ -e "$dir/home/state/.fake-daemon-live" ] || fail "supported return stopped the live daemon fixture"
+  [ ! -e "$dir/home/stop.log" ] || fail "supported return called the legacy daemon stop"
+  [ "$(cat "$dir/home/exit.log")" = afk-exit ] || fail "supported return did not clear the style flag"
+  pass "supported return clears delivery style without stopping the daemon"
+}
+
+test_unflipped_return_stops_daemon() {
+  local dir out
+  dir="$TMP_ROOT/unflipped-return"
+  install_runner "$dir"
+  date +%s > "$dir/home/state/.afk"
+  : > "$dir/home/state/.afk-daemon-terminal"
+  : > "$dir/home/state/.fake-daemon-live"
+  out=$(FM_TEST_HARNESS=pi run_return "$dir" begin) || fail "unflipped return should clear cleanly: $out"
+  [ ! -e "$dir/home/state/.afk" ] || fail "unflipped return left the away style flag behind"
+  [ ! -e "$dir/home/state/.afk-daemon-terminal" ] || fail "unflipped return retained the daemon terminal"
+  [ ! -e "$dir/home/state/.fake-daemon-live" ] || fail "unflipped return retained the live daemon fixture"
+  [ "$(cat "$dir/home/stop.log")" = stop ] || fail "unflipped return did not stop the daemon"
+  [ "$(cat "$dir/home/exit.log")" = afk-exit ] || fail "unflipped return did not clear the style flag"
+  pass "unflipped return stops the legacy daemon before clearing delivery style"
+}
+
 test_return_gate_orders_catchup_before_bearings
 test_explicit_reclassification_requires_durable_reason
 test_captain_decision_does_not_masquerade_as_firstmate_blocker
 test_away_reentry_refuses_pending_return_gate
 test_check_retries_failed_style_flag_clear
+test_supported_return_preserves_daemon
+test_unflipped_return_stops_daemon

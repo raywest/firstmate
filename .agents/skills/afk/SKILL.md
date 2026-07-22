@@ -2,7 +2,7 @@
 name: afk
 description: >-
   Enter away-mode delivery style when the captain invokes /afk, says they are going afk, `state/.afk` exists, an incoming message starts with `FM_INJECT_MARK`, or any `state/.subsuper-*` marker is involved.
-  It sets a durable style flag so the always-on triage daemon batches escalations more patiently and self-handles routine wakes during walk-away stretches, then exits automatically when any real unmarked message returns firstmate to full per-wake responsiveness - the daemon itself keeps running throughout.
+  It sets a durable style flag so the supported always-on triage daemon batches escalations more patiently and self-handles routine wakes during walk-away stretches, while unflipped harnesses retain their legacy daemon lifecycle.
 user-invocable: true
 metadata:
   internal: true
@@ -58,7 +58,9 @@ No `/back` is needed. The first genuine message is the return signal:
 
 - A message **without** the sentinel marker and **not** starting with `/afk` -> the captain is back.
   Run `bin/fm-afk-return.sh` before acting on the message that brought the captain back.
-  That script owns clearing the away style flag (`bin/fm-daemon-launch.sh afk-exit`) - it never stops the daemon, which keeps running and simply switches to present-mode cadence - plus durable wake draining, escalation and wedge evidence, and the return-catch-up gate.
+  On a supported claude/tmux or claude/herdr primary, that script clears the away style flag (`bin/fm-daemon-launch.sh afk-exit`) without stopping the daemon, which keeps running and switches to present-mode cadence.
+  On every unflipped harness/backend combination, it retains the legacy daemon stop before clearing the same flag.
+  It also owns durable wake draining, escalation and wedge evidence, and the return-catch-up gate.
   If it reports a firstmate-actionable `blocked:` event, remediate it immediately through the normal lifecycle, or explicitly reclassify it with a durable reason and close its decision key with `resolved [key=...]`, then run `bin/fm-afk-return.sh check`.
   Full per-wake responsiveness resumes immediately (the daemon is already delivering present-mode digests); do not answer a Bearings request or perform any other ordinary captain work until the check exits successfully.
 - A message **with** the sentinel marker (`FM_INJECT_MARK`, U+2063 INVISIBLE SEPARATOR) -> it is a daemon escalation; stay afk and process it.

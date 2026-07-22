@@ -52,9 +52,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-afk-start.sh`        | Run the common sourceable daemon entry in the foreground                                |
 | `fm-daemon-launch.sh`    | Own the always-on daemon TERMINAL lifecycle and delivery-style toggles                  |
 | `fm-afk-launch.sh`       | Historical CLI entry point for the daemon terminal lifecycle; sources and delegates to `fm-daemon-launch.sh` |
-| `fm-afk-return.sh`       | Own delivery-style return, catch-up evidence, and the firstmate-actionable blocker gate |
+| `fm-afk-return.sh`       | Own return style, legacy daemon shutdown, catch-up evidence, and blocker gate  |
 | `fm-supervisor-target-lib.sh` | Resolve the shared supervisor target and backend for the daemon and launcher       |
-| `fm-supervise-daemon.sh` | Always-on triage daemon: self-handle routine wakes, escalate batched digests, alert on failed delivery |
+| `fm-supervise-daemon.sh` | Supported always-on triage daemon: self-handle routine wakes, escalate batched digests, alert on failed delivery |
 | `fm-crew-state.sh`       | Print one deterministic current-state line for a crew                                |
 | `fm-tangle-lib.sh`       | Shared default-branch resolution and primary-checkout tangle classification          |
 | `fm-supervision-lib.sh`  | Shared in-flight-work-without-fresh-watcher-beacon predicate                         |

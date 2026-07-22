@@ -75,7 +75,8 @@ Unsupported supervisor backends refuse at daemon startup.
 Stalled escalation delivery writes `state/.subsuper-inject-wedged` and, in away mode, attempts a configured backend-independent active alert after the mode's max-defer threshold instead of silently deferring forever; present mode skips that OS-level alert (there is a next turn to lean on) and relies on `bin/fm-guard.sh` surfacing the durable marker.
 The session-start bootstrap sweep guarantees the daemon is alive on a supported combination: it launches it when dead, takes over a harness-armed watcher singleton left from before the daemon existed, and restarts the daemon when the captain's pane has moved (retarget) - all home-scoped, never touching another home's state.
 `bin/fm-turnend-guard.sh`, `bin/fm-continuity-pretool-check.sh`, and `bin/fm-guard.sh` all treat a live, identity-matched daemon lock as satisfying continuity, alongside the pre-existing watcher-lock predicate.
-On an unmarked return, `bin/fm-afk-return.sh` clears the delivery-style flag (never stops the daemon) and owns durable catch-up evidence plus the fail-closed gate that keeps ordinary work behind every live firstmate-actionable blocker.
+On an unmarked return from that supported combination, `bin/fm-afk-return.sh` clears the delivery-style flag without stopping the daemon and owns durable catch-up evidence plus the fail-closed gate that keeps ordinary work behind every live firstmate-actionable blocker.
+Unflipped harness/backend combinations retain the legacy return stop.
 `fm-send.sh` selects a pre-Enter popup-settle for slash commands and for codex `$...` skill invocations using metadata-routed target `harness=` values, then adds its own `FM_SEND_SETTLE` pause after successful text sends so immediate peeks catch the receiving turn starting; the sub-supervisor uses only the shared submit core and does not pay that post-submit pause.
 
 ## Runtime session backends

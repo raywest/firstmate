@@ -12,18 +12,19 @@
 # declared-pause recheck reach the LLM, and even then as one pre-read digest per
 # batch window.
 #
-# PERMANENT WAKE CONSUMER, STYLE-SWITCHED BY /afk. The daemon is started once
-# (a session-start bootstrap sweep, or the harness-native/terminal launch paths
-# under bin/fm-daemon-launch.sh) and never stops during normal operation - see
+# PERMANENT WAKE CONSUMER, STYLE-SWITCHED BY /afk, on a supported claude/tmux
+# or claude/herdr primary. The daemon is started once (a session-start bootstrap
+# sweep, or the harness-native/terminal launch paths under
+# bin/fm-daemon-launch.sh) and never stops during normal operation - see
 # docs/alwayson-triage.md. The durable flag state/.afk no longer gates WHETHER
 # it injects; it only picks the delivery STYLE: away (long batch, OS-level
 # wedge alert, patient stale recheck) vs present (urgent-immediate + a short
 # routine batch, in-band wedge-marker surfacing only, first-sight stale
 # escalation). Invoking the /afk skill sets/clears that flag with
 # `bin/fm-daemon-launch.sh afk-enter`/`afk-exit`; it never starts or stops the
-# daemon itself. Any buffered escalations that remain across an afk-exit
-# survive in state/.subsuper-escalations and flush on the next present-mode
-# cycle.
+# daemon itself. Unflipped combinations retain the legacy return stop. Any
+# buffered escalations that remain across an afk-exit survive in
+# state/.subsuper-escalations and flush on the next present-mode cycle.
 #
 # IN-BAND SENTINEL MARKER. Every daemon injection is prefixed with
 # FM_INJECT_MARK (U+2063 INVISIBLE SEPARATOR), a character a human cannot type
