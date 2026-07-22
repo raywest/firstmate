@@ -430,13 +430,14 @@ GROK_HOME=              # optional Grok config home for firstmate's global grok 
 FM_SEND_RETRIES=3       # fm-send Enter-retry attempts after typing the line once
 FM_SEND_SLEEP=0.4       # seconds between fm-send submit checks
 FM_SEND_SETTLE=1        # seconds fm-send waits after a successful text submit; 0 disables
-# sub-supervisor (bin/fm-supervise-daemon.sh); presence-gated via /afk
+# sub-supervisor (bin/fm-supervise-daemon.sh); always-on, with state/.afk selecting delivery style
 FM_SUPERVISOR_BACKEND=             # optional supervisor pane backend override; tmux/herdr only, otherwise detects $TMUX_PANE then HERDR_ENV/HERDR_PANE_ID before tmux fallback
 FM_SUPERVISOR_TARGET=              # optional supervisor pane target override; tmux target or herdr <session>:<pane-id>, otherwise auto-detected
 FM_INJECT_SKIP=heartbeat           # |-prefixes force-self-handled bypassing classification; empty disables
 FM_ESCALATE_BATCH_SECS=90          # away-mode buffer window for batched escalation digests; 0 = flush immediately, regardless of urgency
-FM_ESCALATE_BATCH_SECS_PRESENT=30  # present-mode routine-item window; buffered urgent items flush immediately; inert until the daemon's presence gate permits present-mode delivery
+FM_ESCALATE_BATCH_SECS_PRESENT=30  # present-mode routine-item window; buffered urgent items flush immediately
 FM_MAX_DEFER_SECS=300              # max buffered escalation age before retry plus wedge alarm; 0 disables
+FM_MAX_DEFER_SECS_PRESENT=900      # present-mode max buffered escalation age before retry plus durable wedge marker; 0 disables
 FM_WEDGE_ALARM_CHANNEL=            # override config/wedge-alarm with one active-alert directive for the wedge alarm; off|auto|osascript|herdr|command:<cmd>; absent = auto (macOS -> an OS notification)
 FM_WEDGE_ALARM_EXEC=              # notifier seam: route every channel (osascript, herdr, command:) through this command as `<cmd> <channel> <summary>`; "discard" fires nothing; unset in production; the daemon defaults it to "discard" when sourced so no test posts a real notification (docs/wedge-alarm.md)
 FM_WEDGE_ALARM_TIMEOUT_SECS=10    # maximum seconds for each osascript, herdr, override, or command: notifier before its watchdog terminates it and continues to the next channel; invalid or zero values use 10
