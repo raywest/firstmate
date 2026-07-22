@@ -153,7 +153,7 @@ test_stale_pane_transient_persistent_resume() {
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "resumed stale marker was not cleared"
   [ ! -s "$state/.subsuper-escalations" ] || fail "resumed (busy) stale was escalated"
-  pass "lifecycle: stale pane transient self-handles, persistent escalates once and clears, resumed clears quietly"
+  pass "lifecycle: stale pane transient self-handles, persistent escalates once and resets for repeated escalation, resumed clears quietly"
 }
 
 test_routine_then_terminal_after_restart
