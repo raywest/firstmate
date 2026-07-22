@@ -88,8 +88,21 @@
 #                                   as a possible wedge (default 240)
 #          FM_PAUSE_RESURFACE_SECS  idle seconds before a declared external wait
 #                                   re-surfaces as a recheck (default 3600)
-#          FM_ESCALATE_BATCH_SECS   buffer window for batched escalation
-#                                   digests; 0 = flush immediately (default 90)
+#          FM_ESCALATE_BATCH_SECS   afk-mode buffer window for batched escalation
+#                                   digests; 0 = flush immediately (default 90).
+#                                   Applies regardless of urgency while afk is
+#                                   active (the captain's single-window sub-choice).
+#          FM_ESCALATE_BATCH_SECS_PRESENT  present-mode (afk inactive) routine
+#                                   batch window (default 30); a buffered urgent
+#                                   item still flushes immediately regardless of
+#                                   this window. INERT today: inject_msg's presence
+#                                   gate refuses whenever afk is inactive, so this
+#                                   knob is exercised by tests, not production, ahead
+#                                   of the phase that rewires that gate.
+#          FM_WEDGE_DEMAND_INSPECT_COUNT  consecutive persistence-recheck wedge
+#                                   escalations (same pane) before the escalation
+#                                   carries a demand-deep-inspection marker
+#                                   (default 3), mirroring fm-watch.sh's own knob.
 #          FM_HEARTBEAT_SCAN_SECS   cadence for the catch-all status scan
 #                                   (default 300)
 #          FM_HOUSEKEEPING_TICK     seconds between housekeeping passes while
@@ -180,8 +193,20 @@ FM_SUPERVISOR_SUPPORTED_BACKENDS="tmux herdr"
 INJECT_SKIP_DEFAULT="heartbeat"
 STALE_ESCALATE_SECS_DEFAULT=240
 ESCALATE_BATCH_SECS_DEFAULT=90
+# Present-mode (state/.afk absent) routine batch window - shorter than afk's,
+# so the fleet still feels live while coalescing bursts. INERT today: afk mode
+# (the daemon's only started mode) always uses ESCALATE_BATCH_SECS_DEFAULT
+# above regardless of urgency (housekeeping (1)); this knob is exercised
+# directly by tests ahead of the phase that flips inject_msg's presence gate.
+ESCALATE_BATCH_SECS_PRESENT_DEFAULT=30
 HEARTBEAT_SCAN_SECS_DEFAULT=300
 HOUSEKEEPING_TICK_DEFAULT=15
+# Consecutive wedge-escalation count (same pane, same persisting wedge) past
+# which housekeeping's persistence recheck stamps a "demand-deep-inspection"
+# marker onto the escalation itself, mirroring the always-on watcher's own
+# FM_WEDGE_DEMAND_INSPECT_COUNT (fm-watch.sh) so a re-wedging pane cannot keep
+# being re-absorbed as routine forever.
+WEDGE_DEMAND_INSPECT_COUNT_DEFAULT=3
 # Max time a buffered escalation may sit undelivered before the daemon retries
 # the normal flush path and, if that cannot confirm a submit, raises a loud wedge
 # alarm. The escape hatch makes a guard false-positive visible instead of silent.
@@ -323,12 +348,20 @@ _collapse_newlines() {  # <text>
 # summary firstmate would otherwise have to re-read.
 
 classify_signal() {  # <reason-after-colon> <state>
-  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen
+  local reason=$1 state=$2 f last distilled="" rel="" paused="" all_seen=1 task seen
   for f in $reason; do
     [ -e "$f" ] || continue
     last=$(last_status_line "$f")
     [ -n "$last" ] || continue
     distilled="${distilled}$(basename "$f"): ${last} | "
+    if status_is_paused "$last"; then
+      # A declared external-wait pause is a deliberate idle state with its own
+      # long recheck cadence (housekeeping (2b)) - it is never subject to the
+      # swallowed-finish guard below, so it does not count toward "rel" and
+      # does not trigger the provably-working check either.
+      paused=1
+      continue
+    fi
     status_is_captain_relevant "$last" || continue
     rel=1
     # Dedupe against the catch-all scan: if this status was already escalated
@@ -342,7 +375,22 @@ classify_signal() {  # <reason-after-colon> <state>
   # strip a trailing " | " separator so the distilled line is clean
   distilled="${distilled% | }"
   if [ -z "$rel" ]; then
-    printf 'self|routine signal: %s' "$distilled"
+    # No captain-relevant verb: a bare turn-end, a working: note, or (handled
+    # above) a declared pause. Apply the SAME provably-working guard the
+    # always-on watcher uses on a no-verb signal (signal_crew_provably_working,
+    # fm-classify-lib.sh) - unified across BOTH afk and present mode per the
+    # captain's 2026-07-21 sub-choice 3, so a crew that quietly finished
+    # without a done:/needs-decision: line is never silently swallowed in
+    # either mode. Cost: the same bounded fm-crew-state.sh read the watcher
+    # already pays today, still only on no-verb signals.
+    if [ -n "$paused" ]; then
+      printf 'self|routine signal: %s' "$distilled"
+    # shellcheck disable=SC2086  # $reason is a space-separated status-path list (ids carry no spaces)
+    elif signal_crew_provably_working $reason; then
+      printf 'self|routine signal: %s' "$distilled"
+    else
+      printf 'escalate|no-verb signal, crew not provably working: %s' "$distilled"
+    fi
   elif [ "$all_seen" = "1" ]; then
     # Every relevant status was already escalated by the catch-all scan;
     # self-handle to avoid a duplicate entry in the digest.
@@ -356,7 +404,7 @@ classify_signal() {  # <reason-after-colon> <state>
 # first sight of a non-terminal stale it returns "self" and the caller records a
 # timestamp marker; persistence is escalated by housekeeping's recheck, not here.
 classify_stale() {  # <window> <state>
-  local win=$1 state=$2 task last seen
+  local win=$1 state=$2 task last seen class
   task=$(window_to_task "$win" "$state")
   last=$(last_status_line "$state/$task.status")
   if [ -n "$last" ] && status_is_paused "$last"; then
@@ -379,8 +427,36 @@ classify_stale() {  # <window> <state>
     printf 'escalate|stale + terminal status: %s' "$last"
     return
   fi
-  # Non-terminal (or no status): defer to the persistence recheck. The caller
-  # records/refreshes the stale marker so housekeeping can age it.
+  # Non-terminal (or no status). AFK MODE (the only mode the daemon is ever
+  # started in today): defer to the persistence recheck, unchanged - housekeeping
+  # (2) ages the marker and escalates past FM_STALE_ESCALATE_SECS. PRESENT MODE
+  # (state/.afk absent) is the one deliberate mode-split threshold (always-on
+  # triage spec section 8.2): adopt the always-on watcher's own first-sight
+  # semantics via the same crew_absorb_class the watcher uses for a stopped
+  # crew, and escalate promptly instead of waiting out the recheck. Still
+  # behind the mode flag: the daemon is only ever launched with afk active
+  # (fm-afk-start.sh sets it first), so this branch is exercised directly by
+  # tests today, not by a running daemon, until a later phase flips the
+  # presence gate to a delivery-style switch.
+  if ! afk_active "$state"; then
+    class=$(crew_absorb_class "$task")
+    case "$class" in
+      working)
+        printf 'self|transient stale (%s, provably working): %s' "$win" "${last:-no status}"
+        return
+        ;;
+      paused)
+        printf 'pause|paused (awaiting external), rechecked on a long cadence: %s' "${last:-no status}"
+        return
+        ;;
+      *)
+        printf 'escalate|stopped crew (first sight, present mode): %s' "${last:-no status}"
+        return
+        ;;
+    esac
+  fi
+  # Defer to the persistence recheck. The caller records/refreshes the stale
+  # marker so housekeeping can age it.
   printf 'self|transient stale (%s): %s' "$win" "${last:-no status}"
 }
 
@@ -443,7 +519,7 @@ clear_pause_tracking() {  # <window> <state>
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   watcher_key=$(_stale_key "$win")
-  rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-stale-$key" \
+  rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-stale-$key" "$state/.subsuper-wedge-escalations-$key" \
     "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
     "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key"
 }
@@ -592,11 +668,20 @@ stale_window_is_busy() {  # <window> <state>
     | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
 }
 
-escalate_add() {  # <state> <distilled-item>
-  local state=$1 item=$2 buf
+escalate_add() {  # <state> <distilled-item> [urgency: urgent(default)|routine]
+  local state=$1 item=$2 urgency=${3:-urgent} buf
   buf="$state/.subsuper-escalations"
   [ -s "$buf" ] || _now > "${buf}.since"
   printf '%s\n' "$item" >> "$buf"
+  # The urgent marker is a fact about the WHOLE buffer (any urgent item present),
+  # never cleared by a later routine append - only a successful flush clears it.
+  # Present-mode two-tier delivery (section 3) reads this to flush immediately
+  # rather than waiting for the routine batch window; afk mode ignores it and
+  # keeps its single window (housekeeping (1)). Defaulting to "urgent" keeps
+  # every pre-existing 2-arg caller's meaning intact: they all post
+  # done:/needs-decision:/blocked:-shaped content, which the delivery spec
+  # already classes as urgent.
+  [ "$urgency" = urgent ] && : > "$state/.subsuper-escalations-urgent"
 }
 
 # Flush the escalation buffer as ONE batched, single-line digest to the
@@ -612,7 +697,11 @@ escalate_flush() {  # <state>
   # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
   # safety net, but keeping the source single-line makes the intent explicit).
   msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$n" "$msg")
-  if inject_msg "$msg" "$state"; then : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"; return 0; fi
+  if inject_msg "$msg" "$state"; then
+    : > "$buf"
+    rm -f "${buf}.since" "$state/.subsuper-inject-wedged" "$state/.subsuper-escalations-urgent"
+    return 0
+  fi
   return 1
 }
 
@@ -906,30 +995,51 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 
 # --- housekeeping (runs every tick while the watcher is mid-cycle) ----------
 # Four cheap jobs, each guarded so an empty/quiet fleet costs near zero:
-#  1) batch flush: if the escalation buffer's oldest content is older than
-#     ESCALATE_BATCH_SECS (or batching is disabled), inject one digest.
+#  1) batch flush: AFK MODE (state/.afk present, the only mode the daemon is
+#     ever started in today) keeps its single ESCALATE_BATCH_SECS window,
+#     unchanged, regardless of urgency. PRESENT MODE (afk absent) is the
+#     two-tier cadence (always-on triage spec section 3): any buffered urgent
+#     item flushes immediately; a routine-only buffer waits out the shorter
+#     ESCALATE_BATCH_SECS_PRESENT window. Inert in production today - inject_msg's
+#     presence gate still refuses whenever afk is inactive - so this branch is
+#     exercised directly by tests ahead of the phase that rewires that gate.
 #  1b) max-defer escape: if the buffer is STILL undelivered past MAX_DEFER_SECS,
 #     attempt one normal delivery; if it cannot confirm, raise the wedge alarm.
 #     Never silently defer forever.
 #  2) stale recheck: for each pending stale marker past STALE_ESCALATE_SECS,
-#     re-peek the pane; still idle -> escalate (wedge); resumed -> clear marker.
+#     re-peek the pane; still idle -> escalate (wedge, with a consecutive
+#     escalation count and a demand-deep-inspection marker at
+#     FM_WEDGE_DEMAND_INSPECT_COUNT, mirroring the watcher's own wedge timer) and
+#     reset the marker so a persisting wedge keeps re-aging; resumed/gone ->
+#     clear the marker and its escalation count.
 #  2b) pause re-surface: for each declared-pause marker past PAUSE_RESURFACE_SECS,
 #     re-peek; busy/gone -> clear; still idle + still paused -> escalate a recheck
 #     digest and reset the window (repeating bounded re-surface, never a wedge).
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs
+  local state=$1 now due f key task win marker age last max_defer oldest pause_secs n wedge_count_file
   now=$(_now)
   migrate_watcher_pause_markers "$state"
 
   # (1) batch flush
-  if [ "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" -le 0 ]; then
-    escalate_flush "$state" || true
-  else
-    due=$(_oldest_line_age "$state/.subsuper-escalations")
-    if [ "$due" -ge "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" ]; then
+  if afk_active "$state"; then
+    if [ "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" -le 0 ]; then
       escalate_flush "$state" || true
+    else
+      due=$(_oldest_line_age "$state/.subsuper-escalations")
+      if [ "$due" -ge "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" ]; then
+        escalate_flush "$state" || true
+      fi
+    fi
+  else
+    if [ -e "$state/.subsuper-escalations-urgent" ]; then
+      escalate_flush "$state" || true
+    else
+      due=$(_oldest_line_age "$state/.subsuper-escalations")
+      if [ "$due" -ge "${FM_ESCALATE_BATCH_SECS_PRESENT:-$ESCALATE_BATCH_SECS_PRESENT_DEFAULT}" ]; then
+        escalate_flush "$state" || true
+      fi
     fi
   fi
 
@@ -972,12 +1082,26 @@ housekeeping() {  # <state>
     fi
     age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
     [ "$age" -ge "${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}" ] || continue
+    wedge_count_file="$state/.subsuper-wedge-escalations-$key"
     stale_window_is_busy "$win" "$state"
     case "$?" in
-      0) rm -f "$marker" ;;
-      2) rm -f "$marker" ;;
-      *) escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"
-         stale_marker_remove "$win" "$state" ;;
+      0) rm -f "$marker" "$wedge_count_file" ;;
+      2) rm -f "$marker" "$wedge_count_file" ;;
+      *)
+        n=$(( $(cat "$wedge_count_file" 2>/dev/null || echo 0) + 1 ))
+        echo "$n" > "$wedge_count_file"
+        if [ "$n" -ge "${FM_WEDGE_DEMAND_INSPECT_COUNT:-$WEDGE_DEMAND_INSPECT_COUNT_DEFAULT}" ]; then
+          escalate_add "$state" "stale persisted ${age}s (possible wedge, escalation $n, demand-deep-inspection: same pane has wedge-escalated $n times in a row - do not re-absorb on the run-step/pane state alone): $win" routine
+        else
+          escalate_add "$state" "stale persisted ${age}s (possible wedge, escalation $n): $win" routine
+        fi
+        # Reset (not remove) the marker: a persisting wedge with an unchanged
+        # pane never gets another wake from the watcher (one-shot per distinct
+        # hash), so housekeeping's own aging loop is the ONLY mechanism that can
+        # re-check and re-escalate it. Removing the marker here would cap a
+        # genuinely stuck pane at exactly one escalation, ever.
+        _now > "$marker"
+        ;;
     esac
   done
 
@@ -1010,7 +1134,7 @@ housekeeping() {  # <state>
       *)
         last=$(last_status_line "$state/$task.status")
         if [ -n "$last" ] && status_is_paused "$last"; then
-          escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds): $win"
+          escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds): $win" routine
           _now > "$marker"
         else
           rm -f "$marker"
@@ -1030,7 +1154,7 @@ housekeeping() {  # <state>
       [ -n "$f" ] || continue
       seen="$state/.subsuper-seen-status-$(_stale_key "$task")"
       [ "$(cat "$seen" 2>/dev/null || true)" = "$last" ] && continue
-      escalate_add "$state" "$(basename "$f"): $last (catch-all scan)"
+      escalate_add "$state" "$(basename "$f"): $last (catch-all scan)" routine
       mark_status_seen "$state" "$task" "$last"
     done < <(scan_captain_relevant_statuses "$state")
   fi

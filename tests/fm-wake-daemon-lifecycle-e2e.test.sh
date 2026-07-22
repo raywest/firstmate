@@ -67,7 +67,13 @@ test_routine_then_terminal_after_restart() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" || fail "drain after routine signal failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null \
     || fail "routine signal was not queued"
-  FM_STATE_OVERRIDE="$state" handle_wake "signal: $status_file" "$state"
+  # A no-verb signal now applies the provably-working guard (unified across
+  # both modes, fm-alwayson-triage-s5 report section 8.1) - stub a
+  # provably-working verdict so this lifecycle case keeps exercising routine
+  # self-handling, distinct from that guard's own coverage in fm-daemon.test.sh.
+  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · e2e lifecycle stub' \
+    handle_wake "signal: $status_file" "$state"
   [ ! -s "$state/.subsuper-escalations" ] || fail "routine status was escalated by the daemon"
 
   # The watcher is now DOWN (one-shot exit). A terminal status lands while it is
@@ -113,6 +119,10 @@ test_stale_pane_transient_persistent_resume() {
   win="sess:fm-stale-w2"
   key=$(printf '%s' "stale-w2" | tr ':/.' '___')
   printf 'working: compiling\n' > "$state/stale-w2.status"
+  # afk mode: this phase covers the pre-existing transient/persistent/resume
+  # lifecycle, unaffected by delta 2's present-mode first-sight escalation
+  # (covered separately in fm-daemon.test.sh).
+  afk_enter "$state"
 
   # Transient: first stale observation self-handles and records a marker.
   stale_marker_record "$win" "$state"
@@ -123,14 +133,15 @@ test_stale_pane_transient_persistent_resume() {
   [ -e "$state/.subsuper-stale-$key" ] || fail "transient stale did not record a persistence marker"
 
   # Persistent: the marker ages past the threshold and the pane is still idle, so
-  # housekeeping escalates exactly once and clears the marker.
+  # housekeeping escalates exactly once (with a wedge escalation count) and
+  # resets the marker so a persisting wedge keeps re-aging (delta 3).
   printf 'idle prompt $\n' > "$dir/pane.txt"
   echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
   : > "$state/.subsuper-escalations" 2>/dev/null || true
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
-  [ -s "$state/.subsuper-escalations" ] || fail "persistent stale did not escalate"
-  [ ! -e "$state/.subsuper-stale-$key" ] || fail "stale marker not cleared after escalation"
+  grep -F "escalation 1" "$state/.subsuper-escalations" >/dev/null 2>&1 || fail "persistent stale did not escalate with a wedge count"
+  [ -e "$state/.subsuper-stale-$key" ] || fail "stale marker was removed instead of reset after escalation"
 
   # Resumed: a fresh transient marker but the pane is now busy -> housekeeping
   # clears the marker without escalating.

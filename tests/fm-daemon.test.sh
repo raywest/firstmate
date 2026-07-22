@@ -92,12 +92,115 @@ test_daemon_state_root_uses_fm_home() {
 }
 
 test_classify_routine_signal_self() {
-  local dir state out
+  local dir state fakebin out
   dir=$(make_supercase classify-routine)
-  state="$dir/state"
+  state="$dir/state"; fakebin="$dir/fakebin"
   printf 'working: step 1\nworking: step 2\n' > "$state/foo-x1.status"
-  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/foo-x1.status" "$state")
+  # A no-verb signal now applies the provably-working guard (unified per the
+  # captain's 2026-07-21 sub-choice 3) - stub a provably-working verdict so this
+  # regression case keeps exercising the self-handle path it always has.
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating' \
+    classify_signal "$state/foo-x1.status" "$state")
   case "$out" in self\|*) pass "routine signal self-handles" ;; *) fail "routine signal did not self-handle: $out" ;; esac
+}
+
+# --- Phase 1 (always-on triage prep) classifier deltas -----------------------
+# Section 8 of the fm-alwayson-triage-s5 report identifies three genuine
+# deltas between the always-on watcher's present-mode triage and the daemon's
+# afk-mode triage that the always-on design must close IN THE DAEMON, via the
+# shared classifier (no second policy copy). All three land here, still gated
+# behind state/.afk - the daemon is only ever started with afk active
+# (fm-afk-start.sh writes the flag first), so only delta (b) below actually
+# branches on mode; the others are exercised directly by these unit tests.
+
+# Delta (a): the no-verb-signal provably-working check, UNIFIED across BOTH
+# modes (captain-approved sub-choice 3, 2026-07-21) - a bare turn-end or
+# working: note now escalates in the daemon too when the crew is not provably
+# working, exactly like the always-on watcher's own signal_crew_provably_working
+# guard (fm-classify-lib.sh).
+test_classify_signal_no_verb_not_working_escalates() {
+  local dir state fakebin out
+  dir=$(make_supercase signal-not-working)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  printf 'working: step 1\n' > "$state/pw-a2.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
+    classify_signal "$state/pw-a2.status" "$state")
+  case "$out" in escalate\|*) ;; *) fail "no-verb signal with a not-provably-working crew self-handled: $out" ;; esac
+  pass "no-verb signal escalates when the crew is not provably working (swallowed-finish guard, unified per sub-choice 3)"
+}
+
+test_classify_signal_declared_pause_exempt_from_provably_working_guard() {
+  local dir state fakebin out
+  dir=$(make_supercase signal-pause-exempt)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  printf 'paused: awaiting the upstream release\n' > "$state/pw-a3.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · idle as expected' \
+    classify_signal "$state/pw-a3.status" "$state")
+  case "$out" in self\|*) ;; *) fail "a declared pause was subjected to the swallowed-finish guard: $out" ;; esac
+  pass "a declared pause self-handles regardless of provably-working (its own long recheck cadence owns it)"
+}
+
+# Delta (b): first-sight stopped-crew escalation. This is the ONE deliberate
+# mode-split threshold (report section 8.2): afk mode keeps waiting out the
+# 240s persistence recheck (housekeeping (2)); present mode (state/.afk
+# absent) adopts the always-on watcher's own first-sight semantics and
+# escalates promptly. Still behind the mode flag: production never runs
+# present mode today, so these directly exercise classify_stale's internal
+# branch rather than a running daemon.
+test_classify_stale_present_mode_first_sight_stopped_crew_escalates() {
+  local dir state fakebin out
+  dir=$(make_supercase stale-present-stopped)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  printf 'working: building\n' > "$state/ps-w1.status"
+  # afk deliberately NOT entered: present mode is the branch under test.
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · finished quietly' \
+    classify_stale "sess:fm-ps-w1" "$state")
+  case "$out" in escalate\|*) ;; *) fail "present-mode first-sight stopped crew did not escalate: $out" ;; esac
+  pass "present mode escalates a first-sight stopped crew promptly instead of waiting out the recheck"
+}
+
+test_classify_stale_present_mode_provably_working_self() {
+  local dir state fakebin out
+  dir=$(make_supercase stale-present-working)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  printf 'working: building\n' > "$state/ps-w2.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating' \
+    classify_stale "sess:fm-ps-w2" "$state")
+  case "$out" in self\|*) ;; *) fail "present-mode provably-working stale did not self-handle: $out" ;; esac
+  pass "present mode self-handles a provably-working stale, same as afk mode"
+}
+
+test_classify_stale_present_mode_paused_crew_pauses() {
+  local dir state fakebin out
+  dir=$(make_supercase stale-present-paused)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  printf 'working: building\n' > "$state/ps-w3.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: paused · source: none · declared external wait' \
+    classify_stale "sess:fm-ps-w3" "$state")
+  case "$out" in pause\|*) ;; *) fail "present-mode paused crew was not classified as pause: $out" ;; esac
+  pass "present mode classifies a paused crew's stale pane as pause, not a wedge"
+}
+
+# Regression: afk mode must be byte-identical to pre-phase-1 behavior for a
+# non-terminal stale - delta (b)'s mode-split must not leak into afk mode. No
+# FM_CREW_STATE_BIN stub here: afk_active short-circuits before the daemon
+# ever reads crew state, so the pre-existing (cheap) transient-defer path runs
+# exactly as it always has.
+test_classify_stale_afk_mode_still_defers_to_recheck() {
+  local dir state out
+  dir=$(make_supercase stale-afk-regression)
+  state="$dir/state"
+  printf 'working: building\n' > "$state/afk-r1.status"
+  afk_enter "$state"
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-afk-r1" "$state")
+  case "$out" in self\|*) ;; *) fail "afk-mode transient stale changed behavior: $out" ;; esac
+  pass "afk mode still defers a non-terminal stale to the persistence recheck (unchanged)"
 }
 
 test_classify_terminal_signal_escalates() {
@@ -131,6 +234,9 @@ test_stale_transient_self_records_marker() {
   state="$dir/state"
   printf 'working: building\n' > "$state/qux-w4.status"
   stale_marker_record "sess:fm-qux-w4" "$state"
+  # afk mode: unchanged - defers to the persistence recheck without ever
+  # reading crew state (see the present-mode delta 2 tests for the mode split).
+  afk_enter "$state"
   out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-qux-w4" "$state")
   case "$out" in self\|*) ;; *) fail "transient stale did not self-handle: $out" ;; esac
   key=$(printf '%s' "$(window_to_task "sess:fm-qux-w4")" | tr ':/.' '___')
@@ -212,12 +318,14 @@ test_handle_wake_terminal_signal_clears_pause_tracking() {
   watcher_key=$(printf '%s' "$win" | tr '.:/' '___')
   date +%s > "$state/.subsuper-paused-$key"
   date +%s > "$state/.subsuper-stale-$key"
+  echo 2 > "$state/.subsuper-wedge-escalations-$key"
   : > "$state/.paused-$watcher_key"
   : > "$state/.stale-$watcher_key"
   : > "$state/.wedge-escalations-$watcher_key"
   FM_STATE_OVERRIDE="$state" handle_wake "signal: $state/held-w10-terminal.status" "$state"
   [ ! -e "$state/.subsuper-paused-$key" ] || fail "terminal signal retained the daemon pause marker"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "terminal signal retained daemon stale tracking"
+  [ ! -e "$state/.subsuper-wedge-escalations-$key" ] || fail "terminal signal retained the daemon wedge escalation count"
   [ ! -e "$state/.paused-$watcher_key" ] || fail "terminal signal retained watcher pause tracking"
   [ ! -e "$state/.stale-$watcher_key" ] || fail "terminal signal retained watcher stale tracking"
   [ ! -e "$state/.wedge-escalations-$watcher_key" ] || fail "terminal signal retained watcher wedge tracking"
@@ -378,9 +486,64 @@ test_housekeeping_persistent_stale_escalates() {
   echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
-  [ -s "$state/.subsuper-escalations" ] || fail "persistent stale was not escalated"
-  [ ! -e "$state/.subsuper-stale-$key" ] || fail "stale marker not cleared after escalation"
-  pass "persistent stale escalates after threshold and clears its marker"
+  grep -F "escalation 1" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "persistent stale was not escalated with a wedge escalation count: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ -e "$state/.subsuper-stale-$key" ] \
+    || fail "stale persistence marker was removed instead of reset (a genuinely stuck pane would then escalate only once, ever)"
+  [ -e "$state/.subsuper-wedge-escalations-$key" ] || fail "wedge escalation count was not recorded"
+  pass "persistent stale escalates after threshold with a wedge escalation count, and resets its marker for a possible re-wedge"
+}
+
+# Delta (c): the wedge escalation counter + demand-deep-inspection carry-over
+# (report section 8.3). A pane that keeps re-wedging on an unchanged hash gets
+# no NEW wake from the watcher (one-shot per distinct stale hash), so
+# housekeeping's own persistence-recheck loop is the only mechanism that can
+# notice a repeat. Mirrors fm-watch.sh's wedge_timer_check: the count survives
+# across rounds and the FM_WEDGE_DEMAND_INSPECT_COUNT'th consecutive escalation
+# carries a demand-deep-inspection marker so the wake payload itself forces a
+# closer look instead of another routine supervision resume.
+test_housekeeping_persistent_stale_repeats_with_counter_and_demand_deep_inspection() {
+  local dir state fakebin win pane key n
+  dir=$(make_supercase stale-repeat-wedge)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-repeat-w1"; pane="$dir/pane.txt"
+  printf 'working\n' > "$state/repeat-w1.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "repeat-w1" | tr ':/.' '___')
+  for n in 1 2 3; do
+    echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+    : > "$state/.subsuper-escalations"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+      FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+    grep -F "escalation $n" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+      || fail "round $n did not carry escalation count $n: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+    [ -e "$state/.subsuper-stale-$key" ] \
+      || fail "round $n removed the persistence marker instead of resetting it for the next round"
+  done
+  grep -F "demand-deep-inspection" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "the 3rd consecutive wedge escalation did not carry a demand-deep-inspection marker"
+  pass "housekeeping's persistence recheck counts consecutive wedge escalations and demands deep inspection at the threshold"
+}
+
+test_housekeeping_wedge_counter_clears_on_resume() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase stale-wedge-counter-clears)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-clear-w1"; pane="$dir/pane.txt"
+  printf 'working\n' > "$state/clear-w1.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "clear-w1" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  [ -e "$state/.subsuper-wedge-escalations-$key" ] || fail "first escalation did not record a wedge count"
+  # The crew resumes: a busy pane clears both the persistence marker and count.
+  printf 'Working...\n' > "$pane"
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  [ ! -e "$state/.subsuper-wedge-escalations-$key" ] || fail "resuming did not clear the wedge escalation count"
+  pass "a resumed wedge clears its escalation counter, so a later re-wedge starts counting from 1"
 }
 
 test_housekeeping_resumed_stale_cleared() {
@@ -397,8 +560,9 @@ test_housekeeping_resumed_stale_cleared() {
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
   [ -e "$state/.subsuper-stale-$key" ] && fail "resumed stale marker was not cleared"
+  [ -e "$state/.subsuper-wedge-escalations-$key" ] && fail "resumed stale left a wedge escalation count behind"
   [ -s "$state/.subsuper-escalations" ] && fail "resumed stale was escalated"
-  pass "resumed (busy) stale clears its marker without escalating"
+  pass "resumed (busy) stale clears its marker and wedge escalation count without escalating"
 }
 
 test_housekeeping_herdr_persistent_stale_resolves_meta() {
@@ -424,8 +588,8 @@ test_housekeeping_herdr_persistent_stale_resolves_meta() {
     [ "$(fm_backend_busy_state herdr default:w1:p2)" = idle ] || fail "herdr busy stub did not report idle"
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
   ) || fail "herdr persistent stale housekeeping failed"
-  [ -s "$state/.subsuper-escalations" ] || fail "persistent herdr stale was not escalated"
-  [ ! -e "$state/.subsuper-stale-$key" ] || fail "herdr stale marker not cleared after escalation"
+  grep -F "escalation 1" "$state/.subsuper-escalations" >/dev/null 2>&1 || fail "persistent herdr stale was not escalated with a wedge count"
+  [ -e "$state/.subsuper-stale-$key" ] || fail "herdr stale marker was removed instead of reset"
   pass "persistent herdr stale resolves the target from metadata and escalates"
 }
 
@@ -508,8 +672,8 @@ test_housekeeping_orca_persistent_stale_resolves_terminal() {
     [ "$(fm_backend_busy_state orca term-orca-w8)" = idle ] || fail "Orca busy stub did not report idle"
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
   ) || fail "Orca persistent stale housekeeping failed"
-  [ -s "$state/.subsuper-escalations" ] || fail "persistent Orca stale was not escalated"
-  [ ! -e "$state/.subsuper-stale-$key" ] || fail "Orca stale marker not cleared after escalation"
+  grep -F "escalation 1" "$state/.subsuper-escalations" >/dev/null 2>&1 || fail "persistent Orca stale was not escalated with a wedge count"
+  [ -e "$state/.subsuper-stale-$key" ] || fail "Orca stale marker was removed instead of reset"
   pass "persistent Orca stale resolves the terminal from metadata"
 }
 
@@ -558,6 +722,70 @@ test_escalate_batch_age_uses_first_append() {
   pass "batch flush measures max-delay from the first append, not the last"
 }
 
+# --- escalate_add urgency + two-tier flush (report section 3, phase 1 prep) --
+# The urgency field and the present-mode two-tier cadence are INERT while afk
+# is the daemon's only started mode: afk mode keeps its single
+# ESCALATE_BATCH_SECS window regardless of urgency (sub-choice "afk keeps one
+# window"), and inject_msg's presence gate still refuses whenever afk is
+# inactive, so present mode can never actually deliver anything yet. These
+# tests exercise the timing DECISION directly via a stubbed inject_msg, ahead
+# of the phase that rewires that presence gate.
+
+test_escalate_add_urgency_default_and_override() {
+  local dir state
+  dir=$(make_supercase escalate-urgency)
+  state="$dir/state"
+  escalate_add "$state" "possible wedge item" routine
+  [ ! -e "$state/.subsuper-escalations-urgent" ] || fail "a routine-tagged escalation set the urgent marker"
+  escalate_add "$state" "done: PR 1"
+  [ -e "$state/.subsuper-escalations-urgent" ] || fail "escalate_add's default urgency did not mark the buffer urgent"
+  pass "escalate_add tags urgency, defaulting to urgent for backward-compatible 2-arg callers"
+}
+
+test_housekeeping_present_mode_urgent_flushes_immediately() {
+  local dir state log
+  dir=$(make_supercase present-two-tier-urgent)
+  state="$dir/state"
+  log="$dir/inject-calls.log"; : > "$log"
+  escalate_add "$state" "done: PR https://x/y/pull/1"  # urgent by default
+  # afk deliberately NOT entered: present mode is the branch under test.
+  (
+    inject_msg() { printf 'called\n' >> "$log"; return 0; }
+    FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS_PRESENT=99999 housekeeping "$state"
+  )
+  [ -s "$log" ] || fail "present mode did not attempt an immediate flush for a buffered urgent item"
+  pass "present mode's two-tier cadence flushes urgent items immediately, ignoring the routine batch window"
+}
+
+test_housekeeping_present_mode_routine_waits_for_batch_window() {
+  local dir state log
+  dir=$(make_supercase present-two-tier-routine)
+  state="$dir/state"
+  log="$dir/inject-calls.log"; : > "$log"
+  escalate_add "$state" "stale persisted 10s (possible wedge): sess:fm-x" routine
+  (
+    inject_msg() { printf 'called\n' >> "$log"; return 0; }
+    FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS_PRESENT=99999 housekeeping "$state"
+  )
+  [ ! -s "$log" ] || fail "present mode flushed a routine item before its batch window elapsed"
+  pass "present mode's two-tier cadence holds a routine-only buffer for its own batch window"
+}
+
+test_housekeeping_afk_mode_ignores_urgency_single_window() {
+  local dir state log
+  dir=$(make_supercase afk-single-window)
+  state="$dir/state"
+  log="$dir/inject-calls.log"; : > "$log"
+  escalate_add "$state" "done: PR https://x/y/pull/2"  # urgent by default
+  afk_enter "$state"
+  (
+    inject_msg() { printf 'called\n' >> "$log"; return 0; }
+    FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=99999 housekeeping "$state"
+  )
+  [ ! -s "$log" ] || fail "afk mode flushed before its single batch window elapsed (urgency must be inert while afk)"
+  pass "afk mode ignores urgency and keeps its single batch window (unchanged while afk-only remains active)"
+}
+
 test_heartbeat_scan_dedup() {
   local dir state
   dir=$(make_supercase scan-dedup)
@@ -574,11 +802,13 @@ test_heartbeat_scan_dedup() {
 }
 
 test_handle_wake_routes_self_and_escalate() {
-  local dir state
+  local dir state fakebin
   dir=$(make_supercase handle)
-  state="$dir/state"
+  state="$dir/state"; fakebin="$dir/fakebin"
   printf 'working\n' > "$state/h-routine.status"
-  FM_STATE_OVERRIDE="$state" handle_wake "signal: $state/h-routine.status" "$state"
+  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating' \
+    handle_wake "signal: $state/h-routine.status" "$state"
   [ -s "$state/.subsuper-escalations" ] && fail "routine signal was escalated by handle_wake"
   printf 'done: PR 1\n' > "$state/h-done.status"
   FM_STATE_OVERRIDE="$state" handle_wake "signal: $state/h-done.status" "$state"
@@ -1658,6 +1888,12 @@ test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
+test_classify_signal_no_verb_not_working_escalates
+test_classify_signal_declared_pause_exempt_from_provably_working_guard
+test_classify_stale_present_mode_first_sight_stopped_crew_escalates
+test_classify_stale_present_mode_provably_working_self
+test_classify_stale_present_mode_paused_crew_pauses
+test_classify_stale_afk_mode_still_defers_to_recheck
 test_classify_terminal_signal_escalates
 test_classify_check_and_unknown_escalate
 test_stale_transient_self_records_marker
@@ -1670,6 +1906,8 @@ test_housekeeping_migrates_watcher_pause_marker
 test_housekeeping_migrates_watcher_unpaused_marker_to_clear
 test_housekeeping_seeds_pause_marker_from_status
 test_housekeeping_persistent_stale_escalates
+test_housekeeping_persistent_stale_repeats_with_counter_and_demand_deep_inspection
+test_housekeeping_wedge_counter_clears_on_resume
 test_housekeeping_resumed_stale_cleared
 test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_paused_resumed_cleared
@@ -1682,6 +1920,10 @@ test_housekeeping_herdr_resumed_stale_cleared
 test_housekeeping_orca_persistent_stale_resolves_terminal
 test_escalate_batches_into_one_digest
 test_escalate_batch_age_uses_first_append
+test_escalate_add_urgency_default_and_override
+test_housekeeping_present_mode_urgent_flushes_immediately
+test_housekeeping_present_mode_routine_waits_for_batch_window
+test_housekeeping_afk_mode_ignores_urgency_single_window
 test_heartbeat_scan_dedup
 test_handle_wake_routes_self_and_escalate
 test_inject_skip_forces_self
