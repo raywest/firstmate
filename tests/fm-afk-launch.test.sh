@@ -15,8 +15,8 @@
 #   throwaway, NEVER-default HERDR_SESSION and asserts the default session is
 #   byte-identical via the fm-herdr-lab.sh fleet-state tripwire; the tmux path
 #   uses uniquely-named throwaway sessions killed by exact name. A harmless
-#   sleeper replaces the real daemon (FM_AFK_LAUNCH_ENTRY) so the test observes
-#   only the terminal lifecycle.
+#   sleeper replaces the real daemon (FM_AFK_LAUNCH_ENTRY) for topology checks,
+#   while a separate tmux stop case covers an ignored TERM disposition.
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -842,6 +842,38 @@ e2e_herdr() {
 }
 
 # ---------------------------------------------------------------------------
+# E2E tmux: a detached pane may inherit ignored TERM, so stop must close the
+# exact recorded terminal after its short TERM grace period.
+# ---------------------------------------------------------------------------
+e2e_tmux_stop_closes_ignored_term_daemon() {
+  command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found (tmux stop e2e)"; return 0; }
+  local st session daemon_pid
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-tmux-stop.XXXXXX")
+  session="fm-afk-stop-daemon-$$"
+  tmux new-session -d -s "$session" "$SLEEPER" 2>/dev/null || {
+    fail "tmux stop e2e: could not create detached daemon session"
+    rm -rf "$st"
+    return 0
+  }
+  TRACK_TMUX_SESSIONS="$TRACK_TMUX_SESSIONS $session"
+  daemon_pid=$(tmux display-message -p -t "$session" '#{pane_pid}')
+  mkdir -p "$st/state/.supervise-daemon.lock"
+  printf '%s' "$daemon_pid" > "$st/state/.supervise-daemon.lock/pid"
+  ( . "$ROOT/bin/fm-wake-lib.sh"; fm_pid_identity "$daemon_pid" > "$st/state/.supervise-daemon.lock/pid-identity" ) || true
+  : > "$st/state/.afk"
+  printf 'tmux\t%s\t-\n' "$session" > "$st/state/.afk-daemon-terminal"
+  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop >/dev/null 2>&1 \
+    && ! tmux has-session -t "$session" 2>/dev/null \
+    && [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ]; then
+    pass "tmux stop e2e: exact terminal closes when detached daemon ignores TERM"
+  else
+    fail "tmux stop e2e: TERM-ignoring detached daemon retained lifecycle state"
+  fi
+  tmux kill-session -t "$session" 2>/dev/null || true
+  rm -rf "$st"
+}
+
+# ---------------------------------------------------------------------------
 # E2E tmux: topology invariant (captain window untouched; daemon in a separate
 # detached session).
 # ---------------------------------------------------------------------------
@@ -910,6 +942,7 @@ unit_confirmed_absence_succeeds
 unit_incomplete_restore_retains_backup
 unit_flag_write_failure_aborts
 e2e_herdr
+e2e_tmux_stop_closes_ignored_term_daemon
 e2e_tmux
 
 [ "$FAILED" -eq 0 ] || exit 1
