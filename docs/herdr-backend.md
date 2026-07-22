@@ -835,7 +835,7 @@ Harnesses with a native in-pane tracked-background tool (claude, grok) run it th
 A harness with NO native background mechanism (pi) has no place to run it, and manufacturing one by SPLITTING the captain's active pane visibly shrinks it: `herdr pane split <pane> --direction down --ratio 0.20 --no-focus` creates a second pane whose `tab_id` equals the captain pane's, so the two co-tenant one tab's viewport.
 `--no-focus` does not prevent this - it governs focus, not geometry.
 
-`bin/fm-afk-launch.sh` is the single owner of the daemon TERMINAL lifecycle for that case.
+`bin/fm-daemon-launch.sh` is the single owner of the daemon TERMINAL lifecycle for that case; `bin/fm-afk-launch.sh` is the historical CLI entry point (used below and by `/afk`) that sources and delegates to it unchanged.
 On herdr it creates a dedicated background workspace with `workspace create --no-focus` and a unique `firstmate-afk-daemon-*` label in the captain's session, runs the daemon in its pane via `pane run` with `FM_SUPERVISOR_TARGET` and `FM_SUPERVISOR_BACKEND` set to the captain pane, records the exact pane id in `state/.afk-daemon-terminal`, and on `stop` closes exactly that pane, which takes its single-tab workspace with it.
 The explicit target and backend make injection reach the captain rather than the daemon's own pane.
 No shell `&` is used.

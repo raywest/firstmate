@@ -1312,6 +1312,28 @@ test_afk_present_reverts_watcher_to_one_shot() {
   pass "with .afk present the watcher reverts to one-shot so the daemon owns triage (no double-triage)"
 }
 
+# FM_WATCH_DAEMON_OWNED is the always-on daemon's dormant env-based twin of
+# .afk (data/fm-alwayson-triage-s5/report.md section 2): nothing sets it yet,
+# but the code path must already exist and behave exactly like .afk presence.
+test_daemon_owned_env_reverts_watcher_to_one_shot() {
+  local dir state fakebin out drain_out status_file pid
+  dir=$(make_case daemon-owned-coherence); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  status_file="$state/task.status"
+  printf 'working: routine note\n' > "$status_file"
+  # No .afk file: FM_WATCH_DAEMON_OWNED alone must trigger the same one-shot
+  # handoff, proving daemon_owned() does not require the away-mode flag.
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  watch_bg "$state" "$fakebin" "$out" env FM_WATCH_DAEMON_OWNED=1
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "with FM_WATCH_DAEMON_OWNED=1 the watcher did not exit one-shot for a benign signal"
+  grep -F "signal: $status_file" "$out" >/dev/null || fail "daemon-owned watcher did not surface the signal for the daemon"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the daemon-owned signal failed"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null \
+    || fail "daemon-owned benign signal was not queued for the daemon to classify"
+  pass "FM_WATCH_DAEMON_OWNED=1 alone reverts the watcher to one-shot, same as .afk (dormant path wired and tested)"
+}
+
 # A paused pane can first appear as a changed hash. In AFK mode that initial path
 # must still hand off the plain window identity to the daemon, rather than running
 # the normal-mode pause re-surface and decorating the stale identity.
@@ -1384,4 +1406,5 @@ test_heartbeat_no_change_absorbed
 test_heartbeat_backstop_surfaces_unsurfaced_status
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
+test_daemon_owned_env_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale

@@ -79,6 +79,58 @@ fm_watcher_healthy() {
   return 0
 }
 
+# Daemon-lock liveness helpers (moved here from fm-afk-start.sh so every
+# consumer - the launcher, the guards - shares one liveness definition beside
+# fm_watcher_healthy). FM_AFK_LOCK/FM_AFK_DAEMON only default here: a caller
+# that already set them (fm-afk-start.sh sets both before sourcing this file)
+# keeps its own value.
+FM_AFK_LOCK="${FM_AFK_LOCK:-$STATE/.supervise-daemon.lock}"
+FM_AFK_DAEMON="${FM_AFK_DAEMON:-$FM_WAKE_LIB_DIR/fm-supervise-daemon.sh}"
+
+daemon_lock_owner() {
+  local owner
+  if [ -L "$FM_AFK_LOCK" ]; then
+    owner=$(readlink "$FM_AFK_LOCK" 2>/dev/null) || return 1
+    [ -n "$owner" ] || return 1
+    case "$owner" in
+      /*) printf '%s\n' "$owner" ;;
+      *) printf '%s/%s\n' "$(dirname "$FM_AFK_LOCK")" "$owner" ;;
+    esac
+    return 0
+  fi
+  [ -d "$FM_AFK_LOCK" ] || return 1
+  printf '%s\n' "$FM_AFK_LOCK"
+}
+
+daemon_pid_matches() {
+  local pid=$1 owner=$2 identity current command
+  identity=$(cat "$owner/pid-identity" 2>/dev/null || true)
+  if [ -n "$identity" ]; then
+    current=$(fm_pid_identity "$pid") || return 1
+    [ "$current" = "$identity" ]
+    return
+  fi
+  command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  case "$command" in
+    *"$FM_AFK_DAEMON"*|*"fm-supervise-daemon.sh"*) return 0 ;;
+  esac
+  return 1
+}
+
+daemon_lock_pid() {
+  local owner
+  owner=$(daemon_lock_owner) || return 1
+  cat "$owner/pid" 2>/dev/null || true
+}
+
+daemon_lock_held_by_live_daemon() {
+  local owner pid
+  owner=$(daemon_lock_owner) || return 1
+  pid=$(cat "$owner/pid" 2>/dev/null || true)
+  fm_pid_alive "$pid" || return 1
+  daemon_pid_matches "$pid" "$owner"
+}
+
 fm_lock_clean_known_files() {
   local lockdir=$1
   rm -f \
