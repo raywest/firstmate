@@ -833,6 +833,15 @@ test_crew_dispatch_harness_profile_config_file_gate() {
   pass "bootstrap fails closed on a missing harness_profile config file and accepts a present one"
 }
 
+test_x_mode_setup_precedes_daemon_liveness_sweep() {
+  local x_mode_line daemon_line
+  x_mode_line=$(awk '/^[[:space:]]+x_mode_setup$/ { line=NR } END { print line }' "$ROOT/bin/fm-bootstrap.sh")
+  daemon_line=$(awk '/^[[:space:]]+daemon_liveness_sweep$/ { line=NR } END { print line }' "$ROOT/bin/fm-bootstrap.sh")
+  [ -n "$x_mode_line" ] && [ -n "$daemon_line" ] && [ "$x_mode_line" -lt "$daemon_line" ] \
+    || fail "bootstrap must create X-mode cadence configuration before launching the daemon"
+  pass "bootstrap creates X-mode cadence configuration before daemon liveness repair"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_git_is_required_with_supported_install_instruction
@@ -855,3 +864,4 @@ test_bootstrap_info_is_no_load_and_actionable_lines_trigger
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
 test_crew_dispatch_harness_profile_config_file_gate
+test_x_mode_setup_precedes_daemon_liveness_sweep

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/fm-daemon.test.sh - supervise-daemon classifiers, the captain-relevant
-# status-phrase matrix (a product contract), escalation batching/dedupe, afk
-# presence-gating, and the injection-hardening units that an e2e cannot
+# status-phrase matrix (a product contract), escalation batching/dedupe,
+# delivery-style behavior, and the injection-hardening units that an e2e cannot
 # deterministically reach (persistent-Enter-swallow, max-defer wedge alarms,
 # fm-send swallow reporting, composer-pending ANSI parsing). The operator-visible
 # inject flow lives in fm-afk-inject-e2e and fm-wake-daemon-lifecycle-e2e.
@@ -23,19 +23,18 @@ fi
 
 TMP_ROOT=$(fm_test_tmproot fm-daemon-tests)
 
-test_afk_start_refuses_when_flag_cannot_be_written() {
+test_afk_start_leaves_style_flag_absent() {
   local dir state out status
-  dir=$(make_supercase afk-start-flag-unwritable)
+  dir=$(make_supercase afk-start-style-neutral)
   state="$dir/state"
-  mkdir -p "$state/.afk"
 
   out=$(FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=unsupported "$AFK_START" 2>&1)
   status=$?
 
-  [ "$status" -ne 0 ] || fail "fm-afk-start.sh should fail when state/.afk cannot be written"
-  assert_not_contains "$out" "starting supervise daemon" "fm-afk-start.sh continued into daemon startup after .afk write failure"
-  assert_absent "$state/.supervise-daemon.log" "fm-afk-start.sh started the daemon after .afk write failure"
-  pass "fm-afk-start.sh fails before daemon startup when the afk flag cannot be written"
+  [ "$status" -ne 0 ] || fail "fm-afk-start.sh should reach daemon startup on an unsupported backend"
+  assert_absent "$state/.afk" "fm-afk-start.sh must not create the away style flag"
+  assert_contains "$out" "starting supervise daemon" "fm-afk-start.sh did not reach daemon startup"
+  pass "fm-afk-start.sh leaves away delivery style unchanged"
 }
 
 test_afk_start_ignores_stale_pidfile_without_lock() {
@@ -109,10 +108,8 @@ test_classify_routine_signal_self() {
 # Section 8 of the fm-alwayson-triage-s5 report identifies three genuine
 # deltas between the always-on watcher's present-mode triage and the daemon's
 # afk-mode triage that the always-on design must close IN THE DAEMON, via the
-# shared classifier (no second policy copy). All three land here, still gated
-# behind state/.afk - the daemon is only ever started with afk active
-# (fm-afk-start.sh writes the flag first), so only delta (b) below actually
-# branches on mode; the others are exercised directly by these unit tests.
+# shared classifier (no second policy copy). All three land here in both
+# delivery styles, and are exercised directly by these unit tests.
 
 # Delta (a): the no-verb-signal provably-working check, UNIFIED across BOTH
 # modes (captain-approved sub-choice 3, 2026-07-21) - a bare turn-end or
@@ -1978,7 +1975,7 @@ test_inject_msg_defers_on_dead_shell_unknown() {
   pass "inject_msg: defers on a dead-shell/unreadable composer (unknown), never typing the escalation into a shell"
 }
 
-test_afk_start_refuses_when_flag_cannot_be_written
+test_afk_start_leaves_style_flag_absent
 test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
 test_daemon_state_root_uses_fm_home

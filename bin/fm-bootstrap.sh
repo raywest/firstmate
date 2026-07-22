@@ -451,7 +451,7 @@ daemon_liveness_sweep() {
   local recorded_line recorded_backend recorded_target current_target current_backend
   harness=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
   [ "$harness" = claude ] || return 0
-  backend=$(fm_backend_detect 2>/dev/null || printf '')
+  backend=${FM_SUPERVISOR_BACKEND:-$(fm_backend_detect 2>/dev/null || printf '')}
   case "$backend" in
     tmux|herdr) ;;
     *) return 0 ;;
@@ -934,8 +934,8 @@ fi
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   secondmate_sync
   secondmate_liveness_sweep
-  daemon_liveness_sweep
   x_mode_setup
+  daemon_liveness_sweep
   fleet_sync
 fi
 exit 0

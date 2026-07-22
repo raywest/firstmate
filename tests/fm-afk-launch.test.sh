@@ -439,21 +439,20 @@ unit_native_lifecycle() {
   rm -rf "$st"
 }
 
-unit_native_entry_preserves_prepared_state() {
+unit_native_entry_is_style_neutral() {
   local st
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-native-entry.XXXXXX")
   mkdir -p "$st/state"
-  : > "$st/state/.afk"
   : > "$st/state/.subsuper-escalations"
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_AFK_STATE_PREPARED=1 bash -c '
+  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
     . "$1"
     FM_AFK_DAEMON=/bin/true
     fm_afk_start_main
   ' _ "$START" >/dev/null 2>&1
-  if [ -e "$st/state/.afk" ] && [ -e "$st/state/.subsuper-escalations" ]; then
-    pass "native entry: launcher-prepared lifecycle state is not rewritten"
+  if [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.subsuper-escalations" ]; then
+    pass "native entry: starts without changing delivery style"
   else
-    fail "native entry: launcher-prepared lifecycle state was mutated"
+    fail "native entry: changed delivery style or retained stale artifacts"
   fi
   rm -rf "$st"
 }
@@ -861,7 +860,7 @@ unit_readiness_failure_rolls_back_terminal
 unit_readiness_failure_preserves_unconfirmed_record
 unit_tmux_absence_distinguishes_probe_failure
 unit_native_lifecycle
-unit_native_entry_preserves_prepared_state
+unit_native_entry_is_style_neutral
 unit_close_failure_preserves_record
 unit_record_publication_atomic
 unit_malformed_record_fails_closed

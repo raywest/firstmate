@@ -32,7 +32,7 @@ path below.
    - **Harness WITH a native in-pane tracked-background tool** (e.g. claude's
      background bash, grok's background tool): run
      `bin/fm-afk-launch.sh start-native`, then run
-     `FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh` through that native tool.
+     `bin/fm-afk-start.sh` through that native tool.
      This is a deliberate no-separate-terminal exception because the harness-hosted job creates no terminal or layout mutation, and a shell launcher cannot invoke a harness-native background tool.
      Do not wrap it in `nohup ... &` (Codex/herdr can reap fire-and-forget shell children after a tool call returns).
    - **Otherwise** (e.g. pi, or the bootstrap-managed path on tmux/herdr): run

@@ -105,6 +105,14 @@ test_dead_daemon_launches_start() {
   pass "daemon_liveness_sweep: launches the daemon when it is not alive on a supported combination"
 }
 
+test_pinned_supported_backend_launches_daemon() {
+  local dir out
+  dir=$(new_case pinned-supported-backend)
+  out=$(run_sweep "$dir" claude FM_SUPERVISOR_BACKEND=tmux)
+  [ "$out" = "start" ] || fail "a pinned supported backend must ensure the daemon without ambient runtime markers, got: $out"
+  pass "daemon_liveness_sweep: honors a pinned supported backend"
+}
+
 # A live, identity-matched watcher lock left over from before the daemon
 # existed (or from an unflipped session) must be TERM'd, home-scoped, before
 # the daemon is started - the takeover (always-on triage spec section 5).
@@ -218,6 +226,7 @@ test_live_daemon_no_recorded_target_is_noop() {
 test_non_claude_harness_is_noop
 test_unsupported_backend_is_noop
 test_dead_daemon_launches_start
+test_pinned_supported_backend_launches_daemon
 test_takeover_terminates_foreign_watcher_before_start
 test_takeover_never_signals_mismatched_identity
 test_live_daemon_matching_target_is_noop

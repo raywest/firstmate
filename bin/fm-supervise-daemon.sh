@@ -64,8 +64,8 @@
 # escalations before exit.
 #
 # Usage: fm-supervise-daemon.sh
-#          Long-lived background loop. Normally started by the /afk skill, which
-#          sets state/.afk first. Env knobs:
+#          Long-lived background loop. Normally started by the session-start
+#          bootstrap sweep; /afk controls state/.afk separately. Env knobs:
 #          FM_SUPERVISOR_TARGET     supervisor pane target (override; otherwise
 #                                   auto-discovered per backend - $TMUX_PANE
 #                                   under tmux, "<session>:<pane-id>" from

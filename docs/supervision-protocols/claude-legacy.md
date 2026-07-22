@@ -1,7 +1,4 @@
-Mode: Claude background-notify supervision (legacy per-wake protocol).
-
-Rendered only for a claude primary on a backend the always-on triage daemon does not yet support (not tmux or herdr - see docs/alwayson-triage.md).
-On tmux or herdr, `bin/fm-supervision-instructions.sh` renders `claude.md` instead: the always-on daemon owns the watcher permanently and this background-task-per-wake protocol does not apply.
+Mode: Claude background-notify supervision.
 
 When this session owns supervision and away mode is not active:
 1. Drain first with `bin/fm-wake-drain.sh`.
