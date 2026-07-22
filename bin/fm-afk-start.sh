@@ -10,7 +10,8 @@
 #     - otherwise clears any prior away session's stale escalation artifacts
 #       (fm_afk_clear_stale_artifacts) for a direct, non-prepared start, then
 #       execs bin/fm-supervise-daemon.sh in the foreground. A prepared start was
-#       already cleared transactionally by bin/fm-afk-launch.sh.
+#       already cleared transactionally by bin/fm-daemon-launch.sh (reached
+#       through the historical bin/fm-afk-launch.sh CLI entry point).
 #
 # This file is sourceable: its BASH_SOURCE guard keeps main from running, while
 # exposing fm_afk_clear_stale_artifacts and (via its own bin/fm-wake-lib.sh
@@ -24,8 +25,9 @@
 #     run this directly via that tool, so the daemon inherits the captain pane's
 #     env and auto-discovers it.
 #   - Harnesses with NO native background mechanism (e.g. pi) run this THROUGH
-#     bin/fm-afk-launch.sh, which creates a non-visible tracked terminal per
-#     backend (herdr tab/workspace, tmux detached session) and passes the
+#     the historical bin/fm-afk-launch.sh CLI entry point, whose implementation
+#     lives in bin/fm-daemon-launch.sh. It creates a non-visible tracked terminal
+#     per backend (herdr tab/workspace, tmux detached session) and passes the
 #     captain pane in as FM_SUPERVISOR_TARGET so injection targets it, not the
 #     daemon's own new pane.
 # Do not wrap this in `nohup ... &`: Codex/herdr can reap fire-and-forget shell

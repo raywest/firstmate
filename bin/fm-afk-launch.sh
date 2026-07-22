@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# fm-afk-launch.sh - the single owner of the away-mode daemon TERMINAL lifecycle:
-# launch it in a NON-VISIBLE tracked terminal per backend, record its exact id,
-# tear it down by that exact id, and reconcile a leaked one after a crash.
+# fm-afk-launch.sh - historical CLI entry point for the away-mode daemon
+# TERMINAL lifecycle: launch it in a NON-VISIBLE tracked terminal per backend,
+# record its exact id, tear it down by that exact id, and reconcile a leaked one
+# after a crash.
 #
 # Why this exists (docs/herdr-backend.md "Away-mode daemon terminal launch"):
 # bin/fm-afk-start.sh execs the supervise daemon in the FOREGROUND of whatever
