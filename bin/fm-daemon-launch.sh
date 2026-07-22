@@ -560,7 +560,7 @@ fm_afk_launch_start_native() {
 }
 
 fm_afk_launch_stop() {
-  local pid pid_identity current_identity result=0 read_result stop_wait
+  local pid pid_identity current_identity result=0 read_result
   fm_afk_launch_record_read
   read_result=$?
   if [ "$read_result" -eq 2 ]; then
@@ -581,24 +581,7 @@ fm_afk_launch_stop() {
       fm_afk_launch_log "failed to signal away-mode daemon pid=$pid"
       result=1
     fi
-    stop_wait=40
-    if [ "$read_result" -eq 0 ] && [ "$FM_AFK_REC_BACKEND" = tmux ]; then
-      # Detached tmux panes can inherit an ignored TERM disposition.
-      # Give a normally-trapped TERM one second before closing that exact pane.
-      stop_wait=4
-    fi
-    for _ in $(seq 1 "$stop_wait"); do
-      fm_pid_alive "$pid" || break
-      sleep 0.25
-    done
-  fi
-  if [ -n "$pid" ] && fm_pid_alive "$pid" \
-    && [ "$read_result" -eq 0 ] && [ "$FM_AFK_REC_BACKEND" = tmux ]; then
-    if ! fm_afk_launch_close_recorded; then
-      fm_afk_launch_log "failed to close detached tmux daemon terminal '$FM_AFK_REC_TARGET'"
-      result=1
-    fi
-    for _ in $(seq 1 8); do
+    for _ in $(seq 1 40); do
       fm_pid_alive "$pid" || break
       sleep 0.25
     done
