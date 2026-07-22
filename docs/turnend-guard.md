@@ -14,7 +14,7 @@ The primary can otherwise end a turn after handling wakes without resuming super
 On 2026-07-04, that exact gap left a parked no-mistakes gate unwatched for about nine hours.
 
 `bin/fm-turnend-guard.sh` closes the gap by checking the primary's own turn-end path.
-When tasks are in flight and there is no live identity-matched watcher with a fresh beacon, a harness hook must either block the turn end or force a bounded follow-up turn that tells the primary to repair the missing or failed watcher cycle using the recovery instruction in its emitted session-start protocol.
+When tasks are in flight and neither a live identity-matched watcher with a fresh beacon nor a live always-on daemon lock is present, a harness hook must either block the turn end or force a bounded follow-up turn that tells the primary to repair the missing supervision cycle using the recovery instruction in its emitted session-start protocol.
 
 ## Shared Predicate
 
@@ -27,10 +27,12 @@ It also requires `AGENTS.md`, `bin/`, and the effective state directory to exist
 
 For an in-scope primary checkout, it counts in-flight work from `state/*.meta`.
 If no task is in flight, it exits silently.
-If work is in flight, it requires `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
+If work is in flight, it first evaluates `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
 That is the same identity-matched live lock and fresh beacon check used by `bin/fm-watch-arm.sh`.
 A stale beacon blocks even if a watcher pid is still live.
 A fresh leftover beacon blocks if the watcher lock is missing, dead, or identity-mismatched.
+When the watcher predicate is not satisfied, `daemon_lock_held_by_live_daemon` from the same library is an additional satisfier, never a replacement for the watcher check.
+The live daemon guarantees that its one-shot watcher child restarts through the expected brief beacon gap on a supported Claude tmux/herdr primary.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repo-root `state/`.
 `FM_GUARD_GRACE` controls the beacon freshness window and defaults to 300 seconds.

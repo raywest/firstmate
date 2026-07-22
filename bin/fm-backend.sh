@@ -621,7 +621,7 @@ fm_backend_busy_state() {  # <backend> <target>
 # fm_backend_composer_state: classify the composer/input row of <target> as
 # empty|pending|unknown for callers that need a pre-submit pending-input guard
 # or an adapter's conservative submit fallback. It is exposed generically so a
-# caller other than the send path (the away-mode daemon's supervisor-pane
+# caller other than the send path (the triage daemon's supervisor-pane
 # pending-input guard, bin/fm-supervise-daemon.sh) can ask the same question
 # without duplicating per-backend composer-reading logic. tmux and herdr both
 # expose a named classifier already (fm_tmux_composer_state,

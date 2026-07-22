@@ -15,7 +15,7 @@
 # inline with these same send/current-path primitives.
 #
 # The verified composer/busy-detection and verify-and-retry-submit primitives
-# already live in bin/fm-tmux-lib.sh, shared with the away-mode daemon
+# already live in bin/fm-tmux-lib.sh, shared with the always-on triage daemon
 # (bin/fm-supervise-daemon.sh); this adapter sources that file and re-exports
 # its submit core under the backend's naming convention rather than
 # duplicating it, so the two consumers cannot drift apart.

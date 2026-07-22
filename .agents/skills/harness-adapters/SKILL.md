@@ -79,11 +79,11 @@ Full mechanics, scoping, dated commands, payloads, and fail-open evidence live i
 - `pi`: verified native `session_start`; the existing primary extension handles `startup`, `new`, and `resume` and uses `pi.sendMessage` to inject context without racing a positional launch prompt.
 - `grok`: the 0.2.103 project `SessionStart` event fires with `source=new`, but stdout does not reach model context; the tracked project hook remains fail-open, and a global token-guarded fallback requires a captain decision.
 
-## Primary watcher supervision
+## Primary supervision
 
-At session start, `bin/fm-session-start.sh` prints exactly one watcher supervision block for the detected primary harness.
+At session start, `bin/fm-session-start.sh` prints exactly one supervision block for the detected primary harness.
 Do not substitute another harness's wait shape when resuming supervision.
-Claude and Grok use tracked background-notify cycles around `bin/fm-watch-arm.sh`.
+Claude on tmux or herdr uses the always-on triage daemon, while Claude on every other backend and Grok use tracked background-notify cycles around `bin/fm-watch-arm.sh`.
 Codex uses bounded foreground checkpoints through `bin/fm-watch-checkpoint.sh` because Codex cannot reason while a foreground tool call is running.
 OpenCode uses `.opencode/plugins/fm-primary-watch-arm.js`, which coordinates with the turn-end guard plugin and wakes the TUI with `client.session.promptAsync`.
 Pi uses the tracked `.pi/extensions/fm-primary-turnend-guard.ts` plus the tracked `.pi/extensions/fm-primary-pi-watch.ts`, both project-local extensions Pi auto-discovers once trusted.

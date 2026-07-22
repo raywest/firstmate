@@ -403,7 +403,7 @@ The herdr adapter no longer diffs raw pane content before/after Enter (see the i
 It keeps `fm_backend_herdr_composer_state` as a structural classifier for the composer's own content - located as the bottom-most bordered row, verified bare prompt row, or identity-corroborated Pi separator region described above - and reports `empty`, `pending`, or `unknown`.
 When ANSI capture is available, the classifier keeps the raw styled row long enough to route it through the shared `fm_composer_strip_ghost` extractor before classification.
 The 2026-07-10 incident below records the supported dim/faint and dark-TRUECOLOR ghost/placeholder styling.
-That classifier is still the away-mode daemon's affirmative-empty pre-injection guard and the conservative fallback when `fm_backend_herdr_send_text_submit` cannot use an idle/done native agent-state baseline.
+That classifier is still the always-on triage daemon's affirmative-empty pre-injection guard and the conservative fallback when `fm_backend_herdr_send_text_submit` cannot use an idle/done native agent-state baseline.
 Normal idle-baseline submit confirmation now uses herdr's native agent-state instead; see "Native agent-state submit confirmation" for the current submit path.
 A dedicated composer-state or cursor-row/style primitive is still a candidate upstream Herdr feature request; it would let the guard/fallback classifier eventually reach tmux's cursor-row precision instead of relying on a structural approximation over captured tail rows and ANSI style.
 
@@ -503,9 +503,9 @@ This exercises the fm-spawn.sh-level behavior the adapter-primitive smoke test c
 All ten assertions passed on the real binary on the first run.
 As with every other real-herdr test in this document, the default session's own workspace state (label, tab count) was confirmed byte-identical immediately before and immediately after the run.
 
-## Away-mode daemon: herdr supervisor-pane support
+## Always-on triage daemon: herdr supervisor-pane support
 
-`bin/fm-supervise-daemon.sh` (the `/afk` sub-supervisor) was tmux-only through 2026-07-03: it discovered its own injection target from `$TMUX_PANE`, and injected via raw `tmux display-message`/`tmux capture-pane`/`tmux send-keys` calls with no backend indirection.
+`bin/fm-supervise-daemon.sh` (the always-on triage daemon on supported Claude tmux/herdr primaries) was tmux-only through 2026-07-03: it discovered its own injection target from `$TMUX_PANE`, and injected via raw `tmux display-message`/`tmux capture-pane`/`tmux send-keys` calls with no backend indirection.
 On a herdr-based fleet (firstmate itself running with `HERDR_ENV=1`, no `$TMUX_PANE`), this failed outright at startup: `TMUX_PANE` is unset, so discovery fell through to the legacy `firstmate:0` fallback, which then failed the tmux pane-exists probe and refused to start.
 
 The fix is transport-layer only - discovery, injection, and the busy/composer guards now dispatch through the SAME `bin/fm-backend.sh` primitives every other backend-aware script already uses (`fm_backend_target_exists`, `fm_backend_busy_state`, `fm_backend_capture`, `fm_backend_send_text_submit`, and the new `fm_backend_composer_state` dispatcher added alongside this work).
@@ -520,7 +520,7 @@ For `backend=tmux` every dispatch resolves to the exact same underlying call as 
 For `backend=herdr`, busy detection tries the native `agent.get`-backed `fm_backend_herdr_busy_state` first, trusts only `busy` outright, and corroborates every non-`busy` verdict with the shared regex-over-capture reader before treating the supervisor pane as not busy.
 This mirrors the per-task stale-pane busy check `bin/fm-supervise-daemon.sh`'s `stale_window_is_busy` already used; composer/pending detection and the verified submit route through `fm_backend_herdr_composer_state`/`fm_backend_herdr_send_text_submit`.
 The wedge alarm's supervisor-client status-line flash (`tmux display-message ...`) is tmux-only cosmetic UI with no herdr equivalent, so it is skipped for non-tmux backends.
-A max-defer wedge also attempts the configured backend-independent active alert described in [`wedge-alarm.md`](wedge-alarm.md), while the ERROR log line and durable `state/.subsuper-inject-wedged` marker remain backend-independent.
+An away-mode max-defer wedge also attempts the configured backend-independent active alert described in [`wedge-alarm.md`](wedge-alarm.md), while both delivery styles retain the ERROR log line and durable `state/.subsuper-inject-wedged` marker.
 
 **A pre-existing bug this surfaced: `fm_backend_target_exists`'s herdr arm.** Before this task, that function's herdr case called `HERDR_SESSION="$session" herdr pane get "$pane"` directly, WITHOUT the `--session` flag.
 Per "Session targeting" above, `HERDR_SESSION` alone is not reliably honored once another herdr server is already bound on the machine - it silently falls back to whatever server IS running.
@@ -783,7 +783,7 @@ The luminance rule assumes a dark terminal theme (the fleet reality); the SGR-2 
 `shellcheck bin/*.sh bin/backends/*.sh tests/*.sh` passes clean.
 
 **Resolved: backend-independent wedge alarm.** The max-defer wedge alarm (`inject_wedge_alarm`, `bin/fm-supervise-daemon.sh`) formerly alarmed into the void because its only active signal was a tmux client status-line flash, skipped for herdr, leaving only the passive `state/.subsuper-inject-wedged` marker.
-It now also attempts a configurable active alert independent of the supervisor backend; [`wedge-alarm.md`](wedge-alarm.md) owns its channels and verification evidence.
+In away mode it now also attempts a configurable active alert independent of the supervisor backend; [`wedge-alarm.md`](wedge-alarm.md) owns its channels and verification evidence.
 
 ## Native `pane.agent_status_changed` push escalation (immediate blocked wake)
 
@@ -828,15 +828,16 @@ ok - real herdr: the watcher fast-path enqueues a stale wake naming the task win
 The subscriber returned the `blocked` transition in **0.129s** and the watcher fast-path enqueued a durable `stale` wake naming the task window - versus up to `FM_POLL` (15s) plus `FM_STALE_ESCALATE_SECS` (240s) on the poll path this shortcuts.
 Dedupe (one wake per `->blocked` edge, marker cleared when the pane returns to `working`), subscribe-then-reconcile ordering (an already-blocked pane enqueued exactly once while newer edges buffer in the active stream), the `kind=secondmate`/`paused:` exemptions, and the three fail-closed fallbacks are covered by the fake-CLI unit tests in `tests/fm-backend-herdr.test.sh` (the `wait_transition`/`apply_transition` cases), `tests/fm-transition-lib.test.sh`, and `tests/fm-supervision-events.test.sh`.
 
-## Away-mode daemon terminal launch (2026-07-12, herdr 0.7.3, protocol 16, macOS aarch64)
+## Daemon terminal launch (2026-07-12, herdr 0.7.3, protocol 16, macOS aarch64)
 
 `bin/fm-afk-start.sh` execs the supervise daemon in the FOREGROUND of whatever terminal it is already in.
-Harnesses with a native in-pane tracked-background tool (claude, grok) run it there and the daemon inherits the captain pane's env.
+The supported Claude tmux/herdr always-on path instead uses the non-visible terminal launch below so the session-start bootstrap sweep can keep the daemon alive without an LLM background tool.
+Harnesses with a native in-pane tracked-background tool (claude, grok) can run it there and the daemon inherits the captain pane's env.
 A harness with NO native background mechanism (pi) has no place to run it, and manufacturing one by SPLITTING the captain's active pane visibly shrinks it: `herdr pane split <pane> --direction down --ratio 0.20 --no-focus` creates a second pane whose `tab_id` equals the captain pane's, so the two co-tenant one tab's viewport.
 `--no-focus` does not prevent this - it governs focus, not geometry.
 
-`bin/fm-daemon-launch.sh` is the single owner of the daemon TERMINAL lifecycle for that case; `bin/fm-afk-launch.sh` is the historical CLI entry point (used below and by `/afk`) that sources and delegates to it unchanged.
-On herdr it creates a dedicated background workspace with `workspace create --no-focus` and a unique `firstmate-afk-daemon-*` label in the captain's session, runs the daemon in its pane via `pane run` with `FM_SUPERVISOR_TARGET` and `FM_SUPERVISOR_BACKEND` set to the captain pane, records the exact pane id in `state/.afk-daemon-terminal`, and on `stop` closes exactly that pane, which takes its single-tab workspace with it.
+`bin/fm-daemon-launch.sh` is the single owner of the daemon TERMINAL lifecycle for that case; `bin/fm-afk-launch.sh` is its historical compatibility entry point.
+On herdr it creates a dedicated background workspace with `workspace create --no-focus` and a unique `firstmate-afk-daemon-*` label in the captain's session, runs the daemon in its pane via `pane run` with `FM_SUPERVISOR_TARGET` and `FM_SUPERVISOR_BACKEND` set to the captain pane, records the exact pane id in `state/.afk-daemon-terminal`, and on an explicit lifecycle `stop` closes exactly that pane, which takes its single-tab workspace with it.
 The explicit target and backend make injection reach the captain rather than the daemon's own pane.
 No shell `&` is used.
 Recovery reconciles a recorded-but-dead terminal by exact id, never by enumerating or matching other Herdr workspaces.
@@ -854,19 +855,19 @@ daemon pane w2:p1 tab_id = w2:t1                     # NOT the captain tab w1:t1
 # stop
 captain-tab (w1:t1) pane count: AFTER=1             # restored/unchanged
 workspace count:                AFTER=1             # daemon workspace removed by exact id
-record removed, state/.afk cleared last
+record removed; the delivery-style flag is unchanged
 ```
 
-The topology invariant (entering AND exiting away mode leaves the captain's active tab pane set unchanged), the separate-terminal placement, and the exact-id teardown are covered per backend (herdr and tmux) by `tests/fm-afk-launch.test.sh`.
+The topology invariant (daemon lifecycle changes never alter the captain's active tab pane set), the separate-terminal placement, and the exact-id teardown are covered per backend (herdr and tmux) by `tests/fm-afk-launch.test.sh`.
 
 ### Stale-artifact lifecycle fix (same change)
 
-The away daemon's `state/.subsuper-escalations` (+ `.since` and `-urgent` sidecars) and `state/.subsuper-inject-wedged` are a transient delivery cache, cleared only on a successful flush.
-Two ordering/scoping bugs leaked them into the next away session: on a clean exit the `/afk` skill cleared `state/.afk` BEFORE stopping the daemon, so the daemon's shutdown flush hit its own presence gate (`inject_msg`: `afk_active || return 1`) and was a no-op; and nothing cleared them on entry.
-The fix: `bin/fm-afk-launch.sh stop` SIGTERMs the daemon while `state/.afk` is still present so the flush can run, closes its recorded terminal by exact id, and then clears `state/.afk` last.
-On entry the launcher drops the prior session's artifacts when the daemon is not already running, never on a refresh; the sourceable `bin/fm-afk-start.sh` exposes the shared clearing helper and also applies it for a direct, non-prepared fresh start.
+The daemon's `state/.subsuper-escalations` (+ `.since` and `-urgent` sidecars) and `state/.subsuper-inject-wedged` are a transient delivery cache, cleared only on a successful flush.
+Before the always-on flip, two ordering/scoping bugs leaked them into the next away session: `/afk` cleared `state/.afk` before stopping the daemon, so its shutdown flush hit the former presence gate, and nothing cleared them on entry.
+The always-on lifecycle removes that coupling: `inject_msg` no longer gates on `state/.afk`, `afk-enter`/`afk-exit` only change the delivery style, and `stop` flushes then closes the recorded terminal by exact id without changing that style flag.
+On a fresh daemon start, not an already-live refresh, the launcher drops prior delivery artifacts; the sourceable `bin/fm-afk-start.sh` exposes the shared clearing helper and also applies it for a direct, non-prepared fresh start.
 This never drops a genuinely-pending escalation: the durable record is `state/.wake-queue` plus each crew's `state/<id>.status`, and any still-true condition is re-escalated by the daemon's heartbeat catch-all scan.
-Covered by the unit cases in `tests/fm-afk-launch.test.sh` (clear-on-fresh-entry vs refresh, and the stop ordering asserting the daemon saw `state/.afk` present at SIGTERM).
+Covered by the unit cases in `tests/fm-afk-launch.test.sh` (clear-on-fresh-start versus refresh, and stop preserving the delivery-style flag).
 
 ## Known gaps and follow-up notes
 

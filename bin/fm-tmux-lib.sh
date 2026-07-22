@@ -2,14 +2,14 @@
 # fm-tmux-lib.sh — shared tmux pane primitives for firstmate.
 #
 # ONE source of truth for: busy detection, composer-empty (pending-input)
-# detection, and a verify-and-retry-Enter submit. Sourced by both the away-mode
+# detection, and a verify-and-retry-Enter submit. Sourced by both the triage
 # daemon (bin/fm-supervise-daemon.sh) and bin/fm-send.sh so the composer/submit
 # logic cannot drift between the two.
 #
 # Why this exists (incident afk-invx-i5): the daemon's old composer check only
 # recognized a BARE prompt glyph ("> ") as an empty composer. claude draws its
 # input box with box-drawing borders ("│ > … │"), so every idle claude pane read
-# as "pending input" and the away-mode daemon deferred 100% of escalations for
+# as "pending input" and the daemon deferred 100% of escalations for
 # 9.5 hours with no escape. The detector below strips the box borders before
 # deciding, so a bordered-but-empty composer is correctly seen as empty. The same
 # corrected detector backs the submit acknowledgement (a submit "landed" iff the

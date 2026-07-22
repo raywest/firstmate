@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# fm-daemon-launch.sh - the single owner of the away-mode/always-on daemon
+# fm-daemon-launch.sh - the single owner of the always-on triage daemon
 # TERMINAL lifecycle: launch it in a NON-VISIBLE tracked terminal per backend,
 # record its exact id, tear it down by that exact id, and reconcile a leaked one
 # after a crash.
 #
-# bin/fm-afk-launch.sh is the historical CLI entry point used by /afk, the afk
-# skill, and their tests; it sources this file and reuses its functions and CLI
-# dispatch unchanged, so every existing afk entry path, record file, and
-# rollback behavior stays byte-equivalent through this extraction
-# (data/fm-alwayson-triage-s5/report.md phase 0).
+# bin/fm-afk-launch.sh is the historical compatibility CLI entry point for
+# legacy afk paths and their tests; it sources this file and reuses its command
+# dispatch. `/afk` uses the independent afk-enter/afk-exit style toggles on a
+# supported always-on combination.
 #
-# Why this exists (docs/herdr-backend.md "Away-mode daemon terminal launch"):
+# Why this exists (docs/herdr-backend.md "Daemon terminal launch"):
 # bin/fm-afk-start.sh execs the supervise daemon in the FOREGROUND of whatever
 # terminal it is already in. Harnesses with a native in-pane tracked-background
 # tool (claude, grok) run it there directly and it is fine. A harness with NO

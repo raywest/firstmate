@@ -2,6 +2,7 @@
 
 The watcher remains intentionally one-shot: one actionable reason closes one watcher cycle.
 Must-work continuity now lives above that process boundary instead of depending on the model remembering a re-arm step.
+This document owns the per-wake watcher protocols; the supported Claude tmux/herdr always-on daemon path is documented in [`alwayson-triage.md`](alwayson-triage.md).
 
 ## Ownership
 
@@ -18,14 +19,14 @@ When that retained arm later closes, its actual close is classified as a new sup
 After the configured retry bound is exhausted, it delivers the original wake with a typed continuity-restoration failure even if every successor arm hung without reporting readiness.
 This is deliberate Option B ordering: the fleet is protected before the model handles the wake whenever restoration succeeds, but the model is never left blind when it does not.
 
-Claude retains its native tracked background-task completion path.
-Its new PreToolUse continuity gate allows wake drain and arm recovery but refuses only other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
+Unflipped Claude harness/backend combinations retain the native tracked background-task completion path.
+Its PreToolUse continuity gate allows wake drain, watcher arm recovery, and daemon launch recovery but refuses only other fleet commands while tasks are in flight and neither an identity-matched live watcher nor a live daemon holds the home lock.
 Codex retains its bounded foreground checkpoint protocol.
 Grok retains its tracked background-task notification protocol.
 No adapter starts a replacement with shell `&`.
 
-The existing turn-end guard implementation and adapters are unchanged.
-They remain the final backstop rather than the normal continuity mechanism.
+The turn-end guard implementation and adapters remain the final backstop rather than the normal continuity mechanism.
+On a supported Claude tmux/herdr setup, its live-daemon satisfier bridges the expected gap between one-shot watcher children.
 
 ## Arm-layer cycle contract
 
