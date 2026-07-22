@@ -62,7 +62,9 @@ No `/back` is needed. The first genuine message is the return signal:
   On every unflipped harness/backend combination, it retains the legacy daemon stop before clearing the same flag.
   It also owns durable wake draining, escalation and wedge evidence, and the return-catch-up gate.
   If it reports a firstmate-actionable `blocked:` event, remediate it immediately through the normal lifecycle, or explicitly reclassify it with a durable reason and close its decision key with `resolved [key=...]`, then run `bin/fm-afk-return.sh check`.
-  Full per-wake responsiveness resumes immediately (the daemon is already delivering present-mode digests); do not answer a Bearings request or perform any other ordinary captain work until the check exits successfully.
+  On a supported claude/tmux or claude/herdr primary, full per-wake responsiveness resumes immediately through the daemon's present-mode digests.
+  On every unflipped harness/backend combination, resume that harness's legacy per-wake supervision protocol from the emitted session-start supervision block in AGENTS.md section 8.
+  Do not answer a Bearings request or perform any other ordinary captain work until the check exits successfully.
 - A message **with** the sentinel marker (`FM_INJECT_MARK`, U+2063 INVISIBLE SEPARATOR) -> it is a daemon escalation; stay afk and process it.
 - Re-invoking `/afk` while already away -> stay afk (refresh the flag); this
   does **not** trigger an exit.
