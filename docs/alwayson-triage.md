@@ -1,12 +1,14 @@
 # Always-on triage daemon
 
 Mechanism reference for `bin/fm-supervise-daemon.sh` as the PERMANENT wake
-consumer, on a supported claude/tmux or claude/herdr primary.
+consumer, on a supported claude or codex primary, on tmux or herdr.
 [`architecture.md`](architecture.md#event-driven-supervision) carries the
 short summary; this document is the complete mechanism.
 Design source: the `fm-alwayson-triage-s5` scout report (phases 0-1 landed the
-extraction and classifier parity prep; this doc describes phase 2, the flip,
-for the claude primary on tmux/herdr).
+extraction and classifier parity prep; phase 2 flipped the claude primary on
+tmux/herdr; this doc now also describes phase 3's codex flip, verified
+2026-07-22 on codex-cli 0.144.1 - see "Rollout gates" below for the per-harness
+verification record).
 
 ## Why
 
@@ -70,8 +72,8 @@ uses the terminal-owned path.
 
 `bin/fm-bootstrap.sh`'s `daemon_liveness_sweep()` runs as one of the six
 locked-session-only mutating sweeps (AGENTS.md section 3).
-It is a no-op unless the detected primary harness is `claude` AND the detected
-backend is `tmux` or `herdr` (the daemon's own
+It is a no-op unless the detected primary harness is `claude` OR `codex` AND
+the detected backend is `tmux` or `herdr` (the daemon's own
 `FM_SUPERVISOR_SUPPORTED_BACKENDS`).
 On a supported combination:
 
@@ -149,10 +151,11 @@ additional scoping.
 
 `bin/fm-supervision-instructions.sh` detects the supported combination
 (`FM_SUPERVISOR_BACKEND` override, else `fm_backend_detect`) and renders
-`docs/supervision-protocols/claude.md` (the always-on protocol: "escalations
-arrive as marked messages; drain, handle, end the turn; do not arm watchers")
-instead of `claude-legacy.md` (byte-identical to the pre-phase-2 background-
-task-per-wake protocol, still rendered for claude on an unsupported backend).
+`docs/supervision-protocols/claude.md` or `codex.md` (the always-on protocol:
+"escalations arrive as marked messages; drain, handle, end the turn; do not
+arm watchers") instead of `claude-legacy.md` / `codex-legacy.md`
+(byte-identical to the pre-flip per-harness protocol, still rendered for that
+harness on an unsupported backend).
 The "Current state" block gains a `Daemon: running pid=N` / `Daemon: DOWN -
 ensure it with bin/fm-daemon-launch.sh start` line, and the repair line
 collapses the away/present split into one daemon-ensure instruction on a
@@ -175,15 +178,48 @@ launch uses one code path regardless of X-mode state.
 
 The wake transport is backend-level (tmux/herdr pane primitives), not
 harness-level, so flipping another harness only needs its composer verified
-injectable - grok is the same shape as claude; codex retires its 180s
-foreground-checkpoint tax entirely (a marked-message wake is exactly what
-codex can respond to); opencode and pi conflict today (their plugins spawn
-`fm-watch-arm.sh --restart` on idle, which would TERM the daemon's own child)
-and need a plugin-side stand-down first.
-None of that is in scope here: `fm-supervision-instructions.sh`'s
-supported-combination check keeps every harness other than claude, and claude
-on any backend other than tmux/herdr, on today's unchanged per-wake protocol
-until each is independently verified and flipped.
+injectable.
+`fm-supervision-instructions.sh`'s supported-combination check keeps every
+unflipped harness, and any flipped harness on a backend other than tmux/herdr,
+on today's unchanged per-wake protocol until each is independently verified.
+
+Per-harness status (fm-alwayson-triage-s5 phase 3):
+
+- **codex - FLIPPED, verified 2026-07-22 on codex-cli 0.144.1.** Codex's
+  180s foreground-checkpoint tax (`bin/fm-watch-checkpoint.sh`) is retired
+  entirely on a supported combination: a marked-message wake is exactly what
+  Codex can respond to, since injection is a real typed composer message, not
+  a background-task completion. `bin/fm-bootstrap.sh`'s
+  `daemon_liveness_sweep()` and `fm-supervision-instructions.sh`'s
+  supported-combination check both accept `codex` alongside `claude`.
+  No guard-predicate change was needed: the turn-end guard's
+  `daemon_lock_held_by_live_daemon` satisfier (phase 2) was already
+  harness-agnostic, and codex does not use the claude-only continuity
+  PreToolUse gate.
+  Live E2E: `tests/fm-codex-alwayson-live-e2e.test.sh`
+  (`FM_CODEX_LIVE_E2E=1`), proving a marked injection into a real interactive
+  codex session wakes a turn, the turn-end guard stays quiet purely from the
+  live daemon lock, and it blocks again once the daemon is stopped.
+- **grok - not flipped, unrunnable in this build environment.** Same shape as
+  claude (background-notify today); the composer classifier already carries
+  verified grok ghost/idle signatures (`tests/fm-composer-ghost.test.sh`,
+  `tests/fm-backend-herdr.test.sh`), but the spec requires a live
+  composer-injection E2E against a real grok session before the
+  supported-combination check may accept `grok`, and the `grok` CLI is not
+  installed in this build environment - `command -v grok` fails.
+  Ships nothing this phase; stays on today's background-notify protocol until
+  a build environment with the grok CLI can run and pass the live E2E.
+- **opencode / pi - not flipped, blocked on a prerequisite plugin change plus
+  an unrunnable environment.** Their plugins spawn `fm-watch-arm.sh --restart`
+  on idle/child-close, which would TERM the daemon's own child watcher (the
+  direct conflict this doc's design anticipated) - a plugin/extension
+  stand-down (no-op when `daemon_lock_held_by_live_daemon`) must ship first.
+  Neither the `opencode` nor `pi` CLI is installed in this build environment
+  either, so even the plugin change could not be live-E2E-verified here
+  (`FM_OPENCODE_LIVE_E2E` / `FM_PI_LIVE_E2E`).
+  Both stay on today's plugin-owned protocol until a build environment with
+  the relevant CLI can implement the stand-down and pass its live E2E.
+
 zellij, orca, and cmux cannot host or receive always-on triage until they grow
 verified composer/busy/submit primitives and a non-visible launch primitive;
 the daemon refuses loudly at startup rather than guessing, exactly as before.

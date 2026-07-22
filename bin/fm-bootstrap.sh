@@ -43,10 +43,11 @@
 #          successfully respawned secondmates are silent.
 #          The always-on triage daemon liveness sweep (docs/alwayson-triage.md)
 #          guarantees bin/fm-supervise-daemon.sh is running on a supported
-#          combination (claude on tmux or herdr): it launches the daemon when
-#          dead, takes over a harness-armed watcher singleton left from before
-#          the daemon existed, and restarts the daemon when the captain's pane
-#          has moved (retarget). Silent unless a launch/stop attempt fails.
+#          combination (claude or codex, on tmux or herdr): it launches the
+#          daemon when dead, takes over a harness-armed watcher singleton left
+#          from before the daemon existed, and restarts the daemon when the
+#          captain's pane has moved (retarget). Silent unless a launch/stop
+#          attempt fails.
 #          A no-op on every other harness/backend combination.
 #          A TANGLE line means the firstmate primary checkout (FM_ROOT) is stranded
 #          on a feature branch instead of its default branch - a crewmate's work
@@ -440,8 +441,8 @@ secondmate_liveness_sweep() {
 
 daemon_liveness_sweep() {
   # Guarantees the always-on triage daemon (docs/alwayson-triage.md) is running
-  # on a supported combination - claude on tmux or herdr, the daemon's own
-  # supported injection backends (bin/fm-supervise-daemon.sh
+  # on a supported combination - claude or codex, on tmux or herdr (the
+  # daemon's own supported injection backends, bin/fm-supervise-daemon.sh
   # FM_SUPERVISOR_SUPPORTED_BACKENDS). Session-start (locked) only, and every
   # action here is scoped to THIS home's own $STATE - never another home's.
   # Deterministic and idempotent (firstmate-coding-guidelines): the emitted
@@ -450,7 +451,10 @@ daemon_liveness_sweep() {
   local harness backend lock_pid i out
   local recorded_line recorded_backend recorded_target current_target current_backend
   harness=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
-  [ "$harness" = claude ] || return 0
+  case "$harness" in
+    claude|codex) ;;
+    *) return 0 ;;
+  esac
   backend=${FM_SUPERVISOR_BACKEND:-$(fm_backend_detect 2>/dev/null || printf '')}
   case "$backend" in
     tmux|herdr) ;;

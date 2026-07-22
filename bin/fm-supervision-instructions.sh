@@ -86,21 +86,24 @@ if [ -z "$HARNESS" ]; then
   HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 fi
 
-# Always-on triage (fm-alwayson-triage-s5 phase 2): the daemon collapses the
-# per-harness wake protocol only on a verified combination - claude on tmux or
-# herdr, the daemon's own supported injection backends (bin/fm-supervise-daemon.sh
-# FM_SUPERVISOR_SUPPORTED_BACKENDS). Every other combination keeps today's block
-# unchanged, so this check gates a template swap, never a behavior change for an
-# unflipped harness/backend. FM_SUPERVISOR_BACKEND overrides auto-detection
-# (same override the daemon and launcher already honor), so a caller can pin the
-# backend explicitly instead of relying on the invoking shell's own TMUX/HERDR_ENV.
+# Always-on triage (fm-alwayson-triage-s5 phases 2-3): the daemon collapses the
+# per-harness wake protocol only on a verified combination - claude or codex on
+# tmux or herdr, the daemon's own supported injection backends
+# (bin/fm-supervise-daemon.sh FM_SUPERVISOR_SUPPORTED_BACKENDS). Every other
+# combination keeps today's block unchanged, so this check gates a template
+# swap, never a behavior change for an unflipped harness/backend.
+# FM_SUPERVISOR_BACKEND overrides auto-detection (same override the daemon and
+# launcher already honor), so a caller can pin the backend explicitly instead
+# of relying on the invoking shell's own TMUX/HERDR_ENV.
 FM_BACKEND="${FM_SUPERVISOR_BACKEND:-$(fm_backend_detect 2>/dev/null || printf '')}"
 ALWAYSON_SUPPORTED=0
-if [ "$HARNESS" = claude ]; then
-  case "$FM_BACKEND" in
-    tmux|herdr) ALWAYSON_SUPPORTED=1 ;;
-  esac
-fi
+case "$HARNESS" in
+  claude|codex)
+    case "$FM_BACKEND" in
+      tmux|herdr) ALWAYSON_SUPPORTED=1 ;;
+    esac
+    ;;
+esac
 
 case "$HARNESS" in
   claude)
@@ -110,7 +113,14 @@ case "$HARNESS" in
       SNIPPET="$DOC_DIR/claude-legacy.md"
     fi
     ;;
-  codex|opencode|pi|grok) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
+  codex)
+    if [ "$ALWAYSON_SUPPORTED" -eq 1 ]; then
+      SNIPPET="$DOC_DIR/codex.md"
+    else
+      SNIPPET="$DOC_DIR/codex-legacy.md"
+    fi
+    ;;
+  opencode|pi|grok) SNIPPET="$DOC_DIR/$HARNESS.md" ;;
   *) HARNESS=unknown; SNIPPET="$DOC_DIR/unknown.md" ;;
 esac
 [ -f "$SNIPPET" ] || SNIPPET="$DOC_DIR/unknown.md"

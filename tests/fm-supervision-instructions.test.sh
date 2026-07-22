@@ -7,17 +7,18 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-supervision-instructions)
 RENDER="$ROOT/bin/fm-supervision-instructions.sh"
-# Pin backend detection: the always-on triage flip only applies to claude on
-# tmux/herdr (fm-alwayson-triage-s5 phase 2), and fm_backend_detect otherwise
-# reads this session's own ambient TMUX/HERDR_ENV, which would make these
-# hermetic legacy-behavior assertions depend on whatever backend happens to be
-# hosting the test runner. zellij is unsupported by the daemon, so it always
-# selects the legacy per-harness block regardless of the runner's own backend.
+# Pin backend detection: the always-on triage flip only applies to claude or
+# codex on tmux/herdr (fm-alwayson-triage-s5 phases 2-3), and fm_backend_detect
+# otherwise reads this session's own ambient TMUX/HERDR_ENV, which would make
+# these hermetic legacy-behavior assertions depend on whatever backend happens
+# to be hosting the test runner. zellij is unsupported by the daemon, so it
+# always selects the legacy per-harness block regardless of the runner's own
+# backend.
 LEGACY_BACKEND=zellij
 
 test_selected_harness_block_only() {
   local out
-  out=$("$RENDER" --harness codex)
+  out=$(FM_SUPERVISOR_BACKEND="$LEGACY_BACKEND" "$RENDER" --harness codex)
   assert_contains "$out" "SUPERVISION OPERATING INSTRUCTIONS - primary harness: codex" "codex heading missing"
   assert_contains "$out" "Mode: Codex foreground checkpoint." "codex snippet missing"
   assert_contains "$out" "bin/fm-watch-checkpoint.sh" "codex checkpoint helper missing"
@@ -39,7 +40,7 @@ test_conditional_stanzas() {
   home="$TMP_ROOT/conditional-home"
   config="$TMP_ROOT/conditional-config"
   mkdir -p "$home/state" "$home/config" "$config"
-  out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness codex --read-only 1 --afk 1 --x-mode 1)
+  out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_SUPERVISOR_BACKEND="$LEGACY_BACKEND" "$RENDER" --harness codex --read-only 1 --afk 1 --x-mode 1)
   assert_contains "$out" "- Lock: read-only" "read-only stanza missing"
   assert_contains "$out" "- Away mode: active" "afk stanza missing"
   assert_contains "$out" "- X mode: active" "x-mode stanza missing"
@@ -53,7 +54,7 @@ test_repair_lines() {
   local home out
   home="$TMP_ROOT/repair-home"
   mkdir -p "$home/state" "$home/config"
-  out=$(FM_HOME="$home" FM_CODEX_WATCH_CHECKPOINT=7 "$RENDER" --harness codex --repair-line)
+  out=$(FM_HOME="$home" FM_CODEX_WATCH_CHECKPOINT=7 FM_SUPERVISOR_BACKEND="$LEGACY_BACKEND" "$RENDER" --harness codex --repair-line)
   assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "codex repair line did not use checkpoint helper and env override"
 
   out=$(FM_HOME="$home" FM_SUPERVISOR_BACKEND="$LEGACY_BACKEND" "$RENDER" --harness claude --queue-pending 1 --repair-line)
@@ -61,7 +62,7 @@ test_repair_lines() {
   assert_contains "$out" "Claude Code background task" "claude repair line missing background-task mechanism"
 
   : > "$home/config/x-mode.env"
-  out=$(FM_HOME="$home" FM_CODEX_WATCH_CHECKPOINT=7 "$RENDER" --harness codex --x-mode 1 --repair-line)
+  out=$(FM_HOME="$home" FM_CODEX_WATCH_CHECKPOINT=7 FM_SUPERVISOR_BACKEND="$LEGACY_BACKEND" "$RENDER" --harness codex --x-mode 1 --repair-line)
   assert_contains "$out" "source '$home/config/x-mode.env' first" "x-mode repair line did not source the effective cadence config"
   assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "x-mode codex repair line lost the checkpoint helper"
 
@@ -98,6 +99,27 @@ test_ordinary_wake_lines_are_distinct_from_repair() {
   out=$("$RENDER" --harness opencode --repair-line)
   assert_contains "$out" "manual recovery probe" "opencode recovery line lost its manual probe"
   pass "renderer distinguishes ordinary wake continuation from failure recovery"
+}
+
+# codex joined the always-on supported set in fm-alwayson-triage-s5 phase 3:
+# on tmux or herdr it must render exactly like claude does (codex.md, the
+# collapsed daemon-ensure repair line, the harness-independent ordinary-wake
+# line), never the retired foreground-checkpoint legacy snippet.
+test_codex_always_on_on_supported_backend() {
+  local home out ordinary
+  home="$TMP_ROOT/codex-alwayson-home"
+  mkdir -p "$home/state" "$home/config"
+  out=$(FM_HOME="$home" FM_SUPERVISOR_BACKEND=tmux "$RENDER" --harness codex)
+  assert_contains "$out" "Mode: Codex always-on triage" "codex always-on snippet missing on a supported backend"
+  assert_not_contains "$out" "Mode: Codex foreground checkpoint." "renderer printed the legacy codex snippet on a supported backend"
+  assert_contains "$out" "- Daemon: DOWN - ensure it with bin/fm-daemon-launch.sh start." "codex current-state block missing the daemon line"
+  ordinary=$(printf '%s\n' "$out" | grep -F -- '- Ordinary wake:')
+  assert_contains "$ordinary" "escalations arrive as marked messages" "codex ordinary-wake line did not collapse to the always-on wording"
+
+  out=$(FM_HOME="$home" FM_SUPERVISOR_BACKEND=herdr "$RENDER" --harness codex --repair-line)
+  assert_contains "$out" "ensure the daemon with bin/fm-daemon-launch.sh start" "codex repair line did not collapse to the daemon-ensure instruction on herdr"
+  assert_not_contains "$out" "fm-watch-checkpoint.sh" "codex repair line still mentions the retired checkpoint helper on a supported backend"
+  pass "codex on a supported backend (tmux/herdr) renders the always-on protocol, not the foreground-checkpoint legacy"
 }
 
 test_grok_is_background_notify() {
@@ -145,6 +167,7 @@ test_unknown_fallback
 test_conditional_stanzas
 test_repair_lines
 test_ordinary_wake_lines_are_distinct_from_repair
+test_codex_always_on_on_supported_backend
 test_grok_is_background_notify
 test_grok_command_sources_effective_config
 test_pi_snippet_uses_effective_extension_path
