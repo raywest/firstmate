@@ -194,6 +194,7 @@ esac
 exit 1
 SH
   chmod +x "$fakebin/tmux"
+  make_fake_crew_state "$fakebin" >/dev/null
   printf '%s\n' "$dir"
 }
 

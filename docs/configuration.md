@@ -410,9 +410,9 @@ FM_WATCHER_STALE_GRACE=300   # defaults to FM_GUARD_GRACE; seconds a live watche
 FM_SIGNAL_GRACE=30      # seconds to coalesce nearby status and turn-end signals into one wake
 FM_CAPTAIN_RE='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'   # status regex that makes watcher and daemon signal/stale/scan output captain-relevant
 FM_CLASSIFY_PAUSED_VERB=paused     # leading status verb for a declared external wait; excluded from FM_CAPTAIN_RE and distinct from blocked
-FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates; stale panes whose crew is not provably working surface immediately unless they declare the pause verb
+FM_STALE_ESCALATE_SECS=240         # stale persistence window; the watcher applies it to a provably-working stale pane, while the away-mode daemon applies it to every non-terminal stale and its currently unstarted present-mode branch surfaces a stopped crew immediately
 FM_PAUSE_RESURFACE_SECS=3600       # seconds before an idle declared external wait re-surfaces for a recheck in the watcher or away-mode daemon
-FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive provably-working stale escalations on the same unchanged pane before demand-deep-inspection is added
+FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive stale persistence escalations on the same unchanged pane before demand-deep-inspection is added
 FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wake debug log
 FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=     # optional seconds allowed for bootstrap's best-effort clone refresh; unset/blank defaults to max(20, 5 + 3 * origin-backed-project-count)
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone
@@ -434,7 +434,8 @@ FM_SEND_SETTLE=1        # seconds fm-send waits after a successful text submit; 
 FM_SUPERVISOR_BACKEND=             # optional supervisor pane backend override; tmux/herdr only, otherwise detects $TMUX_PANE then HERDR_ENV/HERDR_PANE_ID before tmux fallback
 FM_SUPERVISOR_TARGET=              # optional supervisor pane target override; tmux target or herdr <session>:<pane-id>, otherwise auto-detected
 FM_INJECT_SKIP=heartbeat           # |-prefixes force-self-handled bypassing classification; empty disables
-FM_ESCALATE_BATCH_SECS=90          # buffer window for batched escalation digests; 0 = flush immediately
+FM_ESCALATE_BATCH_SECS=90          # away-mode buffer window for batched escalation digests; 0 = flush immediately, regardless of urgency
+FM_ESCALATE_BATCH_SECS_PRESENT=30  # present-mode routine-item window; buffered urgent items flush immediately; inert until the daemon's presence gate permits present-mode delivery
 FM_MAX_DEFER_SECS=300              # max buffered escalation age before retry plus wedge alarm; 0 disables
 FM_WEDGE_ALARM_CHANNEL=            # override config/wedge-alarm with one active-alert directive for the wedge alarm; off|auto|osascript|herdr|command:<cmd>; absent = auto (macOS -> an OS notification)
 FM_WEDGE_ALARM_EXEC=              # notifier seam: route every channel (osascript, herdr, command:) through this command as `<cmd> <channel> <summary>`; "discard" fires nothing; unset in production; the daemon defaults it to "discard" when sourced so no test posts a real notification (docs/wedge-alarm.md)

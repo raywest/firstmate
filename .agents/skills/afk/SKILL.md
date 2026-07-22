@@ -125,14 +125,17 @@ The daemon wraps `fm-watch.sh`, runs the watcher as a child, classifies each
 wake reason in bash, and self-handles the routine majority without consuming a
 firstmate turn.
 Captain-relevant events, plus a bounded recheck of a declared external wait that remains idle, escalate to firstmate's context as one pre-read, single-line, batched digest.
-The classification predicates (the captain-relevant verb set, declared-pause vocabulary, signal/stale tests, and fleet-scan) live in the shared `bin/fm-classify-lib.sh`, the same library the always-on watcher uses for its own triage when afk is off, so the two modes apply one identical policy.
+The classification predicates (the captain-relevant verb set, declared-pause vocabulary, signal/stale tests, and fleet-scan) live in the shared `bin/fm-classify-lib.sh`, the same library the always-on watcher uses for its own triage when afk is off.
+Both modes apply the same provably-working guard to no-verb signals, while their explicit stale and delivery cadence branches remain owned by the daemon.
 While `state/.afk` exists the daemon owns the watcher, so the watcher reverts to one-shot and lets the daemon do the triage - the two never run their triage at the same time.
 
 Classify each wake this way:
 
 - `signal` whose status content has no captain-relevant verb
   (`done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged`)
-  -> self-handle. Captain-relevant verb -> escalate.
+  -> self-handle only when every affected non-paused crew is provably working.
+  A stopped, unresolvable, or otherwise not-provably-working crew escalates, while a declared `paused:` external wait is exempt from this guard and follows its own recheck cadence.
+  Captain-relevant verb -> escalate.
 - `signal` or `stale` for a declared `paused:` external wait -> self-handle and track the pause rather than a wedge.
   If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping sends one awaiting-external recheck and resets the pause window.
 - `check` -> always escalate. Check scripts print only when firstmate should wake.
@@ -142,6 +145,8 @@ Classify each wake this way:
   possible wedge. This bounds wedge-detection latency to the threshold plus a
   tick: a delay, never a loss. Healthy crewmates are autonomous and do not wait
   on firstmate mid-task.
+  Each escalation resets the persistence window instead of removing it, so an unchanged wedge re-surfaces repeatedly.
+  Its consecutive count reaches `FM_WEDGE_DEMAND_INSPECT_COUNT` (default 3) before adding `demand-deep-inspection`, and a resume, disappearance, or pause transition clears that count.
 - `heartbeat` -> self-handle. The daemon runs its own cheap bash fleet scan
   every `FM_HEARTBEAT_SCAN_SECS` (default 300s) as the catch-all for a
   captain-relevant status line the per-wake classifier might miss.
@@ -150,6 +155,7 @@ Classify each wake this way:
 Escalations are buffered up to `FM_ESCALATE_BATCH_SECS` (default 90s; 0 =
 immediate) and flushed as one single-line digest prefixed with the sentinel
 marker, carrying pre-read status summaries and a recommended action.
+Away mode keeps that one batch window regardless of item urgency.
 The single-line format makes the submission unambiguous across harnesses, and
 the marker lets firstmate distinguish it from a real captain message.
 
@@ -206,7 +212,7 @@ the marker lets firstmate distinguish it from a real captain message.
 
 ## Stale-artifact lifecycle
 
-Treat `state/.subsuper-escalations`, its `.since` sidecar, and `state/.subsuper-inject-wedged` as session-scoped delivery artifacts, not as the durable work record.
+Treat `state/.subsuper-escalations`, its `.since` and `-urgent` sidecars, and `state/.subsuper-inject-wedged` as session-scoped delivery artifacts, not as the durable work record.
 Always enter through `bin/fm-afk-launch.sh`, which clears prior-session artifacts only for a fresh entry and preserves the current session's buffer on refresh.
 Always exit through `bin/fm-afk-launch.sh stop`, which keeps `state/.afk` present through the daemon's shutdown flush and clears it last.
 `docs/herdr-backend.md` "Stale-artifact lifecycle fix" owns the mechanism and verification evidence.

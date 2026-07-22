@@ -49,6 +49,7 @@ unit_clear_stale() {
   mkdir -p "$st/state"
   : > "$st/state/.subsuper-escalations"
   : > "$st/state/.subsuper-escalations.since"
+  : > "$st/state/.subsuper-escalations-urgent"
   : > "$st/state/.subsuper-inject-wedged"
   : > "$st/state/.wake-queue"          # durable queue must be untouched
   # Source fm-afk-start.sh inside a child bash (it sets `set -eu` and would
@@ -57,6 +58,7 @@ unit_clear_stale() {
     bash -c '. "$1"; fm_afk_clear_stale_artifacts "$2"' _ "$START" "$st/state"
   if [ ! -e "$st/state/.subsuper-escalations" ] \
      && [ ! -e "$st/state/.subsuper-escalations.since" ] \
+     && [ ! -e "$st/state/.subsuper-escalations-urgent" ] \
      && [ ! -e "$st/state/.subsuper-inject-wedged" ]; then
     pass "clear-stale: removes escalations buffer, sidecar, and wedge marker"
   else
@@ -79,6 +81,7 @@ unit_fresh_vs_refresh() {
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-refresh.XXXXXX")
   mkdir -p "$st/state"
   : > "$st/state/.subsuper-escalations"
+  : > "$st/state/.subsuper-escalations-urgent"
   : > "$st/state/.subsuper-inject-wedged"
   # A live "daemon": a real process whose identity the lock records, so
   # daemon_lock_held_by_live_daemon returns true (a refresh).
@@ -89,7 +92,7 @@ unit_fresh_vs_refresh() {
   printf '%s' "$sleep_pid" > "$lock/pid"
   ( . "$ROOT/bin/fm-wake-lib.sh"; fm_pid_identity "$sleep_pid" > "$lock/pid-identity" 2>/dev/null ) || true
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$START" >/dev/null 2>&1
-  if [ -e "$st/state/.subsuper-escalations" ] && [ -e "$st/state/.subsuper-inject-wedged" ]; then
+  if [ -e "$st/state/.subsuper-escalations" ] && [ -e "$st/state/.subsuper-escalations-urgent" ] && [ -e "$st/state/.subsuper-inject-wedged" ]; then
     pass "refresh: daemon already alive - stale artifacts preserved (current session's buffer kept)"
   else
     fail "refresh: incorrectly cleared the current session's buffered escalations"
@@ -697,12 +700,13 @@ unit_clear_failure_aborts_entry() {
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-clear-fail.XXXXXX")
   mkdir -p "$st/state"
   : > "$st/state/.subsuper-escalations"
+  : > "$st/state/.subsuper-escalations-urgent"
   if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
     . "$1"
     fm_afk_launch_reconcile() { return 0; }
     fm_afk_clear_stale_artifacts() { return 1; }
     ! fm_afk_launch_start_native
-  ' _ "$LAUNCH" && [ ! -e "$st/state/.afk" ] && [ -e "$st/state/.subsuper-escalations" ]; then
+  ' _ "$LAUNCH" && [ ! -e "$st/state/.afk" ] && [ -e "$st/state/.subsuper-escalations" ] && [ -e "$st/state/.subsuper-escalations-urgent" ]; then
     pass "clear failure: native entry aborts and restores prior state"
   else
     fail "clear failure: native entry proceeded or lost prior state"
