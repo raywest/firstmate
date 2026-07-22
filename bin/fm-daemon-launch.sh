@@ -131,11 +131,7 @@ fm_afk_launch_lock_release() {
 }
 
 fm_afk_launch_usage() {
-  if [ -n "${FM_AFK_LAUNCH_USAGE_SOURCE:-}" ]; then
-    sed -n '2,34p' "$FM_AFK_LAUNCH_USAGE_SOURCE"
-  else
-    sed -n '2,52p' "${BASH_SOURCE[0]}"
-  fi | sed 's/^# \{0,1\}//'
+  sed -n '2,52p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # The command run inside the created terminal. Real launch runs the shared

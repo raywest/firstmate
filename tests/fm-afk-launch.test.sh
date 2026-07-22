@@ -41,23 +41,6 @@ GLOBAL_CLEANUP() {
 trap GLOBAL_CLEANUP EXIT
 
 # ---------------------------------------------------------------------------
-# UNIT 0: the historical CLI path retains its own help/usage identity.
-# ---------------------------------------------------------------------------
-unit_historical_cli_help() {
-  local output
-  output=$("$LAUNCH" --help 2>&1)
-  if [ "$?" -ne 0 ]; then
-    fail "historical cli help: --help exited nonzero"
-  elif printf '%s\n' "$output" | grep -F 'fm-afk-launch.sh -' >/dev/null \
-    && printf '%s\n' "$output" | grep -F 'fm-afk-launch.sh start' >/dev/null \
-    && ! printf '%s\n' "$output" | grep -F 'fm-daemon-launch.sh' >/dev/null; then
-    pass "historical cli help identifies fm-afk-launch.sh and its usage"
-  else
-    fail "historical cli help identifies the extracted daemon launcher"
-  fi
-}
-
-# ---------------------------------------------------------------------------
 # UNIT 1: fm_afk_clear_stale_artifacts removes exactly the three stale artifacts.
 # ---------------------------------------------------------------------------
 unit_clear_stale() {
@@ -877,7 +860,6 @@ e2e_tmux() {
   rm -rf "$home_tmp" 2>/dev/null || true
 }
 
-unit_historical_cli_help
 unit_clear_stale
 unit_fresh_vs_refresh
 unit_stop_ordering
