@@ -196,6 +196,9 @@ PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_HOME="$HOME_DIR" FM_S
 DAEMON_STARTED=1
 for _ in $(seq 1 100); do [ -s "$STATE/.supervise-daemon.pid" ] && break; sleep 0.1; done
 [ -s "$STATE/.supervise-daemon.pid" ] || fail "away daemon did not start"
+# Always-on triage phase 2: starting the daemon no longer implies away style -
+# enter it explicitly so this scenario still exercises away-mode digest cadence.
+FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" "$ROOT/bin/fm-daemon-launch.sh" afk-enter >/dev/null
 
 # Pending input is never an injection target. Leave a real draft in Pi before
 # the live child emits blocked:, then wait through max-defer.
@@ -286,6 +289,7 @@ PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_HOME="$HOME_DIR" FM_S
   FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="$PRIMARY_TARGET" FM_AFK_LAUNCH_ENTRY="$TMP_ROOT/daemon-entry" \
   "$ROOT/bin/fm-afk-launch.sh" start >/dev/null
 DAEMON_STARTED=1
+FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" "$ROOT/bin/fm-daemon-launch.sh" afk-enter >/dev/null
 PATH="$FAKEBIN:$ORIGINAL_PATH" HERDR_SESSION="$SESSION" FM_ROOT_OVERRIDE="$PROJECT" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" \
   FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="$PRIMARY_TARGET" "$ROOT/bin/fm-afk-return.sh" begin >/dev/null \
   || fail "clean away re-entry/return was not idempotent"

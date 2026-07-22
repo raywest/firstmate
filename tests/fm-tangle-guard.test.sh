@@ -24,6 +24,13 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-tangle-guard)
 fm_git_identity fmtest fmtest@example.invalid
 
+# This suite invokes the real bin/fm-bootstrap.sh, which now includes the
+# always-on triage daemon_liveness_sweep (fm-alwayson-triage-s5 phase 2). That
+# sweep only activates on a claude-harness + tmux/herdr-backend combination;
+# clearing these here keeps its backend detection independent of whatever
+# backend actually hosts this test runner's own shell.
+unset TMUX HERDR_ENV CMUX_WORKSPACE_ID
+
 # A fresh git repo on `main` with one commit. Echoes its path.
 make_repo() {
   local dir=$1

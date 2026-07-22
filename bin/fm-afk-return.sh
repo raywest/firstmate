@@ -2,7 +2,7 @@
 # fm-afk-return.sh - deterministic away-mode return catch-up gate.
 #
 # Usage:
-#   fm-afk-return.sh          Stop away mode, drain catch-up, and open/check gate.
+#   fm-afk-return.sh          Clear the away-mode style flag, drain catch-up, and open/check gate.
 #   fm-afk-return.sh begin    Same as the default command.
 #   fm-afk-return.sh check    Re-drain and close the gate only after blockers resolve.
 #   fm-afk-return.sh guard    Read-only refusal while away or catch-up is pending.
@@ -13,8 +13,11 @@
 # ordinary captain request may proceed. `needs-decision:` is captain-owned and
 # is deliberately not part of this gate; normal reporting surfaces it.
 #
-# The durable state/.afk-return-catchup file is written BEFORE daemon shutdown,
-# so a crash between stopping, draining, and blocker handling fails closed. It
+# The always-on triage daemon is never stopped here (fm-alwayson-triage-s5 phase
+# 2): return only clears the away/present delivery-style flag
+# (bin/fm-daemon-launch.sh afk-exit) and runs the same catch-up gate as before.
+# The durable state/.afk-return-catchup file is written BEFORE that flag clear,
+# so a crash between clearing, draining, and blocker handling fails closed. It
 # retains the drained wake, buffered-escalation, and wedge-marker evidence until
 # every live open blocker is closed and `check` succeeds. Repeated begin/check
 # calls are idempotent. `guard` never mutates state and is suitable for ordinary
@@ -146,10 +149,13 @@ return_reconcile() {
   blockers=$(mktemp "$STATE/.afk-return-blockers.XXXXXX") || { rm -f "$evidence"; return 1; }
   preserve_evidence "$evidence"
 
-  if [ -e "$STATE/.afk" ] || [ -e "$STATE/.afk-daemon-terminal" ]; then
-    if ! "$SCRIPT_DIR/fm-afk-launch.sh" stop; then
+  # The daemon lives on: return is a pure delivery-style flag clear, never a
+  # daemon stop (always-on triage phase 2 - the daemon stops only for an
+  # explicit captain request, a self-update restart, or a pane retarget).
+  if [ -e "$STATE/.afk" ]; then
+    if ! "$SCRIPT_DIR/fm-daemon-launch.sh" afk-exit; then
       lifecycle_ok=0
-      append_evidence lifecycle 'away-mode shutdown failed; lifecycle state preserved for retry' "$evidence"
+      append_evidence lifecycle 'clearing the away-mode style flag failed; retry catch-up before ordinary work' "$evidence"
     fi
   fi
 

@@ -25,8 +25,9 @@ This touches only the firstmate repo and its own worktrees, never anything under
    bin/fm-update.sh
    ```
    It fast-forwards this firstmate repo's default branch from origin, then fast-forwards every registered secondmate home (each a treehouse worktree of this same repo, leased at a detached HEAD on the default branch) the same way.
-   It prints one status line per target (`updated <old>..<new>` / `already current` / `skipped: <reason>`), followed by two action lines that tell you exactly what to do next:
+   It prints one status line per target (`updated <old>..<new>` / `already current` / `skipped: <reason>`), followed by three action lines that tell you exactly what to do next:
    - `reread-firstmate: yes|no`
+   - `restart-daemon: yes|no`
    - `nudge-secondmates: fm-<id>...|none`
 
 2. **Re-read AGENTS.md if your own instructions changed.**
@@ -34,7 +35,16 @@ This touches only the firstmate repo and its own worktrees, never anything under
    **Read `AGENTS.md` now** (CLAUDE.md is a symlink to it) to refresh your operating instructions before doing anything else, so you are acting on the new instructions rather than the stale ones you were started with.
    When it printed `reread-firstmate: no`, nothing changed for you - skip the re-read.
 
-3. **Nudge each updated live secondmate.**
+3. **Restart the always-on triage daemon if it needs the new code.**
+   When the updater printed `restart-daemon: yes` (`bin/` changed AND the daemon is currently alive - docs/alwayson-triage.md), run:
+   ```sh
+   bin/fm-daemon-launch.sh stop && bin/fm-daemon-launch.sh start
+   ```
+   This is the one daemon stop that is not a captain request or a pane retarget: the daemon is a long-lived bash process that keeps executing pre-update code after `bin/` fast-forwards underneath it, so it must be restarted to pick up the new code.
+   The stop flushes any buffered escalations first (its own trapped cleanup) and never touches the away/present style flag, so the daemon comes back in whichever style was already active.
+   When it printed `restart-daemon: no`, skip this step - either `bin/` did not change or no daemon is currently running here.
+
+4. **Nudge each updated live secondmate.**
    For every target listed on the `nudge-secondmates:` line (do nothing when it says `none`), send a one-line re-read nudge so that secondmate picks up its new instructions too:
    ```sh
    FM_HOME=<this-firstmate-home> bin/fm-send.sh <id> 'firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'
@@ -43,7 +53,7 @@ This touches only the firstmate repo and its own worktrees, never anything under
    This is a gentle steer, not an interruption: the secondmate already got a safe tracked-files fast-forward, and the nudge never forces, tears down, or discards its work.
    A secondmate that was skipped, already current, or has no live metadata is not on the list and needs no nudge.
 
-4. **Report to the captain in plain outcomes.**
+5. **Report to the captain in plain outcomes.**
    Summarize what landed under `AGENTS.md` section 9 without firstmate's internal vocabulary: which parts of the fleet are now on the latest, and which were left as-is and why.
    For example: "Captain, firstmate and both second mates are now on the latest."
    Surface any skipped target whose reason needs the captain's attention - for instance a home with its own un-landed changes (diverged) or local edits (dirty), which were left untouched on purpose.

@@ -84,6 +84,13 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 fm_supervision_status "$STATE" "$GRACE"
 [ "$FM_SUP_IN_FLIGHT" -gt 0 ] || exit 0
 fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" && exit 0
+# The always-on triage daemon guarantees its child watcher restarts (a few
+# seconds of gap between cycles is normal, not unhealthy), so a live daemon lock
+# alone satisfies this guard even when the watcher-lock predicate above misses
+# that gap (fm-alwayson-triage-s5 phase 2). Liveness-only: no harness/backend
+# check needed here, since a live daemon lock can only exist for a home that
+# genuinely has one running.
+daemon_lock_held_by_live_daemon && exit 0
 
 afk=0
 [ -e "$STATE/.afk" ] && afk=1

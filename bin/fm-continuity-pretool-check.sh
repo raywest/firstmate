@@ -84,6 +84,10 @@ LOCK_PID=$(cat "$STATE/.watch.lock/pid" 2>/dev/null || true)
 if fm_pid_alive "$LOCK_PID" && fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$LOCK_PID" "$FM_HOME"; then
   exit 0
 fi
+# A live always-on triage daemon guarantees its child watcher restarts, so it
+# satisfies continuity even during the brief gap between cycles the watcher-lock
+# check above can catch (fm-alwayson-triage-s5 phase 2).
+daemon_lock_held_by_live_daemon && exit 0
 
 command -v node >/dev/null 2>&1 || exit 0
 [ -f "$POLICY" ] || exit 0
@@ -96,7 +100,22 @@ esac
 TAB=$(printf '\t')
 BLOCKED_SCRIPT=${CLASSIFICATION#*"$TAB"}
 [ -n "$BLOCKED_SCRIPT" ] && [ "$BLOCKED_SCRIPT" != "$CLASSIFICATION" ] || exit 0
-REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; run bin/fm-wake-drain.sh, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+# On a supported always-on triage combination (claude on tmux/herdr - the daemon's
+# own supported injection backends), recovery is ensuring the daemon, not arming a
+# watcher the daemon already owns permanently (fm-alwayson-triage-s5 phase 2).
+# FM_SUPERVISOR_BACKEND overrides auto-detection, same override the daemon and
+# launcher honor, so a caller can pin the backend explicitly.
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
+FM_BACKEND="${FM_SUPERVISOR_BACKEND:-$(fm_backend_detect 2>/dev/null || printf '')}"
+case "$FM_BACKEND" in
+  tmux|herdr)
+    REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; ensure the daemon with bin/fm-daemon-launch.sh start before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+    ;;
+  *)
+    REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; run bin/fm-wake-drain.sh, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+    ;;
+esac
 ESCAPED=$(printf '%s' "$REASON" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
 printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}\n' "$ESCAPED" >&2
 exit 2

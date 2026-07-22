@@ -7,6 +7,13 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-supervision-instructions)
 RENDER="$ROOT/bin/fm-supervision-instructions.sh"
+# Pin backend detection: the always-on triage flip only applies to claude on
+# tmux/herdr (fm-alwayson-triage-s5 phase 2), and fm_backend_detect otherwise
+# reads this session's own ambient TMUX/HERDR_ENV, which would make these
+# hermetic legacy-behavior assertions depend on whatever backend happens to be
+# hosting the test runner. zellij is unsupported by the daemon, so it always
+# selects the legacy per-harness block regardless of the runner's own backend.
+LEGACY_BACKEND=zellij
 
 test_selected_harness_block_only() {
   local out
@@ -49,7 +56,7 @@ test_repair_lines() {
   out=$(FM_HOME="$home" FM_CODEX_WATCH_CHECKPOINT=7 "$RENDER" --harness codex --repair-line)
   assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "codex repair line did not use checkpoint helper and env override"
 
-  out=$(FM_HOME="$home" "$RENDER" --harness claude --queue-pending 1 --repair-line)
+  out=$(FM_HOME="$home" FM_SUPERVISOR_BACKEND="$LEGACY_BACKEND" "$RENDER" --harness claude --queue-pending 1 --repair-line)
   assert_contains "$out" "After draining queued wakes" "queue-pending prefix missing"
   assert_contains "$out" "Claude Code background task" "claude repair line missing background-task mechanism"
 
@@ -78,7 +85,7 @@ test_ordinary_wake_lines_are_distinct_from_repair() {
   out=$("$RENDER" --harness pi --repair-line)
   assert_contains "$out" "fm_watch_arm_pi" "pi recovery line lost the extension-owned repair tool"
 
-  out=$("$RENDER" --harness claude)
+  out=$(FM_SUPERVISOR_BACKEND="$LEGACY_BACKEND" "$RENDER" --harness claude)
   claude_ordinary=$(printf '%s\n' "$out" | grep -F -- '- Ordinary wake:')
   assert_contains "$claude_ordinary" "re-arm" "claude ordinary-wake line does not tell the model to re-arm"
   assert_contains "$claude_ordinary" "bin/fm-watch-arm.sh" "claude ordinary-wake line lost the background arm command"

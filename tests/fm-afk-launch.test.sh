@@ -4,8 +4,9 @@
 # (bin/fm-afk-start.sh). Two layers:
 #
 #   UNIT (always run, no backend): the session-scoped stale-artifact clear on a
-#   fresh entry vs a refresh, and the correct-ordered stop (daemon SIGTERM'd
-#   while state/.afk is still present, .afk cleared last).
+#   fresh entry vs a refresh, and the daemon lifecycle (start/start-native/stop)
+#   never touching state/.afk - that style flag is owned only by the dedicated
+#   afk-enter/afk-exit subcommands (always-on triage phase 2).
 #
 #   E2E TOPOLOGY (per backend, skipped when its tool is absent): the anti-
 #   regression for the pane split/shrink - entering AND exiting away mode leaves
@@ -103,20 +104,18 @@ unit_fresh_vs_refresh() {
 }
 
 # ---------------------------------------------------------------------------
-# UNIT 3: exit ordering - fm_afk_launch_stop SIGTERMs the daemon WHILE .afk is
-# still present (so its flush is not a no-op), and clears .afk last.
+# UNIT 3: fm_afk_launch_stop never touches state/.afk. Always-on triage phase
+# 2 decouples the daemon's process lifecycle from the away/present delivery
+# STYLE flag: only fm-daemon-launch.sh afk-enter/afk-exit own that flag, so a
+# stop for a self-update restart or pane retarget preserves whichever style
+# was active - the daemon is never stopped just because the captain returned.
 # ---------------------------------------------------------------------------
-unit_stop_ordering() {
-  local st lock marker daemon_pid
+unit_stop_never_touches_afk() {
+  local st lock daemon_pid
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-stop.XXXXXX")
   mkdir -p "$st/state"
   date '+%s' > "$st/state/.afk"
-  marker="$st/afk-at-term"
-  # A fake daemon: on SIGTERM, record whether .afk was still present, then exit.
-  bash -c '
-    trap "if [ -f \"$1/state/.afk\" ]; then echo present > \"$2\"; else echo absent > \"$2\"; fi; exit 0" TERM
-    while :; do sleep 0.2; done
-  ' _ "$st" "$marker" &
+  bash -c 'trap "exit 0" TERM; while :; do sleep 0.2; done' &
   daemon_pid=$!
   lock="$st/state/.supervise-daemon.lock"
   mkdir -p "$lock"
@@ -124,20 +123,15 @@ unit_stop_ordering() {
   ( . "$ROOT/bin/fm-wake-lib.sh"; fm_pid_identity "$daemon_pid" > "$lock/pid-identity" 2>/dev/null ) || true
   printf 'none\t-\tnative\n' > "$st/state/.afk-daemon-terminal"
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop >/dev/null 2>&1
-  if [ "$(cat "$marker" 2>/dev/null || echo missing)" = present ]; then
-    pass "stop-ordering: daemon SIGTERM'd while .afk still present (flush is not a no-op)"
+  if [ -e "$st/state/.afk" ]; then
+    pass "stop: never touches state/.afk (style flag is independent lifecycle state)"
   else
-    fail "stop-ordering: .afk was already cleared when the daemon got SIGTERM"
-  fi
-  if [ ! -e "$st/state/.afk" ]; then
-    pass "stop-ordering: .afk cleared last"
-  else
-    fail "stop-ordering: .afk not cleared"
+    fail "stop: removed state/.afk even though it no longer owns the style flag"
   fi
   if [ ! -e "$st/state/.afk-daemon-terminal" ]; then
-    pass "stop-ordering: daemon-terminal record removed"
+    pass "stop: daemon-terminal record removed"
   else
-    fail "stop-ordering: record not removed"
+    fail "stop: record not removed"
   fi
   kill "$daemon_pid" 2>/dev/null || true
   wait "$daemon_pid" 2>/dev/null || true
@@ -431,15 +425,14 @@ unit_native_lifecycle() {
   : > "$st/state/.subsuper-escalations"
   if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" start-native >/dev/null 2>&1 \
     && [ "$(cut -f1 "$st/state/.afk-daemon-terminal")" = none ] \
-    && [ -e "$st/state/.afk" ] \
     && [ ! -e "$st/state/.subsuper-escalations" ]; then
-    pass "native lifecycle: launcher owns state with no terminal"
+    pass "native lifecycle: launcher owns state with no terminal, never touching state/.afk"
   else
     fail "native lifecycle: state preparation or no-terminal record failed"
   fi
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop >/dev/null 2>&1
-  if [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ]; then
-    pass "native lifecycle: uniform stop clears state without closing a terminal"
+  if [ ! -e "$st/state/.afk-daemon-terminal" ]; then
+    pass "native lifecycle: uniform stop clears terminal record"
   else
     fail "native lifecycle: uniform stop retained state"
   fi
@@ -623,23 +616,6 @@ unit_lock_requires_complete_metadata() {
   rm -rf "$st"
 }
 
-unit_stop_surfaces_afk_removal_failure() {
-  local st
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-stop-remove.XXXXXX")
-  mkdir -p "$st/state"
-  : > "$st/state/.afk"
-  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
-    . "$1"
-    rm() { local last=${!#}; [ "$last" != "$FM_AFK_LAUNCH_STATE/.afk" ]; }
-    ! fm_afk_launch_stop
-  ' _ "$LAUNCH"; then
-    pass "stop state: away-flag removal failure is surfaced"
-  else
-    fail "stop state: away-flag removal failure reported success"
-  fi
-  rm -rf "$st"
-}
-
 unit_stop_confirms_daemon_exit() {
   local st daemon_pid
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-stop-live.XXXXXX")
@@ -737,12 +713,12 @@ unit_incomplete_restore_retains_backup() {
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-restore-fail.XXXXXX")
   mkdir -p "$st/state"
   backup=$(mktemp -d "$st/state/.afk-launch-backup.XXXXXX")
-  printf 'prior\n' > "$backup/.afk"
+  printf 'prior escalations\n' > "$backup/.subsuper-escalations"
   if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
     . "$1"
     cp() { return 1; }
-    ! fm_afk_launch_restore_backup "$2" 1
-  ' _ "$LAUNCH" "$backup" && [ -d "$backup" ] && [ -e "$backup/.afk" ]; then
+    ! fm_afk_launch_restore_backup "$2"
+  ' _ "$LAUNCH" "$backup" && [ -d "$backup" ] && [ -e "$backup/.subsuper-escalations" ]; then
     pass "rollback restore: incomplete restoration retains its recovery backup"
   else
     fail "rollback restore: incomplete restoration discarded its backup"
@@ -750,19 +726,24 @@ unit_incomplete_restore_retains_backup() {
   rm -rf "$st"
 }
 
-unit_flag_write_failure_aborts() {
+# afk-enter/afk-exit are the ONLY owners of the style flag now; start/start-native
+# never touch it (unit_native_lifecycle above), so this exercises the toggle
+# directly as its own independent lifecycle surface.
+unit_afk_enter_exit_independent_of_daemon() {
   local st
-  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-flag-fail.XXXXXX")
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-flag-toggle.XXXXXX")
   mkdir -p "$st/state"
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
-    . "$1"
-    fm_afk_launch_flag_write() { return 1; }
-    ! fm_afk_launch_start_native
-  ' _ "$LAUNCH"
-  if [ ! -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ]; then
-    pass "flag failure: lifecycle aborts without active state"
+  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" afk-enter >/dev/null 2>&1
+  if [ -e "$st/state/.afk" ] && [ ! -e "$st/state/.afk-daemon-terminal" ]; then
+    pass "afk-enter: writes state/.afk without touching daemon lifecycle state"
   else
-    fail "flag failure: lifecycle reported active state"
+    fail "afk-enter: did not write state/.afk cleanly"
+  fi
+  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" afk-exit >/dev/null 2>&1
+  if [ ! -e "$st/state/.afk" ]; then
+    pass "afk-exit: clears state/.afk"
+  else
+    fail "afk-exit: did not clear state/.afk"
   fi
   rm -rf "$st"
 }
@@ -823,7 +804,7 @@ e2e_herdr() {
   ws_after=$(fm_backend_herdr_cli "$SESSION" workspace list 2>/dev/null | jq '[.result.workspaces[]?]|length')
   if [ "$after" = "$before" ]; then pass "herdr e2e: captain tab pane count restored after stop"; else fail "herdr e2e: captain tab pane count not restored ($before -> $after)"; fi
   if [ "$ws_after" = "$ws_before" ]; then pass "herdr e2e: daemon workspace removed by exact id on stop"; else fail "herdr e2e: daemon workspace leaked ($ws_before -> $ws_after)"; fi
-  if [ ! -e "$home_tmp/state/.afk-daemon-terminal" ] && [ ! -e "$home_tmp/state/.afk" ]; then pass "herdr e2e: record + .afk cleared on stop"; else fail "herdr e2e: record or .afk not cleared"; fi
+  if [ ! -e "$home_tmp/state/.afk-daemon-terminal" ]; then pass "herdr e2e: terminal record cleared on stop"; else fail "herdr e2e: terminal record not cleared"; fi
 
   E2E_HERDR_CLEANUP
 }
@@ -858,7 +839,7 @@ e2e_tmux() {
   after=$(tmux list-panes -t "$cap_session" | wc -l | tr -d ' ')
   if [ "$after" = "$before" ]; then pass "tmux e2e: captain window pane count unchanged after stop"; else fail "tmux e2e: captain window changed ($before -> $after)"; fi
   if [ -n "$rec" ] && ! tmux has-session -t "$rec" 2>/dev/null; then pass "tmux e2e: daemon session killed by exact id on stop"; else fail "tmux e2e: daemon session leaked ($rec)"; fi
-  if [ ! -e "$home_tmp/state/.afk-daemon-terminal" ] && [ ! -e "$home_tmp/state/.afk" ]; then pass "tmux e2e: record + .afk cleared on stop"; else fail "tmux e2e: record or .afk not cleared"; fi
+  if [ ! -e "$home_tmp/state/.afk-daemon-terminal" ]; then pass "tmux e2e: terminal record cleared on stop"; else fail "tmux e2e: terminal record not cleared"; fi
 
   tmux kill-session -t "$cap_session" 2>/dev/null || true
   rm -rf "$home_tmp" 2>/dev/null || true
@@ -866,7 +847,7 @@ e2e_tmux() {
 
 unit_clear_stale
 unit_fresh_vs_refresh
-unit_stop_ordering
+unit_stop_never_touches_afk
 unit_stop_rejects_reused_pid
 unit_failed_start_rolls_back_state
 unit_concurrent_start_serialized
@@ -888,13 +869,12 @@ unit_stop_malformed_record_fails_closed
 unit_tmux_planned_record_and_collision
 unit_stop_validates_before_signal
 unit_lock_requires_complete_metadata
-unit_stop_surfaces_afk_removal_failure
 unit_stop_confirms_daemon_exit
 unit_refresh_validates_record
 unit_clear_failure_aborts_entry
 unit_confirmed_absence_succeeds
 unit_incomplete_restore_retains_backup
-unit_flag_write_failure_aborts
+unit_afk_enter_exit_independent_of_daemon
 e2e_herdr
 e2e_tmux
 

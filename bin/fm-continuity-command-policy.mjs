@@ -11,7 +11,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Lexer, commandPosition, splitProgram } from "./fm-arm-command-policy.mjs";
 
-const RECOVERY_SCRIPTS = new Set(["fm-wake-drain.sh", "fm-watch-arm.sh"]);
+// fm-daemon-launch.sh joins the recovery set (fm-alwayson-triage-s5 phase 2):
+// ensuring the always-on triage daemon is the recovery action on a supported
+// combination, alongside the pre-existing wake-drain/watch-arm recovery pair.
+const RECOVERY_SCRIPTS = new Set(["fm-wake-drain.sh", "fm-watch-arm.sh", "fm-daemon-launch.sh"]);
 
 function parseArguments(argv) {
   const result = { command: "", root: "" };

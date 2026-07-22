@@ -19,12 +19,12 @@ This policy is not a post-arm liveness guarantee.
 
 Claude also registers `bin/fm-continuity-pretool-check.sh` for Bash PreToolUse events.
 This is a separate, tightly bounded recovery gate rather than another watcher-shape policy.
-It runs only in a primary home, and it denies only an executed `bin/fm-*.sh` command other than `bin/fm-wake-drain.sh` or `bin/fm-watch-arm.sh` when task metadata is in flight and no identity-matched live watcher holds that home's lock.
-Ordinary shell commands, fleet-script names used as data, all commands in an idle fleet, child worktrees, wake drain, and watcher arm remain allowed.
-The exact denial tells Claude to run `bin/fm-wake-drain.sh` and then re-arm through a tracked Claude background task before retrying the blocked fleet command.
+It runs only in a primary home, and it denies only an executed `bin/fm-*.sh` command other than `bin/fm-wake-drain.sh`, `bin/fm-watch-arm.sh`, or `bin/fm-daemon-launch.sh` when task metadata is in flight and no identity-matched live watcher holds that home's lock AND no live always-on triage daemon lock is held either (`daemon_lock_held_by_live_daemon` - fm-alwayson-triage-s5 phase 2, [`alwayson-triage.md`](alwayson-triage.md)).
+Ordinary shell commands, fleet-script names used as data, all commands in an idle fleet, child worktrees, wake drain, watcher arm, and daemon launch remain allowed.
+The exact denial text depends on the detected backend: on a supported combination (claude on tmux/herdr) it tells Claude to ensure the daemon with `bin/fm-daemon-launch.sh start`; otherwise it tells Claude to run `bin/fm-wake-drain.sh` and then re-arm through a tracked Claude background task before retrying the blocked fleet command.
 `bin/fm-continuity-command-policy.mjs` reuses this document's shell lexer and command-position analysis but owns the recovery-versus-other-fleet classification.
 Malformed transport or opaque dynamic syntax fails open so this narrow gate cannot become a blanket Bash block.
-The existing `bin/fm-turnend-guard.sh` Stop integration is unchanged and remains the final backstop.
+The existing `bin/fm-turnend-guard.sh` Stop integration is unchanged and remains the final backstop; it gained the same daemon-liveness satisfier.
 
 The classifier never executes, sources, evaluates, or expands any part of the submitted command.
 It tokenizes the bytes and classifies lexical execution positions only.

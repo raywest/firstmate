@@ -941,7 +941,10 @@ test_collapse_newlines_pure() {
   pass "_collapse_newlines replaces newlines with literal separator"
 }
 
-test_afk_absent_daemon_does_not_inject() {
+# Always-on triage phase 2: inject_msg's presence gate is a style switch, not a
+# permission gate (report section 2) - a present-mode daemon (afk absent) now
+# injects exactly like an afk-mode one once the busy/composer guards pass.
+test_afk_absent_daemon_still_injects() {
   local dir state fakebin sent capture
   dir=$(make_supercase afk-off)
   state="$dir/state"
@@ -949,14 +952,13 @@ test_afk_absent_daemon_does_not_inject() {
   sent="$dir/sent.log"; : > "$sent"
   capture="$dir/pane.txt"; : > "$capture"
   escalate_add "$state" "done: PR 1"
-  # afk flag deliberately NOT set
-  if PATH="$fakebin:$PATH" FM_FAKE_TMUX_PANE_ALIVE=1 FM_FAKE_TMUX_SENT="$sent" \
-    FM_FAKE_TMUX_CAPTURE="$capture" FM_ESCALATE_BATCH_SECS=0 escalate_flush "$state"; then
-    fail "escalate_flush succeeded while afk inactive"
-  fi
-  [ -s "$sent" ] && fail "daemon injected while afk inactive"
-  [ -s "$state/.subsuper-escalations" ] || fail "buffer not preserved when afk inactive"
-  pass "afk flag absent: daemon does not inject, buffer preserved"
+  # afk flag deliberately NOT set: present mode is the branch under test.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_PANE_ALIVE=1 FM_FAKE_TMUX_SENT="$sent" \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_ESCALATE_BATCH_SECS=0 escalate_flush "$state" \
+    || fail "escalate_flush failed in present mode despite a clean pane"
+  [ -s "$sent" ] || fail "present-mode daemon did not inject despite afk being inactive"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "buffer not cleared after a successful present-mode flush"
+  pass "present mode (afk absent) still injects: the flag is a style switch, not a permission gate"
 }
 
 test_busy_guard_defers_when_supervisor_busy() {
@@ -1358,20 +1360,54 @@ test_below_max_defer_does_nothing() {
   pass "below MAX_DEFER: no inject, no alarm, buffer preserved"
 }
 
-test_max_defer_afk_inactive_does_not_flush_or_alarm() {
+# Present mode's max-defer threshold is the longer 900s default (report
+# section 3: "a present captain legitimately holds the composer for minutes"),
+# not afk's 300s. Below that longer threshold, a stuck present-mode composer
+# must not yet raise the wedge alarm even though it is already past afk's
+# shorter default.
+test_max_defer_present_mode_uses_longer_threshold() {
   local dir state fakebin sent
-  dir=$(make_bordered_case maxdefer-inactive)
+  dir=$(make_bordered_case maxdefer-present-below)
   state="$dir/state"; fakebin="$dir/fakebin"
   sent="$dir/sent.log"; : > "$sent"
+  printf '│ > human draft │\n' > "$dir/composer"
   escalate_add "$state" "needs-decision: pick B"
-  echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
+  echo $(( $(date +%s) - 400 )) > "$state/.subsuper-escalations.since"
+  # afk deliberately NOT entered: present mode is the branch under test.
   PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
-    FM_ESCALATE_BATCH_SECS=99999 FM_MAX_DEFER_SECS=60 FM_INJECT_CONFIRM_SLEEP=0.05 \
+    FM_ESCALATE_BATCH_SECS_PRESENT=99999 FM_INJECT_CONFIRM_SLEEP=0.05 \
     housekeeping "$state"
-  [ ! -s "$sent" ] || fail "injected while afk was inactive"
-  [ ! -e "$state/.subsuper-inject-wedged" ] || fail "wedge alarm fired while afk was inactive"
-  [ -s "$state/.subsuper-escalations" ] || fail "buffer dropped while afk was inactive"
-  pass "max-defer does not flush or alarm while afk is inactive"
+  [ ! -s "$sent" ] || fail "typed into a pending composer"
+  [ ! -e "$state/.subsuper-inject-wedged" ] \
+    || fail "present-mode max-defer alarmed before its longer (900s default) threshold"
+  [ -s "$state/.subsuper-escalations" ] || fail "buffer dropped before present-mode max-defer"
+  pass "present mode: 400s undelivered stays below its 900s-default max-defer threshold (no alarm yet)"
+}
+
+# Past present mode's longer threshold, the alarm still fires (never silently
+# wedge) - but per section 3 it must NOT post the OS-level active alert; that
+# channel is reserved for afk, where there is no next turn to lean on. Present
+# mode relies on the durable marker + daemon log, surfaced by bin/fm-guard.sh.
+test_max_defer_present_mode_alarms_without_os_notify() {
+  local dir state fakebin sent log
+  dir=$(make_bordered_case maxdefer-present-above)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  log="$dir/wedge-alarm.log"; : > "$log"
+  printf '│ > human draft │\n' > "$dir/composer"
+  escalate_add "$state" "needs-decision: pick C"
+  echo $(( $(date +%s) - 1000 )) > "$state/.subsuper-escalations.since"
+  WEDGE_ALARM_LAST_EPOCH=0
+  PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_ESCALATE_BATCH_SECS_PRESENT=99999 FM_INJECT_CONFIRM_SLEEP=0.05 \
+    FM_WEDGE_ALARM_LOG="$log" FM_WEDGE_ALARM_CHANNEL=osascript \
+    housekeeping "$state"
+  [ ! -s "$sent" ] || fail "typed into a pending composer"
+  [ -s "$state/.subsuper-inject-wedged" ] \
+    || fail "present-mode max-defer did not alarm past its 900s-default threshold"
+  [ ! -s "$log" ] || fail "present-mode max-defer fired the OS-level active alert (reserved for afk): $(cat "$log")"
+  [ -s "$state/.subsuper-escalations" ] || fail "buffer lost while composer was pending"
+  pass "present mode: past its longer max-defer threshold the alarm marker/log fire but the OS-level alert stays afk-only"
 }
 
 # --- backend-independent active wedge alert ---------------------------------
@@ -1676,6 +1712,7 @@ test_inject_wedge_alarm_fires_active_alert_on_non_tmux_backend() {
   local dir state log
   dir=$(make_wedge_case wedge-integration); state="$dir/state"; log="$dir/alert.log"
   escalate_add "$state" "needs-decision: pick A"
+  afk_enter "$state"
   WEDGE_ALARM_LAST_EPOCH=0
   FM_WEDGE_ALARM_LOG="$log" FM_STATE_OVERRIDE="$state" \
     FM_WEDGE_ALARM_CHANNEL=osascript FM_SUPERVISOR_BACKEND=herdr \
@@ -1691,6 +1728,7 @@ test_inject_wedge_alarm_throttles_when_marker_cannot_be_written() {
   dir=$(make_wedge_case wedge-unwritable-marker)
   state="$dir/state"; log="$dir/alert.log"; daemon_log="$dir/daemon.log"
   escalate_add "$state" "needs-decision: pick A"
+  afk_enter "$state"
   chmod u-w "$state"
   WEDGE_ALARM_LAST_EPOCH=0
   LOG="$daemon_log" FM_WEDGE_ALARM_LOG="$log" FM_MAX_DEFER_SECS=600 \
@@ -1992,7 +2030,7 @@ test_is_wake_reason_distinguishes_status_stdout
 test_terminal_stale_escalate_leaves_no_marker
 test_signal_escalate_marks_seen_no_catchall_refire
 test_collapse_newlines_pure
-test_afk_absent_daemon_does_not_inject
+test_afk_absent_daemon_still_injects
 test_busy_guard_defers_when_supervisor_busy
 test_marker_detection
 test_afk_turn_exemption
@@ -2016,7 +2054,8 @@ test_max_defer_flushes_empty_idle_pane
 test_max_defer_pending_composer_alarms_without_typing
 test_normal_flush_clears_stale_wedge_marker
 test_below_max_defer_does_nothing
-test_max_defer_afk_inactive_does_not_flush_or_alarm
+test_max_defer_present_mode_uses_longer_threshold
+test_max_defer_present_mode_alarms_without_os_notify
 test_wedge_alarm_library_mode_defaults_to_discard
 test_wake_helpers_replace_inherited_notifier_override
 test_wedge_alarm_discard_seam_fires_nothing
