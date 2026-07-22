@@ -348,16 +348,19 @@ _collapse_newlines() {  # <text>
 # summary firstmate would otherwise have to re-read.
 
 classify_signal() {  # <reason-after-colon> <state>
-  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen guard_task guard_last
-  local -a guard_files=()
+  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen guard_task guard_last paused=0 unresolved=0 guard_count=0
+  local -a guard_files
   for f in $reason; do
-    [ -e "$f" ] || continue
+    [ -e "$f" ] || { unresolved=1; continue; }
     guard_task=$(basename "$f")
     guard_task=${guard_task%.status}
     guard_task=${guard_task%.turn-ended}
     guard_last=$(last_status_line "$state/$guard_task.status")
-    if ! status_is_paused "$guard_last"; then
+    if status_is_paused "$guard_last"; then
+      paused=1
+    else
       guard_files+=("$f")
+      guard_count=$((guard_count + 1))
     fi
     last=$(last_status_line "$f")
     [ -n "$last" ] || continue
@@ -390,8 +393,12 @@ classify_signal() {  # <reason-after-colon> <state>
     # without a done:/needs-decision: line is never silently swallowed in
     # either mode. Cost: the same bounded fm-crew-state.sh read the watcher
     # already pays today, still only on no-verb signals.
-    if [ "${#guard_files[@]}" -eq 0 ]; then
-      printf 'self|routine signal: %s' "$distilled"
+    if [ "$guard_count" -eq 0 ]; then
+      if [ "$unresolved" -eq 0 ] && [ "$paused" -eq 1 ]; then
+        printf 'self|routine signal: %s' "$distilled"
+      else
+        printf 'escalate|no-verb signal, crew not provably working: %s' "$distilled"
+      fi
     elif signal_crew_provably_working "${guard_files[@]}"; then
       printf 'self|routine signal: %s' "$distilled"
     else
@@ -1099,7 +1106,7 @@ housekeeping() {  # <state>
     stale_window_is_busy "$win" "$state"
     case "$?" in
       0) rm -f "$marker" "$wedge_count_file" ;;
-      2) rm -f "$marker" "$wedge_count_file" ;;
+      2) ;;
       *)
         n=$(( $(cat "$wedge_count_file" 2>/dev/null || echo 0) + 1 ))
         echo "$n" > "$wedge_count_file"

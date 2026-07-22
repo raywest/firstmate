@@ -156,6 +156,15 @@ test_classify_signal_mixed_pause_and_stopped_crew_escalates() {
   pass "a declared pause exempts only its own crew from the no-verb guard"
 }
 
+test_classify_signal_vanished_file_escalates() {
+  local dir state out
+  dir=$(make_supercase signal-vanished-file)
+  state="$dir/state"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/missing.status" "$state")
+  case "$out" in escalate\|*) ;; *) fail "a vanished no-verb signal self-handled: $out" ;; esac
+  pass "a vanished no-verb signal escalates fail-closed"
+}
+
 # Delta (b): first-sight stopped-crew escalation. This is the ONE deliberate
 # mode-split threshold (report section 8.2): afk mode keeps waiting out the
 # 240s persistence recheck (housekeeping (2)); present mode (state/.afk
@@ -572,6 +581,25 @@ test_housekeeping_wedge_counter_clears_when_window_gone() {
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "gone window retained its stale marker"
   [ ! -e "$state/.subsuper-wedge-escalations-$key" ] || fail "gone window retained its wedge escalation count"
   pass "a gone wedge clears its escalation counter"
+}
+
+test_housekeeping_wedge_counter_survives_capture_failure() {
+  local dir state key
+  dir=$(make_supercase stale-wedge-counter-capture-failure)
+  state="$dir/state"
+  fm_write_meta "$state/capture-failure.meta" "window=default:w1:p9" "backend=herdr"
+  printf 'working\n' > "$state/capture-failure.status"
+  key=$(printf '%s' "capture-failure" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
+  (
+    fm_backend_capture() { return 1; }
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  ) || fail "capture-failure stale housekeeping failed"
+  [ -e "$state/.subsuper-stale-$key" ] || fail "capture failure cleared the stale marker"
+  [ "$(cat "$state/.subsuper-wedge-escalations-$key" 2>/dev/null || true)" = 2 ] || fail "capture failure reset the wedge escalation count"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "capture failure escalated without a pane read"
+  pass "a capture failure preserves wedge tracking for retry"
 }
 
 test_housekeeping_resumed_stale_cleared() {
@@ -1919,6 +1947,7 @@ test_classify_routine_signal_self
 test_classify_signal_no_verb_not_working_escalates
 test_classify_signal_declared_pause_exempt_from_provably_working_guard
 test_classify_signal_mixed_pause_and_stopped_crew_escalates
+test_classify_signal_vanished_file_escalates
 test_classify_stale_present_mode_first_sight_stopped_crew_escalates
 test_classify_stale_present_mode_provably_working_self
 test_classify_stale_present_mode_paused_crew_pauses
@@ -1938,6 +1967,7 @@ test_housekeeping_persistent_stale_escalates
 test_housekeeping_persistent_stale_repeats_with_counter_and_demand_deep_inspection
 test_housekeeping_wedge_counter_clears_on_resume
 test_housekeeping_wedge_counter_clears_when_window_gone
+test_housekeeping_wedge_counter_survives_capture_failure
 test_housekeeping_resumed_stale_cleared
 test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_paused_resumed_cleared
