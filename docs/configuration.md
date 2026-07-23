@@ -102,6 +102,13 @@ An absent file means `auto`, i.e. default-on on macOS: the alarm exists precisel
 A missing or failing channel logs and falls through to the next, never crashing the daemon.
 See [`wedge-alarm.md`](wedge-alarm.md) for the channel reference and macOS verification evidence, and [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 
+## Daemon local tuning (config/daemon.env)
+
+`config/daemon.env` (local, gitignored, optional) is the durable place to set any of the "Environment variables" below that the always-on triage daemon reads, for example `FM_PAUSE_RESURFACE_SECS`.
+`bin/fm-daemon-launch.sh`'s `fm_afk_launch_daemon_cmd` sources it first when present, before `config/x-mode.env`, so an X-mode cadence value still wins over a daemon.env value for any variable both files set.
+An absent file is a no-op and changes nothing about daemon behavior.
+A change to the file takes effect at the daemon's next restart; it is not read by an already-running daemon process.
+
 ## Gate defaults (.no-mistakes.yaml)
 
 The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and defines `commands.test` so no-mistakes runs firstmate's bash behavior suite directly.
@@ -349,7 +356,8 @@ These paths need `jq` to build the JSON payload, but they run before token and n
 
 ## Environment variables
 
-Runtime tuning via environment variables (defaults shown):
+Runtime tuning via environment variables (defaults shown).
+For a variable the always-on triage daemon reads, set it durably in `config/daemon.env` (see "Daemon local tuning" above) rather than the ambient shell.
 
 ```sh
 FM_HOME=                 # optional operational home for most scripts, unset means this repo root; fm-send requires it explicitly

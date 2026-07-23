@@ -369,16 +369,20 @@ fm_afk_launch_restore_backup() {  # <backup>
 }
 
 # Build the exact command run inside the daemon's terminal: source
-# config/x-mode.env FIRST when present, so the daemon's watcher child inherits
-# the X-mode cadence exactly like an LLM-armed watcher does
-# (bin/fm-supervision-instructions.sh "X mode: active; source ..."). The `[ -f
-# ]` guard makes this line a harmless no-op when X mode is not configured, so
-# every daemon launch uses one code path rather than branching on X-mode state.
+# config/daemon.env first when present, for durable operator tuning of daemon
+# runtime env vars (docs/configuration.md "Environment variables"), then
+# source config/x-mode.env, so the daemon's watcher child inherits the
+# X-mode cadence exactly like an LLM-armed watcher does
+# (bin/fm-supervision-instructions.sh "X mode: active; source ..."). Sourcing
+# x-mode.env second means it wins over daemon.env for any var both set. The
+# `[ -f ]` guards make each line a harmless no-op when its file is absent, so
+# every daemon launch uses one code path rather than branching on config state.
 fm_afk_launch_daemon_cmd() {  # <captain-target> <captain-backend> <entry>
-  local captain_target=$1 captain_backend=$2 entry=$3 x_mode_env
+  local captain_target=$1 captain_backend=$2 entry=$3 daemon_env x_mode_env
+  daemon_env="$FM_HOME/config/daemon.env"
   x_mode_env="$FM_HOME/config/x-mode.env"
-  printf '[ -f %q ] && . %q; exec env FM_HOME=%q FM_SUPERVISOR_TARGET=%q FM_SUPERVISOR_BACKEND=%q %q' \
-    "$x_mode_env" "$x_mode_env" "$FM_HOME" "$captain_target" "$captain_backend" "$entry"
+  printf '[ -f %q ] && . %q; [ -f %q ] && . %q; exec env FM_HOME=%q FM_SUPERVISOR_TARGET=%q FM_SUPERVISOR_BACKEND=%q %q' \
+    "$daemon_env" "$daemon_env" "$x_mode_env" "$x_mode_env" "$FM_HOME" "$captain_target" "$captain_backend" "$entry"
 }
 
 # Launch the daemon in a non-visible herdr terminal in the CAPTAIN's session
