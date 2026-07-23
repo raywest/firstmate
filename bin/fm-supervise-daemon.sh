@@ -1270,6 +1270,10 @@ housekeeping() {  # <state>
     fi
     if [ -n "$last" ] && status_is_captain_relevant "$last"; then
       rm -f "$marker"
+      if [ "$(cat "$state/.subsuper-seen-status-$key" 2>/dev/null || true)" != "$last" ]; then
+        escalate_add "$state" "stale recheck after ${age}s absorbed (terminal status not yet surfaced): $last" routine
+        mark_status_seen "$state" "$task" "$last"
+      fi
       continue
     fi
     rm -f "$marker"

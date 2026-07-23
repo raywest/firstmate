@@ -792,6 +792,29 @@ test_housekeeping_absorbed_recheck_terminal_status_clears_marker() {
   pass "a terminal absorbed recheck clears tracking without re-escalating"
 }
 
+test_housekeeping_absorbed_recheck_unseen_terminal_escalates() {
+  local dir state fakebin key terminal
+  dir=$(make_supercase absorbed-recheck-unseen-terminal)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/absorbed-w4.meta" "window=sess:fm-absorbed-w4"
+  terminal='failed: validation exited 1'
+  printf '%s\n' "$terminal" > "$state/absorbed-w4.status"
+  key=$(printf '%s' "absorbed-w4" | tr ':/. ' '____')
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-absorbed-$key"
+  printf 'done: an earlier validation\n' > "$state/.subsuper-seen-status-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w4" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · worktree gone' \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "unseen terminal recheck retained the absorbed marker"
+  grep -Fq "$terminal" "$state/.subsuper-escalations" 2>/dev/null \
+    || fail "unseen terminal status was not escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ "$(cat "$state/.subsuper-seen-status-$key" 2>/dev/null || true)" = "$terminal" ] \
+    || fail "unseen terminal escalation did not update the seen-status marker"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "unseen terminal recheck created short-cadence wedge tracking"
+  pass "an unseen terminal absorbed recheck escalates once without wedge tracking"
+}
+
 test_housekeeping_herdr_persistent_stale_resolves_meta() {
   local dir state key
   dir=$(make_supercase stale-herdr-persistent)
@@ -2186,6 +2209,7 @@ test_housekeeping_stale_unreadable_source_escalates_fail_safe
 test_housekeeping_absorbed_recheck_still_working_resets_window
 test_housekeeping_absorbed_recheck_no_longer_working_resurfaces
 test_housekeeping_absorbed_recheck_terminal_status_clears_marker
+test_housekeeping_absorbed_recheck_unseen_terminal_escalates
 test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_paused_unpaused_cleared
