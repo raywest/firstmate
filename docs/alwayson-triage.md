@@ -67,9 +67,8 @@ evidence is ambiguous - is fail-safe, escalating once and handing the pane back
 to ordinary short-cadence wedge tracking with its count starting fresh.
 An idle pane with neither source still escalates exactly as before this
 change.
-`bin/fm-classify-lib.sh` and `bin/fm-crew-state.sh` are the one owner of the
-predicate and its two sources; every other doc and script points here rather
-than restating the mechanism.
+This document is the one policy owner; `bin/fm-classify-lib.sh` and
+`bin/fm-crew-state.sh` implement the predicate and its two sources.
 
 Urgent items (always flush immediately regardless of style): `check:` output
 (PR merges, X mentions), `failed:`, `needs-decision:`, `blocked:`, `done:`/PR-ready,
