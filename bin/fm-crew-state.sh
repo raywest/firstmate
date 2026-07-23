@@ -195,6 +195,18 @@ crew_pane_is_busy() {  # <target>
 # the foreground turn is idle and no busy banner is showing - a crew
 # deliberately parked there otherwise reads as a plain idle pane and gets
 # wedge-escalated. FM_BACKGROUND_WORK_REGEX overrides the default pattern.
+#
+# Live-verified 2026-07-23 against a real claude pane (see state/<id>.status
+# for the captured evidence): the footer renders on claude's spinner/status
+# line ABOVE the composer (e.g. "✻ Baked for 9m 12s · 1 shell still
+# running"), not on the trailing keybind bar ("  ⏵⏵ bypass permissions on ·
+# 1 shell · ← for agents · ↓ to manage") that a last-line-only read picks up
+# instead - that bar carries the bare shell count but never the word
+# "running", so a tail -1 read of it never matches and this predicate always
+# reported false on a real pane. Matching against the same bounded near-bottom
+# window fm_pane_is_busy already uses (last 6 non-blank lines) catches the
+# live spinner line while still excluding a stale footer from earlier in the
+# pane's history once enough real turns have pushed it out of that window.
 FM_BACKGROUND_WORK_REGEX_DEFAULT='[0-9]+ (shells?|monitors?)\b.*\brunning\b'
 crew_pane_has_background_work() {  # <target>
   local tail40
@@ -202,7 +214,7 @@ crew_pane_has_background_work() {  # <target>
     tmux) tail40=$(tmux capture-pane -p -t "$1" -S -40 2>/dev/null) || return 1 ;;
     *) tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || return 1 ;;
   esac
-  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -1 \
+  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
     | grep -qiE "${FM_BACKGROUND_WORK_REGEX:-$FM_BACKGROUND_WORK_REGEX_DEFAULT}"
 }
 
