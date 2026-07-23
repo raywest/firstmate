@@ -772,6 +772,26 @@ test_housekeeping_absorbed_recheck_no_longer_working_resurfaces() {
   pass "a long-cadence absorption that is no longer provably working re-surfaces within the bounded window, never never"
 }
 
+test_housekeeping_absorbed_recheck_terminal_status_clears_marker() {
+  local dir state fakebin key terminal
+  dir=$(make_supercase absorbed-recheck-terminal)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/absorbed-w3.meta" "window=sess:fm-absorbed-w3"
+  terminal='done: validation completed'
+  printf '%s\n' "$terminal" > "$state/absorbed-w3.status"
+  key=$(printf '%s' "absorbed-w3" | tr ':/. ' '____')
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-absorbed-$key"
+  printf '%s\n' "$terminal" > "$state/.subsuper-seen-status-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w3" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · finished quietly' \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "terminal recheck retained the absorbed marker"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "terminal recheck re-escalated a reported status: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "terminal recheck created short-cadence wedge tracking"
+  pass "a terminal absorbed recheck clears tracking without re-escalating"
+}
+
 test_housekeeping_herdr_persistent_stale_resolves_meta() {
   local dir state key
   dir=$(make_supercase stale-herdr-persistent)
@@ -2165,6 +2185,7 @@ test_housekeeping_stale_neither_source_still_escalates
 test_housekeeping_stale_unreadable_source_escalates_fail_safe
 test_housekeeping_absorbed_recheck_still_working_resets_window
 test_housekeeping_absorbed_recheck_no_longer_working_resurfaces
+test_housekeeping_absorbed_recheck_terminal_status_clears_marker
 test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_paused_unpaused_cleared

@@ -201,7 +201,7 @@ crew_pane_has_background_work() {  # <target>
     tmux) tail40=$(tmux capture-pane -p -t "$1" -S -40 2>/dev/null) || return 1 ;;
     *) tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || return 1 ;;
   esac
-  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
+  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -1 \
     | grep -qiE "${FM_BACKGROUND_WORK_REGEX:-$FM_BACKGROUND_WORK_REGEX_DEFAULT}"
 }
 

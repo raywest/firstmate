@@ -1268,6 +1268,10 @@ housekeeping() {  # <state>
       _now > "$marker"
       continue
     fi
+    if [ -n "$last" ] && status_is_captain_relevant "$last"; then
+      rm -f "$marker"
+      continue
+    fi
     rm -f "$marker"
     escalate_add "$state" "stale recheck after ${age}s absorbed (was provably working via run-step/background-task, no longer - possible wedge): $win" routine
     stale_marker_record "$win" "$state"

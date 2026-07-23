@@ -86,7 +86,8 @@ case "${1:-}" in
   capture-pane)
     [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] && exit 1
     if [ "${FM_FAKE_BUSY:-0}" = 1 ]; then printf 'work in progress\nesc to interrupt\n'
-    elif [ "${FM_FAKE_BACKGROUND_WORK:-0}" = 1 ]; then printf 'all quiet\n1 shell, 1 monitor still running\n> \n'
+    elif [ "${FM_FAKE_BACKGROUND_WORK:-0}" = 1 ]; then printf 'all quiet\n1 shell, 1 monitor still running\n'
+    elif [ "${FM_FAKE_BACKGROUND_WORK_STALE:-0}" = 1 ]; then printf '1 shell, 1 monitor still running\nordinary agent output\n> \n'
     else printf 'all quiet\n> \n'; fi ;;
 esac
 exit 0
@@ -156,12 +157,13 @@ reset_fakes() {
   FM_FAKE_RUNS_LIST=""
   FM_FAKE_BUSY=0
   FM_FAKE_BACKGROUND_WORK=0
+  FM_FAKE_BACKGROUND_WORK_STALE=0
   FM_FAKE_TMUX_MISSING=0
   FM_FAKE_HERDR_BUSY=0
   FM_FAKE_HERDR_MISSING=0
   FM_FAKE_HERDR_AGENT_STATUS=""
   FM_FAKE_CI_LOGS=""
-  export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_BACKGROUND_WORK FM_FAKE_TMUX_MISSING
+  export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_BACKGROUND_WORK FM_FAKE_BACKGROUND_WORK_STALE FM_FAKE_TMUX_MISSING
   export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_CI_LOGS
 }
 
@@ -808,6 +810,19 @@ test_no_run_background_work_footer_pane() {
   pass "no run + live background-task footer reads working from the pane"
 }
 
+test_no_run_background_work_text_before_footer_stays_idle() {
+  reset_fakes
+  local d; d=$(new_case background-work-stale)
+  make_repo_on_branch "$d/wt" fm/feat-i-stale
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-i-stale.meta" "window=fm:fm-feat-i-stale" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BACKGROUND_WORK_STALE=1
+  local out; out=$(run_crew_state "$d" feat-i-stale)
+  assert_not_contains "$out" "state: working" "non-footer background-work text must not absorb the pane"
+  assert_contains "$out" "state: unknown" "non-footer background-work text falls through as idle"
+  pass "background-work text before the footer does not mask an idle pane"
+}
+
 test_no_run_herdr_unknown_uses_backend_capture() {
   command -v jq >/dev/null 2>&1 || { pass "herdr pane fallback skipped without jq"; return; }
   reset_fakes
@@ -1184,6 +1199,7 @@ test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status
 test_other_branch_run_ignored
 test_no_run_busy_pane
 test_no_run_background_work_footer_pane
+test_no_run_background_work_text_before_footer_stays_idle
 test_no_run_herdr_unknown_uses_backend_capture
 test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane
 test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle
