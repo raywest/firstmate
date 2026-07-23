@@ -832,7 +832,7 @@ Dedupe (one wake per `->blocked` edge, marker cleared when the pane returns to `
 
 `bin/fm-afk-start.sh` execs the supervise daemon in the FOREGROUND of whatever terminal it is already in.
 The supported Claude or Codex tmux/herdr always-on path instead uses the non-visible terminal launch below so the session-start bootstrap sweep can keep the daemon alive without an LLM background tool.
-Harnesses with a native in-pane tracked-background tool (claude, grok) can run it there and the daemon inherits the captain pane's env.
+On an unflipped combination, a harness with a native in-pane tracked-background tool (for example, grok) can run it there and the daemon inherits the captain pane's env.
 A harness with NO native background mechanism (pi) has no place to run it, and manufacturing one by SPLITTING the captain's active pane visibly shrinks it: `herdr pane split <pane> --direction down --ratio 0.20 --no-focus` creates a second pane whose `tab_id` equals the captain pane's, so the two co-tenant one tab's viewport.
 `--no-focus` does not prevent this - it governs focus, not geometry.
 

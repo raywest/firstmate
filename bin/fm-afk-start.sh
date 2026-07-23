@@ -17,11 +17,12 @@
 # it enables nounset and errexit; callers that need different shell options
 # must restore them explicitly.
 #
-# This is the COMMON daemon entry for every backend. HOW it becomes a tracked
-# background process differs by harness/backend and is owned elsewhere:
-#   - Harnesses with a native in-pane tracked-background tool (e.g. claude, grok)
-#     run this directly via that tool, so the daemon inherits the captain pane's
-#     env and auto-discovers it.
+# This is the COMMON daemon entry for every backend. `/afk` owns whether a
+# primary should launch it; on an unflipped combination, the launch mechanism
+# differs by harness/backend:
+#   - Harnesses with a native in-pane tracked-background tool (e.g. grok) run
+#     this directly via that tool, so the daemon inherits the captain pane's env
+#     and auto-discovers it.
 #   - Harnesses with NO native background mechanism (e.g. pi) run this THROUGH
 #     the historical bin/fm-afk-launch.sh CLI entry point, whose implementation
 #     lives in bin/fm-daemon-launch.sh. It creates a non-visible tracked terminal

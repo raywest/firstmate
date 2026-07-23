@@ -144,7 +144,7 @@ wake latency (task complete -> model re-invoked): 11s, with ZERO human input
 ```
 
 The re-invocation arrived as a `<task-notification>` whose accompanying system notice stated verbatim "No human input has been received since the last genuine user message in this conversation".
-So the model was re-invoked solely by the background task's completion while idle, which is Mechanism A - the same background-notify wake the Claude supervision protocol relies on for the main primary.
+So the model was re-invoked solely by the background task's completion while idle, which is Mechanism A - the same background-notify wake the Claude supervision protocol uses on unflipped backends.
 This matches the harness tool contract that a `run_in_background` task "keeps running across turns and re-invokes you when it exits", and reproduces the 11s latency the task audit measured independently on the same harness version.
 No Herdr command was issued and no fleet state was touched; the experiment wrote only to the session scratchpad, which was discarded.
 

@@ -21,16 +21,16 @@ path below.
 
 ## What it does
 
-1. **Ensure the daemon is running.** On a supported combination this is normally
-   already true (the bootstrap sweep started it); check first, and only launch it
-   yourself as a fallback:
-   - **Harness WITH a native in-pane tracked-background tool** (e.g. claude's
-     background bash, grok's background tool): run
+1. **Ensure the daemon is running.** On a supported combination (a claude or codex primary, on tmux or herdr) it is already running - the session-start bootstrap sweep guarantees this every session (`docs/alwayson-triage.md` "Lifecycle").
+   Do not launch it yourself there.
+   On an unflipped combination, `/afk` is still what launches it for the walk-away stretch:
+   - **Harness WITH a native in-pane tracked-background tool** (e.g. grok's
+     background tool): run
      `bin/fm-afk-launch.sh start-native`, then run
      `bin/fm-afk-start.sh` through that native tool.
      This is a deliberate no-separate-terminal exception because the harness-hosted job creates no terminal or layout mutation, and a shell launcher cannot invoke a harness-native background tool.
      Do not wrap it in `nohup ... &` (Codex/herdr can reap fire-and-forget shell children after a tool call returns).
-   - **Otherwise** (e.g. pi, or the bootstrap-managed path on tmux/herdr): run
+   - **Otherwise** (e.g. pi): run
      `bin/fm-daemon-launch.sh start`.
      It creates a NON-VISIBLE tracked terminal for the current backend (a herdr dedicated `--no-focus` workspace or detached tmux session) when the daemon is not already alive, records its exact id, and passes the captain pane in as `FM_SUPERVISOR_TARGET` so the daemon injects into the captain, not its own new pane.
      Idempotent: a no-op when the daemon is already alive.
