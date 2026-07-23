@@ -86,8 +86,21 @@ case "${1:-}" in
   capture-pane)
     [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] && exit 1
     if [ "${FM_FAKE_BUSY:-0}" = 1 ]; then printf 'work in progress\nesc to interrupt\n'
-    elif [ "${FM_FAKE_BACKGROUND_WORK:-0}" = 1 ]; then printf 'all quiet\n1 shell, 1 monitor still running\n'
-    elif [ "${FM_FAKE_BACKGROUND_WORK_STALE:-0}" = 1 ]; then printf '1 shell, 1 monitor still running\nordinary agent output\n> \n'
+    elif [ "${FM_FAKE_BACKGROUND_WORK:-0}" = 1 ]; then printf '%s\n' \
+      '⏺ Started in the background (task ID bjiuu6j13).' \
+      '✻ Churned for 5s · 1 shell still running' \
+      '────────────────────────────────────' \
+      '❯ ' \
+      '────────────────────────────────────' \
+      '  ⏵⏵ bypass permissions on · 1 shell · ← for agents · ↓ to manage'
+    elif [ "${FM_FAKE_BACKGROUND_WORK_STALE:-0}" = 1 ]; then printf '%s\n' \
+      '✻ Churned for 5s · 1 shell still running' \
+      '⏺ Killed - background task bjiuu6j13 (the 200-second sleep) is stopped.' \
+      '✻ Baked for 9s' \
+      '────────────────────────────────────' \
+      '❯ ' \
+      '────────────────────────────────────' \
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents'
     else printf 'all quiet\n> \n'; fi ;;
 esac
 exit 0
@@ -793,6 +806,14 @@ test_no_run_busy_pane() {
 # live background-work footer (e.g. claude's "N shell(s)"/"N monitor" still-
 # running indicator) -> working via pane, the SECOND authoritative source
 # crew_absorb_class treats as provably working (captain-approved 2026-07-22).
+#
+# The FM_FAKE_BACKGROUND_WORK fixture is real claude pane text captured
+# 2026-07-23 from a live worker deliberately parked on a backgrounded shell:
+# the footer ("✻ Churned for 5s · 1 shell still running") renders on the
+# spinner/status line ABOVE the composer, and the trailing keybind bar carries
+# only the bare "1 shell" count, never the word "running". A last-line-only
+# read of the captured tail (the pre-fix bug) sees only that bottom bar and
+# never matches; this test pins the corrected read against the same shape.
 test_no_run_background_work_footer_pane() {
   reset_fakes
   local d; d=$(new_case background-work)
@@ -810,6 +831,15 @@ test_no_run_background_work_footer_pane() {
   pass "no run + live background-task footer reads working from the pane"
 }
 
+# The FM_FAKE_BACKGROUND_WORK_STALE fixture is real claude pane text captured
+# 2026-07-23 from the SAME worker moments after its background task was
+# stopped: the old footer is still present in the captured tail (claude's TUI
+# does not erase scrollback), but enough genuine subsequent turns
+# (kill-confirmation line, a fresh no-background-work spinner line, and the
+# composer chrome) have pushed it out of the near-bottom window
+# crew_pane_has_background_work now reads, so it correctly falls through to
+# idle instead of re-absorbing a pane whose background work has already
+# finished.
 test_no_run_background_work_text_before_footer_stays_idle() {
   reset_fakes
   local d; d=$(new_case background-work-stale)
@@ -818,9 +848,9 @@ test_no_run_background_work_text_before_footer_stays_idle() {
   fm_write_meta "$d/state/feat-i-stale.meta" "window=fm:fm-feat-i-stale" "worktree=$d/wt" "kind=ship"
   FM_FAKE_BACKGROUND_WORK_STALE=1
   local out; out=$(run_crew_state "$d" feat-i-stale)
-  assert_not_contains "$out" "state: working" "non-footer background-work text must not absorb the pane"
-  assert_contains "$out" "state: unknown" "non-footer background-work text falls through as idle"
-  pass "background-work text before the footer does not mask an idle pane"
+  assert_not_contains "$out" "state: working" "a footer buried by later real turns must not absorb the pane"
+  assert_contains "$out" "state: unknown" "buried background-work text falls through as idle"
+  pass "a stale, buried background-work footer does not mask a now-idle pane"
 }
 
 test_no_run_herdr_unknown_uses_backend_capture() {
