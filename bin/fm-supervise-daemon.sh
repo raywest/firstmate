@@ -523,8 +523,33 @@ stale_marker_remove() {  # <window> <state>
 stale_tracking_remove() {  # <window> <state>
   local win=$1 state=$2 key
   stale_marker_remove "$win" "$state"
+  absorbed_marker_remove "$win" "$state"
   key=$(_stale_key "$(window_to_task "$win" "$state")")
   rm -f "$state/.subsuper-wedge-escalations-$key"
+}
+
+# Absorbed-as-provably-working marker: state/.subsuper-absorbed-<key> holds the
+# epoch a stale pane was first absorbed because crew_absorb_class
+# (bin/fm-classify-lib.sh) read it as working - an actively-running no-mistakes
+# run-step, or the harness's own live background-work footer
+# (bin/fm-crew-state.sh's crew_pane_has_background_work) - rather than a
+# genuinely idle pane. Housekeeping (2c) ages it against the SAME
+# PAUSE_RESURFACE_SECS cadence as a declared pause (not the short wedge
+# cadence): a multi-hour validation run or a long background task should not
+# pay a bounded no-mistakes/pane read every FM_STALE_ESCALATE_SECS, but a run
+# or background task that dies silently must still surface within one bounded
+# window - never never. Create-if-absent, mirroring pause_marker_record.
+absorbed_marker_record() {  # <window> <state> - create if absent
+  local win=$1 state=$2 key marker
+  key=$(_stale_key "$(window_to_task "$win" "$state")")
+  marker="$state/.subsuper-absorbed-$key"
+  [ -e "$marker" ] || _now > "$marker"
+}
+
+absorbed_marker_remove() {  # <window> <state>
+  local win=$1 state=$2 key
+  key=$(_stale_key "$(window_to_task "$win" "$state")")
+  rm -f "$state/.subsuper-absorbed-$key"
 }
 
 # Pause marker: state/.subsuper-paused-<key> holds the epoch a declared pause was
@@ -551,6 +576,7 @@ clear_pause_tracking() {  # <window> <state>
   key=$(_stale_key "$task")
   watcher_key=$(_stale_key "$win")
   rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-stale-$key" "$state/.subsuper-wedge-escalations-$key" \
+    "$state/.subsuper-absorbed-$key" \
     "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
     "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key"
 }
@@ -1050,10 +1076,19 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #  2b) pause re-surface: for each declared-pause marker past PAUSE_RESURFACE_SECS,
 #     re-peek; busy/gone -> clear; still idle + still paused -> escalate a recheck
 #     digest and reset the window (repeating bounded re-surface, never a wedge).
+#  2c) provably-working persistence recheck: (2) does not escalate a still-idle
+#     pane outright when bin/fm-classify-lib.sh's crew_absorb_class reads it as
+#     working (an active no-mistakes run-step, or the harness's own live
+#     background-work footer) - it absorbs instead and hands the pane to this
+#     step's SAME PAUSE_RESURFACE_SECS cadence, so a long validation run or
+#     background task is not rechecked every short wedge tick. Past the
+#     window: still working -> reset and keep waiting; anything else (moved on,
+#     unreadable, ambiguous) -> fail-safe, escalate once and hand back to (2)'s
+#     ordinary short-cadence wedge tracking.
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs n wedge_count_file
+  local state=$1 now due f key task win marker age last max_defer oldest pause_secs n wedge_count_file class
   now=$(_now)
   migrate_watcher_pause_markers "$state"
 
@@ -1130,6 +1165,22 @@ housekeeping() {  # <state>
       0) rm -f "$marker" "$wedge_count_file" ;;
       2) ;;
       *)
+        # The pane itself looks idle, but before treating that as a possible
+        # wedge, consult the SAME authoritative sources firstmate itself would
+        # check: an active no-mistakes run-step, or the harness's own live
+        # background-work footer (crew_absorb_class, bin/fm-classify-lib.sh).
+        # Absorbing here clears the wedge count exactly like the resumed/busy
+        # case above (never counts toward demand-deep-inspection) and hands the
+        # pane to housekeeping (2c)'s long-cadence recheck instead of leaving it
+        # on this short one. An unreadable or ambiguous read reports "none" and
+        # falls straight through to today's escalation, fail-safe.
+        class=$(crew_absorb_class "$task")
+        if [ "$class" = working ]; then
+          rm -f "$marker" "$wedge_count_file"
+          absorbed_marker_record "$win" "$state"
+          log "stale absorbed (provably working via run-step/background-task): $win"
+          continue
+        fi
         n=$(( $(cat "$wedge_count_file" 2>/dev/null || echo 0) + 1 ))
         echo "$n" > "$wedge_count_file"
         if [ "$n" -ge "${FM_WEDGE_DEMAND_INSPECT_COUNT:-$WEDGE_DEMAND_INSPECT_COUNT_DEFAULT}" ]; then
@@ -1183,6 +1234,43 @@ housekeeping() {  # <state>
         fi
         ;;
     esac
+  done
+
+  # (2c) provably-working persistence recheck. A stale pane (2) absorbed
+  # because crew_absorb_class read it as working re-enters THIS bounded long
+  # cadence (the same pause_secs computed above) instead of the short wedge
+  # cadence, so a multi-hour validation run or background task is not
+  # rechecked - and does not pay a bounded no-mistakes/pane read - every
+  # FM_STALE_ESCALATE_SECS. Past the window: still working -> reset and keep
+  # waiting (self-handled, no escalation, no wedge count, mirroring how a
+  # resume or pause transition clears the count today); a declared pause in
+  # the meantime -> hand off to pause tracking; anything else (the crew moved
+  # on, the pane went unreadable, or the evidence is now ambiguous) -> never
+  # never: escalate exactly like a fresh wedge sighting and hand back to (2)'s
+  # ordinary short-cadence tracking, starting its wedge count fresh.
+  for marker in "$state"/.subsuper-absorbed-*; do
+    [ -e "$marker" ] || continue
+    key="${marker##*.subsuper-absorbed-}"
+    win=$(window_for_task "$key" "$state" 2>/dev/null || true)
+    if [ -z "$win" ]; then
+      rm -f "$marker"; continue
+    fi
+    task=$(window_to_task "$win" "$state")
+    last=$(last_status_line "$state/$task.status")
+    if [ -n "$last" ] && status_is_paused "$last"; then
+      rm -f "$marker"
+      reconcile_pause_tracking "$win" "$state" "$last"
+      continue
+    fi
+    age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
+    [ "$age" -ge "$pause_secs" ] || continue
+    if [ "$(crew_absorb_class "$task")" = working ]; then
+      _now > "$marker"
+      continue
+    fi
+    rm -f "$marker"
+    escalate_add "$state" "stale recheck after ${age}s absorbed (was provably working via run-step/background-task, no longer - possible wedge): $win" routine
+    stale_marker_record "$win" "$state"
   done
 
   # (3) heartbeat scan (catch-all for a captain-relevant status the per-wake

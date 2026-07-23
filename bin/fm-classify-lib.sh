@@ -290,9 +290,11 @@ signal_reason_is_actionable() {  # <file> ...
 # Classify WHY an idle/stale crew MIGHT be safely absorbed instead of surfaced,
 # from bin/fm-crew-state.sh's one authoritative current-state line
 # ("state: <s> · source: <src> · <detail>"). Prints exactly one token:
-#   working - an actively-running no-mistakes step (running/fixing/ci) or a busy
-#             pane; the crew is legitimately mid-work on a static-looking pane
-#             (e.g. waiting on CI);
+#   working - an actively-running no-mistakes step (running/fixing/ci), a busy
+#             pane, or a pane showing the harness's own live background-work
+#             footer (bin/fm-crew-state.sh's crew_pane_has_background_work); the
+#             crew is legitimately mid-work on a static-looking pane
+#             (e.g. waiting on CI, or parked on a tracked background task);
 #   paused  - the crew's authoritative current state is a declared external-wait
 #             pause (paused:), which is EXPECTED to idle;
 #   none    - neither, so the wake must surface (a stopped/finished/parked/failed/

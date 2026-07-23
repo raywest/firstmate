@@ -33,6 +33,44 @@ harness-native/terminal launch path) and runs continuously.
 | wedge alert on max-defer | durable marker + log + configured OS-level active alert | durable marker + log only; `bin/fm-guard.sh` surfaces the marker on the next turn instead |
 | stopped-crew stale | persistence recheck after `FM_STALE_ESCALATE_SECS` (240s), bounded patience | escalate on first sight, matching the always-on watcher's own present-mode semantics |
 
+## Provably-working stale absorption (the ONE owner of this policy)
+
+Captain-approved 2026-07-22 ("if you can validate the worker directly then so
+can the daemon"), after 8 of 10 daemon escalations for one healthy worker in a
+single evening turned out to be false wedge alarms: an idle-LOOKING pane is not
+the same as an idle crew.
+Before `housekeeping`'s stale persistence recheck (`bin/fm-supervise-daemon.sh`)
+treats a still-idle pane as a possible wedge, it consults
+`crew_absorb_class` (`bin/fm-classify-lib.sh`) - the SAME predicate the
+no-verb-signal "crew not provably working" guard already uses - which in turn
+reads `bin/fm-crew-state.sh`'s one authoritative current-state line for two
+sources of positive evidence:
+
+1. **Run-step**: an actively-running no-mistakes validation attributed to the
+   crew's own branch (`state: working · source: run-step`).
+2. **Background-wait**: the harness's own live background-work footer - e.g.
+   claude's "N shell(s)"/"N monitor" still-running indicator
+   (`bin/fm-crew-state.sh`'s `crew_pane_has_background_work`, a SEPARATE signal
+   from the foreground busy banner `crew_pane_is_busy` already checks) -
+   reported as `state: working · source: pane`.
+
+Either source absorbs the pane instead of escalating it, and clears the
+consecutive wedge-escalation count exactly like a resume or a declared pause
+does today.
+An absorbed pane does not sit on the short `FM_STALE_ESCALATE_SECS` wedge
+cadence for the rest of a long validation run or background task: it moves to
+a `state/.subsuper-absorbed-<key>` marker rechecked on the SAME long
+`FM_PAUSE_RESURFACE_SECS` cadence a declared pause uses.
+Past that window: still provably working resets the marker and keeps waiting,
+self-handled; anything else - the crew moved on, the read is unreadable, or the
+evidence is ambiguous - is fail-safe, escalating once and handing the pane back
+to ordinary short-cadence wedge tracking with its count starting fresh.
+An idle pane with neither source still escalates exactly as before this
+change.
+`bin/fm-classify-lib.sh` and `bin/fm-crew-state.sh` are the one owner of the
+predicate and its two sources; every other doc and script points here rather
+than restating the mechanism.
+
 Urgent items (always flush immediately regardless of style): `check:` output
 (PR merges, X mentions), `failed:`, `needs-decision:`, `blocked:`, `done:`/PR-ready,
 and wedge alarms.
@@ -231,6 +269,10 @@ the daemon refuses loudly at startup rather than guessing, exactly as before.
 - **Bounded wedge detection**: never lossy, only ever a delay.
 - **Declared external waits**: rechecked on their own bounded cadence, never
   mislabeled as a wedge.
+- **Provably-working absorption**: an active run-step or a live harness
+  background-work footer (see "Provably-working stale absorption" above) is
+  never mislabeled as a wedge either, and still re-surfaces within one bounded
+  window if the evidence disappears - never never.
 - **Fail-safe on uncertainty**: an unrecognized wake escalates; a non-wake
   watcher stdout line idles instead of flooding.
 - **Injection safety**: the affirmative-empty composer rule and verified
