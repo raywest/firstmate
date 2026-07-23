@@ -171,7 +171,7 @@ The verified adapter knowledge - busy signatures, interrupt and exit commands, s
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
 Primary-session turn-end guard integrations for verified primary harnesses are tracked as repo-level hook files and documented in [`docs/turnend-guard.md`](turnend-guard.md).
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
-Claude and Grok use background-notify cycles, Codex uses the always-on daemon on tmux or herdr and bounded foreground checkpoints on other backends, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
+Claude and Codex use the always-on daemon on tmux or herdr, while Claude uses background-notify cycles and Codex uses bounded foreground checkpoints on other backends; Grok uses background-notify cycles, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
 When it is absent or contains `default`, crewmates mirror the firstmate's own harness.
 `config/secondmate-harness` is a separate local, gitignored file containing the adapter the primary uses to launch secondmate agents, optionally followed by model, effort, and codex-only harness-profile tokens on the same line.

@@ -21,12 +21,9 @@ path below.
 
 ## What it does
 
-1. **Ensure the daemon is running.** On a supported combination (a claude or
-   codex primary, on tmux or herdr) it is already running - the session-start
-   bootstrap sweep guarantees this every session (`docs/alwayson-triage.md`
-   "Lifecycle"). Do not launch it yourself there.
-   On an unflipped combination, `/afk` is still what launches it for the
-   walk-away stretch:
+1. **Ensure the daemon is running.** On a supported combination (a claude or codex primary, on tmux or herdr) it is already running - the session-start bootstrap sweep guarantees this every session (`docs/alwayson-triage.md` "Lifecycle").
+   Do not launch it yourself there.
+   On an unflipped combination, `/afk` is still what launches it for the walk-away stretch:
    - **Harness WITH a native in-pane tracked-background tool** (e.g. grok's
      background tool): run
      `bin/fm-afk-launch.sh start-native`, then run
