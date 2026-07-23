@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fm-supervise-daemon.sh — the always-on triage daemon (fm-alwayson-triage-s5
-# phase 2; formerly a presence-gated away-mode-only sub-supervisor).
+# phases 2-3; formerly a presence-gated away-mode-only sub-supervisor).
 #
 # Wraps bin/fm-watch.sh: runs it as a child, classifies each wake reason, and
 # either SELF-HANDLES the routine majority in bash (no firstmate turn) or
@@ -12,9 +12,9 @@
 # declared-pause recheck reach the LLM, and even then as one pre-read digest per
 # batch window.
 #
-# PERMANENT WAKE CONSUMER, STYLE-SWITCHED BY /afk, on a supported claude/tmux
-# or claude/herdr primary. The daemon is started once (a session-start bootstrap
-# sweep, or the harness-native/terminal launch paths under
+# PERMANENT WAKE CONSUMER, STYLE-SWITCHED BY /afk, on a supported claude or
+# codex primary, on tmux or herdr. The daemon is started once (a session-start
+# bootstrap sweep, or the harness-native/terminal launch paths under
 # bin/fm-daemon-launch.sh) and never stops during normal operation - see
 # docs/alwayson-triage.md. The durable flag state/.afk no longer gates WHETHER
 # it injects; it only picks the delivery STYLE: away (long batch, OS-level

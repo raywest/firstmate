@@ -505,7 +505,7 @@ As with every other real-herdr test in this document, the default session's own 
 
 ## Always-on triage daemon: herdr supervisor-pane support
 
-`bin/fm-supervise-daemon.sh` (the always-on triage daemon on supported Claude tmux/herdr primaries) was tmux-only through 2026-07-03: it discovered its own injection target from `$TMUX_PANE`, and injected via raw `tmux display-message`/`tmux capture-pane`/`tmux send-keys` calls with no backend indirection.
+`bin/fm-supervise-daemon.sh`, now the always-on triage daemon on supported Claude or Codex tmux/herdr primaries, was tmux-only through 2026-07-03: it discovered its own injection target from `$TMUX_PANE`, and injected via raw `tmux display-message`/`tmux capture-pane`/`tmux send-keys` calls with no backend indirection.
 On a herdr-based fleet (firstmate itself running with `HERDR_ENV=1`, no `$TMUX_PANE`), this failed outright at startup: `TMUX_PANE` is unset, so discovery fell through to the legacy `firstmate:0` fallback, which then failed the tmux pane-exists probe and refused to start.
 
 The fix is transport-layer only - discovery, injection, and the busy/composer guards now dispatch through the SAME `bin/fm-backend.sh` primitives every other backend-aware script already uses (`fm_backend_target_exists`, `fm_backend_busy_state`, `fm_backend_capture`, `fm_backend_send_text_submit`, and the new `fm_backend_composer_state` dispatcher added alongside this work).
@@ -831,7 +831,7 @@ Dedupe (one wake per `->blocked` edge, marker cleared when the pane returns to `
 ## Daemon terminal launch (2026-07-12, herdr 0.7.3, protocol 16, macOS aarch64)
 
 `bin/fm-afk-start.sh` execs the supervise daemon in the FOREGROUND of whatever terminal it is already in.
-The supported Claude tmux/herdr always-on path instead uses the non-visible terminal launch below so the session-start bootstrap sweep can keep the daemon alive without an LLM background tool.
+The supported Claude or Codex tmux/herdr always-on path instead uses the non-visible terminal launch below so the session-start bootstrap sweep can keep the daemon alive without an LLM background tool.
 Harnesses with a native in-pane tracked-background tool (claude, grok) can run it there and the daemon inherits the captain pane's env.
 A harness with NO native background mechanism (pi) has no place to run it, and manufacturing one by SPLITTING the captain's active pane visibly shrinks it: `herdr pane split <pane> --direction down --ratio 0.20 --no-focus` creates a second pane whose `tab_id` equals the captain pane's, so the two co-tenant one tab's viewport.
 `--no-focus` does not prevent this - it governs focus, not geometry.

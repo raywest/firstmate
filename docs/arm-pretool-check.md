@@ -8,7 +8,7 @@ The tracked harness adapters forward command text without classifying it.
 
 ## Purpose and boundary
 
-A firstmate primary must arm `bin/fm-watch-arm.sh` or run `bin/fm-watch-checkpoint.sh` through an observable harness call.
+A firstmate primary using a per-wake protocol must arm `bin/fm-watch-arm.sh` or run `bin/fm-watch-checkpoint.sh` through an observable harness call.
 A shell background operator, pipeline, redirection, wrapper, or unrelated command list can hide failure or let the watcher child die with the tool call.
 The seatbelt rejects those command shapes before execution.
 
@@ -21,7 +21,7 @@ Claude also registers `bin/fm-continuity-pretool-check.sh` for Bash PreToolUse e
 This is a separate, tightly bounded recovery gate rather than another watcher-shape policy.
 It runs only in a primary home, and it denies only an executed `bin/fm-*.sh` command other than `bin/fm-wake-drain.sh`, `bin/fm-watch-arm.sh`, or `bin/fm-daemon-launch.sh` when task metadata is in flight and no identity-matched live watcher holds that home's lock AND no live always-on triage daemon lock is held either (`daemon_lock_held_by_live_daemon` - fm-alwayson-triage-s5 phase 2, [`alwayson-triage.md`](alwayson-triage.md)).
 Ordinary shell commands, fleet-script names used as data, all commands in an idle fleet, child worktrees, wake drain, watcher arm, and daemon launch remain allowed.
-The exact denial text depends on the detected backend: on a supported combination (claude on tmux/herdr) it tells Claude to ensure the daemon with `bin/fm-daemon-launch.sh start`; otherwise it tells Claude to run `bin/fm-wake-drain.sh` and then re-arm through a tracked Claude background task before retrying the blocked fleet command.
+This Claude-only continuity gate varies its denial text by backend: on tmux or herdr it tells Claude to ensure the daemon with `bin/fm-daemon-launch.sh start`; otherwise it tells Claude to run `bin/fm-wake-drain.sh` and then re-arm through a tracked Claude background task before retrying the blocked fleet command.
 `bin/fm-continuity-command-policy.mjs` reuses this document's shell lexer and command-position analysis but owns the recovery-versus-other-fleet classification.
 Malformed transport or opaque dynamic syntax fails open so this narrow gate cannot become a blanket Bash block.
 The existing `bin/fm-turnend-guard.sh` Stop integration is unchanged and remains the final backstop; it gained the same daemon-liveness satisfier.
@@ -231,7 +231,7 @@ Native supervision paths were also validated in the same scratch project:
 
 - Claude ran `bin/fm-watch-arm.sh --restart` with its native tracked background option and produced `watcher: started pid=<scratch> (scratch)`.
 - Grok ran the same exact command with `background: true`, its hook returned exit 0, and the dummy arm produced the same started line.
-- Codex ran the foreground checkpoint above and produced `CHECKPOINT_EXECUTED`.
+- Codex directly ran the foreground checkpoint above and produced `CHECKPOINT_EXECUTED`; it remains the legacy per-wake protocol on backends other than tmux or herdr.
 - OpenCode ran in an interactive TUI on `tmux -L fm-pretool-smoke`, reached `session.idle`, and its unchanged watch-arm plugin created the scratch automatic-arm marker.
 - Pi loaded both primary extensions, called `fm_watch_arm_pi`, and created the scratch automatic-arm marker.
 
