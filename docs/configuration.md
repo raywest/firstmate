@@ -105,7 +105,9 @@ See [`wedge-alarm.md`](wedge-alarm.md) for the channel reference and macOS verif
 ## Daemon local tuning (config/daemon.env)
 
 `config/daemon.env` (local, gitignored, optional) is the durable place to set any of the "Environment variables" below that the always-on triage daemon reads, for example `FM_PAUSE_RESURFACE_SECS`.
-`bin/fm-daemon-launch.sh`'s `fm_afk_launch_daemon_cmd` sources it first when present, before `config/x-mode.env`, so an X-mode cadence value still wins over a daemon.env value for any variable both files set.
+Export each setting so it reaches the daemon process, for example `export FM_PAUSE_RESURFACE_SECS=14400`.
+The effective file path is `$FM_CONFIG_OVERRIDE/daemon.env` when `FM_CONFIG_OVERRIDE` is non-empty, otherwise `$FM_HOME/config/daemon.env`.
+`bin/fm-daemon-launch.sh`'s `fm_afk_launch_daemon_cmd` sources it first when present, before `x-mode.env` from that same effective config directory, so an X-mode cadence value still wins over a daemon.env value for any variable both files set.
 An absent file is a no-op and changes nothing about daemon behavior.
 A change to the file takes effect at the daemon's next restart; it is not read by an already-running daemon process.
 

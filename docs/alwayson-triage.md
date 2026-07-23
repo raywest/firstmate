@@ -204,12 +204,13 @@ change for an unflipped harness/backend.
 ## X mode
 
 The daemon's launch command (both the herdr-workspace and detached-tmux
-paths in `bin/fm-daemon-launch.sh`) sources `config/x-mode.env` before exec'ing
-the daemon entry, exactly like an LLM-armed watcher already does
-(`fm-supervision-instructions.sh`'s X-mode current-state line), so the
-daemon's watcher child inherits the 30s X-mode cadence when X mode is active.
-The sourcing line is a no-op when the file does not exist, so every daemon
-launch uses one code path regardless of X-mode state.
+paths in `bin/fm-daemon-launch.sh`) sources the generated `x-mode.env` from
+its effective config directory before exec'ing the daemon entry, exactly like
+an LLM-armed watcher already does (`fm-supervision-instructions.sh`'s X-mode
+current-state line), so the daemon's watcher child inherits the 30s X-mode
+cadence when X mode is active.
+[`configuration.md`](configuration.md#daemon-local-tuning-configdaemonenv)
+owns daemon-local tuning, configuration-source order, and absent-file behavior.
 
 ## Rollout gates (other harnesses, other backends)
 

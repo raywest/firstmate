@@ -368,11 +368,11 @@ fm_afk_launch_restore_backup() {  # <backup>
   return "$result"
 }
 
-# Build the exact command run inside the daemon's terminal: source
-# config/daemon.env first when present, for durable operator tuning of daemon
-# runtime env vars (docs/configuration.md "Environment variables"), then
-# source config/x-mode.env, so the daemon's watcher child inherits the
-# X-mode cadence exactly like an LLM-armed watcher does
+# Build the exact command run inside the daemon's terminal: source daemon.env
+# from the effective config directory first when present, for durable operator
+# tuning of daemon runtime env vars (docs/configuration.md "Daemon local
+# tuning"), then source x-mode.env from that same directory so the daemon's
+# watcher child inherits the X-mode cadence exactly like an LLM-armed watcher does
 # (bin/fm-supervision-instructions.sh "X mode: active; source ..."). Sourcing
 # x-mode.env second means it wins over daemon.env for any var both set. The
 # `[ -f ]` guards make each line a harmless no-op when its file is absent, so
