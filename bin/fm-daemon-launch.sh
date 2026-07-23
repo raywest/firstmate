@@ -378,9 +378,10 @@ fm_afk_launch_restore_backup() {  # <backup>
 # `[ -f ]` guards make each line a harmless no-op when its file is absent, so
 # every daemon launch uses one code path rather than branching on config state.
 fm_afk_launch_daemon_cmd() {  # <captain-target> <captain-backend> <entry>
-  local captain_target=$1 captain_backend=$2 entry=$3 daemon_env x_mode_env
-  daemon_env="$FM_HOME/config/daemon.env"
-  x_mode_env="$FM_HOME/config/x-mode.env"
+  local captain_target=$1 captain_backend=$2 entry=$3 config_dir daemon_env x_mode_env
+  config_dir="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+  daemon_env="$config_dir/daemon.env"
+  x_mode_env="$config_dir/x-mode.env"
   printf '[ -f %q ] && . %q; [ -f %q ] && . %q; exec env FM_HOME=%q FM_SUPERVISOR_TARGET=%q FM_SUPERVISOR_BACKEND=%q %q' \
     "$daemon_env" "$daemon_env" "$x_mode_env" "$x_mode_env" "$FM_HOME" "$captain_target" "$captain_backend" "$entry"
 }

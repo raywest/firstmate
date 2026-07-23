@@ -79,7 +79,7 @@ unit_clear_stale() {
 # and a daemon.env var reaches the exec'd process unless x-mode.env overrides it.
 # ---------------------------------------------------------------------------
 unit_daemon_cmd_sources_config_files() {
-  local st cmd daemon_idx xmode_idx out printer
+  local st cmd daemon_idx xmode_idx out printer override_config
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-daemoncmd.XXXXXX")
   mkdir -p "$st/config"
   printer=$(mktemp "${TMPDIR:-/tmp}/fm-afk-printer.XXXXXX")
@@ -120,6 +120,24 @@ unit_daemon_cmd_sources_config_files() {
     pass "daemon-cmd: config/x-mode.env still wins over config/daemon.env on overlap"
   else
     fail "daemon-cmd: x-mode.env did not win over daemon.env on overlap (got '$out')"
+  fi
+
+  override_config="$st/override-config"
+  mkdir -p "$override_config"
+  printf 'export FM_PAUSE_RESURFACE_SECS=14400\n' > "$override_config/daemon.env"
+  out=$(FM_HOME="$st" FM_CONFIG_OVERRIDE="$override_config" bash -c '. "$1"; cmd=$(fm_afk_launch_daemon_cmd tgt backend "$2"); bash -c "$cmd"' _ "$ROOT/bin/fm-daemon-launch.sh" "$printer")
+  if [ "$out" = "14400" ]; then
+    pass "daemon-cmd: daemon.env uses FM_CONFIG_OVERRIDE"
+  else
+    fail "daemon-cmd: daemon.env ignored FM_CONFIG_OVERRIDE (got '$out')"
+  fi
+
+  printf 'export FM_PAUSE_RESURFACE_SECS=777\n' > "$override_config/x-mode.env"
+  out=$(FM_HOME="$st" FM_CONFIG_OVERRIDE="$override_config" bash -c '. "$1"; cmd=$(fm_afk_launch_daemon_cmd tgt backend "$2"); bash -c "$cmd"' _ "$ROOT/bin/fm-daemon-launch.sh" "$printer")
+  if [ "$out" = "777" ]; then
+    pass "daemon-cmd: x-mode.env uses FM_CONFIG_OVERRIDE"
+  else
+    fail "daemon-cmd: x-mode.env ignored FM_CONFIG_OVERRIDE (got '$out')"
   fi
 
   rm -rf "$st"
