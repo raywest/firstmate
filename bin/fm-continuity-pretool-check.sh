@@ -100,9 +100,9 @@ esac
 TAB=$(printf '\t')
 BLOCKED_SCRIPT=${CLASSIFICATION#*"$TAB"}
 [ -n "$BLOCKED_SCRIPT" ] && [ "$BLOCKED_SCRIPT" != "$CLASSIFICATION" ] || exit 0
-# On a supported always-on triage combination (claude on tmux/herdr - the daemon's
-# own supported injection backends), recovery is ensuring the daemon, not arming a
-# watcher the daemon already owns permanently (fm-alwayson-triage-s5 phase 2).
+# This Claude-only continuity hook tells Claude to ensure the daemon on tmux or
+# herdr, where the daemon already owns the watcher permanently
+# (fm-alwayson-triage-s5 phase 2).
 # FM_SUPERVISOR_BACKEND overrides auto-detection, same override the daemon and
 # launcher honor, so a caller can pin the backend explicitly.
 # shellcheck source=bin/fm-backend.sh

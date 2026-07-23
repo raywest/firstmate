@@ -1,47 +1,51 @@
 #!/usr/bin/env bash
-# tests/fm-claude-alwayson-live-e2e.test.sh - opt-in credentialed regression for
-# the always-on triage daemon against a REAL interactive claude session
-# (fm-alwayson-triage-s5 phase 2). Proves, end to end:
+# tests/fm-codex-alwayson-live-e2e.test.sh - opt-in credentialed regression for
+# the always-on triage daemon against a REAL interactive codex session
+# (fm-alwayson-triage-s5 phase 3). Proves, end to end:
 #
-#   1. A marked injection from the real daemon wakes a real claude turn - the
+#   1. A marked injection from the real daemon wakes a real codex turn - the
 #      pane transitions from an idle composer to busy after the daemon types
-#      and submits its escalation digest.
-#   2. The turn-end guard and the continuity PreToolUse gate stay quiet
-#      (allow) while the daemon is alive, purely from its live identity-matched
-#      lock - no watcher lock is ever separately armed in this scenario.
+#      and submits its escalation digest. This is the specific claim phase 3
+#      makes for codex: a marked message is a real typed composer message, not
+#      a background-task completion, so codex's "cannot reason while a
+#      foreground tool call is running" limitation does not apply and the
+#      180s foreground-checkpoint workaround can be retired.
+#   2. The turn-end guard stays quiet (allow) while the daemon is alive, purely
+#      from its live identity-matched lock - no watcher lock is ever separately
+#      armed and no foreground checkpoint is ever started in this scenario.
 #   3. The turn-end guard blocks again once the daemon is stopped.
 #
-# Isolation: everything runs on a PRIVATE tmux socket (`-L alwayson-e2e-<pid>`),
-# never the real fleet's tmux server or herdr session, and against a scratch
-# git clone + scratch FM_HOME. A tmux shim on PATH redirects every bare `tmux`
-# call (the daemon's own, and this script's) to that private socket, exactly
-# like tests/fm-afk-inject-e2e.test.sh. FM_SUPERVISOR_BACKEND=tmux is also
-# pinned explicitly rather than left to auto-detection: this test's own process
-# may itself be running inside herdr (HERDR_ENV=1 is inherited by every process
-# herdr manages a pane for), which would otherwise leak into the daemon
-# subprocess and misdetect backend=herdr against what is actually a tmux pane
-# on the private socket.
+# Isolation: everything runs on a PRIVATE tmux socket (`-L alwayson-codex-e2e-
+# <pid>`), never the real fleet's tmux server or herdr session, and against a
+# scratch git clone + scratch FM_HOME. A tmux shim on PATH redirects every bare
+# `tmux` call (the daemon's own, and this script's) to that private socket,
+# exactly like tests/fm-claude-alwayson-live-e2e.test.sh.
+# FM_SUPERVISOR_BACKEND=tmux is also pinned explicitly rather than left to
+# auto-detection: this test's own process may itself be running inside herdr
+# (HERDR_ENV=1 is inherited by every process herdr manages a pane for), which
+# would otherwise leak into the daemon subprocess and misdetect backend=herdr
+# against what is actually a tmux pane on the private socket.
 set -u
 
-if [ "${FM_CLAUDE_LIVE_E2E:-0}" != 1 ]; then
-  echo "skip: set FM_CLAUDE_LIVE_E2E=1 to run the claude always-on triage regression"
+if [ "${FM_CODEX_LIVE_E2E:-0}" != 1 ]; then
+  echo "skip: set FM_CODEX_LIVE_E2E=1 to run the codex always-on triage regression"
   exit 0
 fi
 
 command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
-command -v claude >/dev/null 2>&1 || { echo "skip: claude not found"; exit 0; }
+command -v codex >/dev/null 2>&1 || { echo "skip: codex not found"; exit 0; }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REAL_TMUX=$(command -v tmux)
-SOCKET="alwayson-e2e-$$"
-LAB="$ROOT/.claude-alwayson-live-e2e.$$"
+SOCKET="alwayson-codex-e2e-$$"
+LAB="$ROOT/.codex-alwayson-live-e2e.$$"
 PROJECT="$LAB/project"
 HOME_DIR="$LAB/fmhome"
 STATE="$HOME_DIR/state"
 TMUX_SHIM_DIR=
 SUPERVISOR_PANE=
 DAEMON_PID=
-CLAUDE_VERSION=$(claude --version)
+CODEX_VERSION=$(codex --version)
 
 fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
@@ -58,8 +62,7 @@ trap cleanup_all EXIT
 
 mkdir -p "$LAB"
 git clone -q "$ROOT" "$PROJECT"
-mkdir -p "$PROJECT/.claude" "$HOME_DIR/state" "$HOME_DIR/config" "$HOME_DIR/data"
-cp "$ROOT/.claude/settings.json" "$PROJECT/.claude/settings.json"
+mkdir -p "$HOME_DIR/state" "$HOME_DIR/config" "$HOME_DIR/data"
 
 # One in-flight task so the turn-end guard's predicate actually engages (it is
 # a silent no-op with nothing in flight).
@@ -71,7 +74,7 @@ printf 'working: waiting\n' > "$STATE/task.status"
 
 # tmux shim: every bare `tmux` call (this script's own, and the daemon's) goes
 # to the private socket instead of the real default server.
-TMUX_SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-alwayson-e2e-shim.XXXXXX")
+TMUX_SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-alwayson-codex-e2e-shim.XXXXXX")
 cat > "$TMUX_SHIM_DIR/tmux" <<SHIM
 #!/usr/bin/env bash
 exec "$REAL_TMUX" -L "$SOCKET" "\$@"
@@ -91,23 +94,44 @@ pane_capture_full() {
   tmux capture-pane -p -t "$SUPERVISOR_PANE" 2>/dev/null
 }
 
-trust_prompt_visible() {
-  pane_capture_full | grep -qF 'trust this folder'
+# Startup dialogs are version/environment-dependent (harness-adapters skill,
+# codex section): a directory-trust prompt, a "hooks are new or changed"
+# review dialog, and (observed live 2026-07-22 on codex-cli 0.144.1) a blocking
+# "Update available!" chooser with numbered options. None of these block the
+# always-on claim under test, so dismiss whichever appear rather than assuming
+# a fixed sequence.
+trust_dialog_visible() {
+  pane_capture_full | grep -qF 'trust the contents of this directory'
+}
+
+hooks_dialog_visible() {
+  pane_capture_full | grep -qF 'Hooks need review'
+}
+
+update_chooser_visible() {
+  # The blocking numbered chooser ("Press enter to continue"), distinct from
+  # the passive, non-blocking "Update available!" banner that persists in the
+  # scrollback afterward and never gates anything.
+  pane_capture_full | grep -qF 'Press enter to continue'
 }
 
 composer_idle() {
   local cap
   cap=$(pane_capture_full)
   case "$cap" in
-    *'trust this folder'*) return 1 ;;
-    *'│ >'*'│'*) return 0 ;;
-    *'❯'*) return 0 ;;
+    *'trust the contents of this directory'*) return 1 ;;
+    *'Hooks need review'*) return 1 ;;
+    *'Press enter to continue'*) return 1 ;;
+    *'esc to interrupt'*) return 1 ;;
+  esac
+  case "$cap" in
+    *'% left ·'*) return 0 ;;
   esac
   return 1
 }
 
 pane_busy_now() {
-  ! trust_prompt_visible && ! composer_idle
+  pane_capture_full | grep -qF 'esc to interrupt'
 }
 
 wait_for() {  # <description> <max-tries> <check-fn>
@@ -123,37 +147,58 @@ wait_for() {  # <description> <max-tries> <check-fn>
   return 1
 }
 
-# Launch a real, interactive claude session in the private-socket pane. A
-# fresh working directory (this scratch clone has never been opened before)
-# may prompt a one-time folder-trust dialog before the real composer appears;
-# accept it explicitly rather than assuming it will or won't show up.
+# Launch a real, interactive codex session in the private-socket pane and
+# dismiss whichever startup dialogs actually appear (bounded, order-agnostic)
+# until the real composer is visible. --dangerously-bypass-approvals-and-
+# -sandbox and --dangerously-bypass-hook-trust are scoped to this scratch
+# clone in an isolated pane (never the real fleet): without them, the model
+# handling the injected escalation below could hit a per-command approval
+# prompt that this test's busy/idle detection does not model, hanging the
+# wait_for loops on a state that has nothing to do with the always-on claim
+# under test.
 tmux send-keys -t "$SUPERVISOR_PANE" \
-  "cd '$PROJECT' && exec claude --dangerously-skip-permissions" Enter
-# The trust prompt is optional (a working directory claude has seen before
-# skips it), so poll for it briefly without wait_for's loud timeout diagnostic.
+  "cd '$PROJECT' && exec codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust" Enter
+
 i=0
-while [ "$i" -lt 8 ] && ! trust_prompt_visible; do
+while [ "$i" -lt 30 ] && ! composer_idle; do
+  if trust_dialog_visible; then
+    tmux send-keys -t "$SUPERVISOR_PANE" Enter
+  elif hooks_dialog_visible; then
+    tmux send-keys -t "$SUPERVISOR_PANE" -l '2'
+    tmux send-keys -t "$SUPERVISOR_PANE" Enter
+  elif update_chooser_visible; then
+    tmux send-keys -t "$SUPERVISOR_PANE" -l '2'
+    tmux send-keys -t "$SUPERVISOR_PANE" Enter
+  fi
   sleep 1
   i=$((i + 1))
 done
-trust_prompt_visible && tmux send-keys -t "$SUPERVISOR_PANE" Enter
-wait_for "claude TUI ready (idle composer)" 60 composer_idle \
-  || fail "claude did not reach an idle composer after launch"
+composer_idle || fail "codex did not reach an idle composer after launch and dialog dismissal"
 
 # Get it to a settled, deliberate idle state (a fresh launch may still be
-# rendering theme/tips content that looks idle but is not the real composer).
-# A short reply can complete within a second, faster than this polling
-# granularity can reliably catch a transient busy frame, so this warm-up only
-# asserts the eventual outcome (idle again, with the reply visible) rather than
-# requiring an observed busy transition - that stronger assertion belongs to
-# the actual injection test below, which polls faster.
+# running SessionStart hooks that look busy-adjacent but are not the real
+# composer). A short reply can complete within a second, faster than this
+# polling granularity can reliably catch a transient busy frame, so this
+# warm-up only asserts the eventual outcome (idle again, with the reply
+# visible) rather than requiring an observed busy transition - that stronger
+# assertion belongs to the actual injection test below, which polls faster.
+# codex's popup-settle hazard (harness-adapters skill, "grok section"
+# precedent, same pattern for $ skill popups): a too-fast Enter after typing
+# can be swallowed, leaving the text sitting unsubmitted. The echoed transcript
+# entry looks identical whether submitted or not (both show as a `>` prompt
+# row), so an unconditional second Enter ~1s later is the reliable fix rather
+# than trying to distinguish the two states from pane text: verified live
+# (2026-07-22, codex-cli 0.144.1) that a second Enter after a successful first
+# submit is a harmless no-op on the now-empty composer, never a duplicate send.
 tmux send-keys -t "$SUPERVISOR_PANE" -l \
   'Reply with exactly the word ready and then stop. Do not use any tools.'
 tmux send-keys -t "$SUPERVISOR_PANE" Enter
-wait_for "claude replies and settles back to an idle composer" 90 composer_idle \
-  || fail "claude did not settle back to an idle composer after its first turn"
+sleep 1
+tmux send-keys -t "$SUPERVISOR_PANE" Enter
+wait_for "codex replies and settles back to an idle composer" 90 composer_idle \
+  || fail "codex did not settle back to an idle composer after its first turn"
 pane_capture_full | grep -qi 'ready' \
-  || fail "claude's warm-up reply is not visible in the pane transcript"
+  || fail "codex's warm-up reply is not visible in the pane transcript"
 
 # --- start the REAL always-on triage daemon ----------------------------------
 
@@ -185,22 +230,15 @@ start_daemon() {
 }
 
 run_turnend_guard() {  # -> exit status of the guard for the current state
-  printf '{"stop_hook_active":false}' | \
-    CLAUDECODE=1 FM_ROOT_OVERRIDE="$PROJECT" FM_HOME="$PROJECT" FM_STATE_OVERRIDE="$STATE" \
+  printf '{}' | \
+    FM_ROOT_OVERRIDE="$PROJECT" FM_HOME="$PROJECT" FM_STATE_OVERRIDE="$STATE" \
     FM_SUPERVISOR_BACKEND=tmux \
     bash "$PROJECT/bin/fm-turnend-guard.sh" > "$STATE/guard.out" 2> "$STATE/guard.err"
 }
 
-run_continuity_check() {  # -> exit status
-  FM_ROOT_OVERRIDE="$PROJECT" FM_HOME="$PROJECT" FM_STATE_OVERRIDE="$STATE" \
-    FM_SUPERVISOR_BACKEND=tmux \
-    bash "$PROJECT/bin/fm-continuity-pretool-check.sh" --command 'bin/fm-crew-state.sh task' \
-    > "$STATE/continuity.out" 2> "$STATE/continuity.err"
-}
-
 start_daemon
 
-test_guards_quiet_with_live_daemon() {
+test_guard_quiet_with_live_daemon() {
   local rc=0
   run_turnend_guard || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -214,16 +252,13 @@ test_guards_quiet_with_live_daemon() {
   fi
   [ "$rc" -eq 0 ] || fail "turn-end guard blocked despite a live identity-matched daemon lock (rc=$rc): $(cat "$STATE/guard.err")"
   [ ! -s "$STATE/guard.err" ] || fail "turn-end guard printed output despite a live daemon: $(cat "$STATE/guard.err")"
-  rc=0
-  run_continuity_check || rc=$?
-  [ "$rc" -eq 0 ] || fail "continuity gate denied despite a live identity-matched daemon lock (rc=$rc): $(cat "$STATE/continuity.err")"
-  pass "guards stay quiet with the always-on daemon alive (daemon-alive-allows)"
+  pass "guard stays quiet with the always-on daemon alive (daemon-alive-allows)"
 }
 
 test_marked_injection_wakes_a_turn() {
   # A captain-relevant status the real watcher child (spawned by the daemon
   # above) will classify as an escalation and inject as a marked message.
-  printf 'done: PR https://example.test/pr/900\n' > "$STATE/task.status"
+  printf 'done: PR https://example.test/pr/901\n' > "$STATE/task.status"
 
   # Poll fast for the transient busy frame - a real turn may complete in well
   # under a second, faster than wait_for's 1s granularity can reliably catch.
@@ -242,22 +277,22 @@ test_marked_injection_wakes_a_turn() {
   wait_for "the injected digest becomes visible in the pane transcript" 15 \
     injection_visible_in_pane \
     || fail "the injected escalation digest never appeared in the pane transcript"
-  wait_for "claude settles back to idle after handling the escalation" 90 composer_idle \
-    || fail "claude never returned to idle after the injected turn"
+  wait_for "codex settles back to idle after handling the escalation" 90 composer_idle \
+    || fail "codex never returned to idle after the injected turn"
 
   if [ "$caught_busy" -eq 0 ]; then
     echo "note: never observed a transient busy frame (turn may have completed" \
       "faster than this poll interval); relying on delivery+completion evidence" >&2
   fi
-  pass "a marked injection from the real always-on daemon wakes a real claude turn"
+  pass "a marked injection from the real always-on daemon wakes a real codex turn - no foreground checkpoint involved"
 }
 
 injection_visible_in_pane() {
-  pane_capture_full | grep -qF 'PR https://example.test/pr/900'
+  pane_capture_full | grep -qF 'PR https://example.test/pr/901'
 }
 
 test_turnend_guard_blocks_once_daemon_is_stopped() {
-  # Re-assert the in-flight fixture: the claude session in the pane runs with
+  # Re-assert the in-flight fixture: the codex session in the pane runs with
   # this repo's own real AGENTS.md/hooks, so having just handled a "done: PR
   # ..." escalation, it may genuinely (and correctly, per its own instructions)
   # have treated the fixture task as complete and touched its meta/status -
@@ -291,14 +326,6 @@ test_turnend_guard_blocks_once_daemon_is_stopped() {
     echo "guard.err:" >&2; cat "$STATE/guard.err" >&2
     echo "task.meta present: $([ -f "$STATE/task.meta" ] && echo yes || echo no)" >&2
     echo "state dir listing:" >&2; ls -la "$STATE" >&2
-    echo "manual fm_primary_scope_matches + fm_supervision_status check:" >&2
-    FM_STATE_OVERRIDE="$STATE" bash -c '
-      . "$1/bin/fm-supervision-lib.sh"
-      . "$1/bin/fm-primary-scope-lib.sh"
-      if fm_primary_scope_matches "$2" "$3"; then echo "scope: matches"; else echo "scope: DOES NOT MATCH"; fi
-      fm_supervision_status "$3" 300
-      echo "in_flight=$FM_SUP_IN_FLIGHT watcher_fresh=$FM_SUP_WATCHER_FRESH"
-    ' _ "$PROJECT" "$PROJECT" "$STATE" >&2 2>&1
   fi
   [ "$rc" -eq 2 ] || fail "turn-end guard did not block after the daemon was stopped (rc=$rc)"
   grep -F 'TURN WOULD END BLIND' "$STATE/guard.err" >/dev/null \
@@ -306,8 +333,8 @@ test_turnend_guard_blocks_once_daemon_is_stopped() {
   pass "turn-end guard blocks again once the always-on daemon is stopped"
 }
 
-test_guards_quiet_with_live_daemon
+test_guard_quiet_with_live_daemon
 test_marked_injection_wakes_a_turn
 test_turnend_guard_blocks_once_daemon_is_stopped
 
-printf 'ok - claude %s always-on triage live E2E: injection wakes a turn, guards daemon-alive-allow, turn-end guard re-blocks when stopped\n' "$CLAUDE_VERSION"
+printf 'ok - codex %s always-on triage live E2E: injection wakes a turn (no foreground checkpoint), guard daemon-alive-allows, turn-end guard re-blocks when stopped\n' "$CODEX_VERSION"

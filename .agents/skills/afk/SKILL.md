@@ -10,14 +10,9 @@ metadata:
 
 # afk
 
-Away-mode delivery style. The always-on triage daemon (`bin/fm-supervise-daemon.sh`,
-docs/alwayson-triage.md) is the PERMANENT wake consumer on a supported claude/
-tmux or claude/herdr primary - it is already running, started by the session-start
-bootstrap sweep, and it self-handles routine wakes and escalates captain-relevant
-events regardless of `/afk`. Invoking `/afk` does not start it and does not change
-WHETHER it triages; it only makes the daemon's batching cadence more patient and its
-wedge alert channel more active, because the captain is stepping away and a
-present-mode turn-by-turn digest would otherwise arrive faster than needed.
+Away-mode delivery style.
+The always-on triage daemon (`bin/fm-supervise-daemon.sh`, docs/alwayson-triage.md) is the PERMANENT wake consumer on a supported claude or codex primary, on tmux or herdr - it is already running, started by the session-start bootstrap sweep, and it self-handles routine wakes and escalates captain-relevant events regardless of `/afk`.
+Invoking `/afk` does not start it and does not change WHETHER it triages; it only makes the daemon's batching cadence more patient and its wedge alert channel more active, because the captain is stepping away and a present-mode turn-by-turn digest would otherwise arrive faster than needed.
 
 On an unflipped harness/backend combination (see AGENTS.md section 4's
 harness-verification discipline), the daemon is not always-on yet and `/afk` is
@@ -58,11 +53,11 @@ No `/back` is needed. The first genuine message is the return signal:
 
 - A message **without** the sentinel marker and **not** starting with `/afk` -> the captain is back.
   Run `bin/fm-afk-return.sh` before acting on the message that brought the captain back.
-  On a supported claude/tmux or claude/herdr primary, that script clears the away style flag (`bin/fm-daemon-launch.sh afk-exit`) without stopping the daemon, which keeps running and switches to present-mode cadence.
+  On a supported claude or codex primary, on tmux or herdr, that script clears the away style flag (`bin/fm-daemon-launch.sh afk-exit`) without stopping the daemon, which keeps running and switches to present-mode cadence.
   On every unflipped harness/backend combination, it retains the legacy daemon stop before clearing the same flag.
   It also owns durable wake draining, escalation and wedge evidence, and the return-catch-up gate.
   If it reports a firstmate-actionable `blocked:` event, remediate it immediately through the normal lifecycle, or explicitly reclassify it with a durable reason and close its decision key with `resolved [key=...]`, then run `bin/fm-afk-return.sh check`.
-  On a supported claude/tmux or claude/herdr primary, full per-wake responsiveness resumes immediately through the daemon's present-mode digests.
+  On a supported claude or codex primary, on tmux or herdr, full per-wake responsiveness resumes immediately through the daemon's present-mode digests.
   On every unflipped harness/backend combination, resume that harness's legacy per-wake supervision protocol from the emitted session-start supervision block in AGENTS.md section 8.
   Do not answer a Bearings request or perform any other ordinary captain work until the check exits successfully.
 - A message **with** the sentinel marker (`FM_INJECT_MARK`, U+2063 INVISIBLE SEPARATOR) -> it is a daemon escalation; stay afk and process it.

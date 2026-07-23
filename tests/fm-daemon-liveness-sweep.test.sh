@@ -2,8 +2,8 @@
 # tests/fm-daemon-liveness-sweep.test.sh - bin/fm-bootstrap.sh's
 # daemon_liveness_sweep(), the session-start (locked) guarantee that the
 # always-on triage daemon (docs/alwayson-triage.md) is running on a supported
-# combination - claude on tmux or herdr, the daemon's own supported injection
-# backends (bin/fm-supervise-daemon.sh FM_SUPERVISOR_SUPPORTED_BACKENDS).
+# combination - claude or codex on tmux or herdr, the daemon's own supported
+# injection backends (bin/fm-supervise-daemon.sh FM_SUPERVISOR_SUPPORTED_BACKENDS).
 #
 # The function is extracted from the live script and sourced in isolation
 # (never the full fm-bootstrap.sh flow): fm-bootstrap.sh's OTHER mutating
@@ -81,12 +81,23 @@ run_sweep() {  # <dir> <harness> [backend env assignments...] -> daemon-launch.l
   cat "$log"
 }
 
-test_non_claude_harness_is_noop() {
+test_unsupported_harness_is_noop() {
   local dir out
-  dir=$(new_case non-claude)
+  dir=$(new_case unsupported-harness)
+  out=$(run_sweep "$dir" opencode TMUX=1 TMUX_PANE='%1')
+  [ -z "$out" ] || fail "an unsupported harness must never touch the daemon lifecycle: $out"
+  pass "daemon_liveness_sweep: no-op for an unsupported harness"
+}
+
+# codex joined the supported set in fm-alwayson-triage-s5 phase 3 and must
+# behave exactly like claude for every case below - this is the one row that
+# proves the harness gate actually widened rather than merely moved.
+test_codex_harness_dead_daemon_launches_start() {
+  local dir out
+  dir=$(new_case codex-dead-daemon)
   out=$(run_sweep "$dir" codex TMUX=1 TMUX_PANE='%1')
-  [ -z "$out" ] || fail "a non-claude harness must never touch the daemon lifecycle: $out"
-  pass "daemon_liveness_sweep: no-op for a non-claude harness"
+  [ "$out" = "start" ] || fail "a dead daemon on a supported codex combination must be ensured with exactly one fm-daemon-launch.sh start, got: $out"
+  pass "daemon_liveness_sweep: launches the daemon when it is not alive on a supported codex combination"
 }
 
 test_unsupported_backend_is_noop() {
@@ -223,7 +234,8 @@ test_live_daemon_no_recorded_target_is_noop() {
   pass "daemon_liveness_sweep: a live daemon with no recorded target record is left alone"
 }
 
-test_non_claude_harness_is_noop
+test_unsupported_harness_is_noop
+test_codex_harness_dead_daemon_launches_start
 test_unsupported_backend_is_noop
 test_dead_daemon_launches_start
 test_pinned_supported_backend_launches_daemon

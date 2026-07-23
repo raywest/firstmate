@@ -32,7 +32,7 @@ That is the same identity-matched live lock and fresh beacon check used by `bin/
 A stale beacon blocks even if a watcher pid is still live.
 A fresh leftover beacon blocks if the watcher lock is missing, dead, or identity-mismatched.
 When the watcher predicate is not satisfied, `daemon_lock_held_by_live_daemon` from the same library is an additional satisfier, never a replacement for the watcher check.
-The live daemon guarantees that its one-shot watcher child restarts through the expected brief beacon gap on a supported Claude tmux/herdr primary.
+The live daemon guarantees that its one-shot watcher child restarts through the expected brief beacon gap on a supported Claude or Codex primary on tmux or herdr.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repo-root `state/`.
 `FM_GUARD_GRACE` controls the beacon freshness window and defaults to 300 seconds.
