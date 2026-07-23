@@ -74,6 +74,77 @@ unit_clear_stale() {
 }
 
 # ---------------------------------------------------------------------------
+# UNIT: fm_afk_launch_daemon_cmd (bin/fm-daemon-launch.sh) sources
+# config/daemon.env BEFORE config/x-mode.env, both guarded no-ops when absent,
+# and a daemon.env var reaches the exec'd process unless x-mode.env overrides it.
+# ---------------------------------------------------------------------------
+unit_daemon_cmd_sources_config_files() {
+  local st cmd daemon_idx xmode_idx out printer override_config
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-daemoncmd.XXXXXX")
+  mkdir -p "$st/config"
+  printer=$(mktemp "${TMPDIR:-/tmp}/fm-afk-printer.XXXXXX")
+  printf '#!/usr/bin/env bash\nprintenv FM_PAUSE_RESURFACE_SECS\n' > "$printer"
+  chmod +x "$printer"
+
+  # (a) generated command text includes both guarded sources, daemon.env first.
+  cmd=$(FM_HOME="$st" bash -c '. "$1"; fm_afk_launch_daemon_cmd tgt backend /bin/true' _ "$ROOT/bin/fm-daemon-launch.sh")
+  daemon_idx=$(printf '%s' "$cmd" | grep -bo "config/daemon.env" | head -1 | cut -d: -f1)
+  xmode_idx=$(printf '%s' "$cmd" | grep -bo "config/x-mode.env" | head -1 | cut -d: -f1)
+  if [ -n "$daemon_idx" ] && [ -n "$xmode_idx" ] && [ "$daemon_idx" -lt "$xmode_idx" ]; then
+    pass "daemon-cmd: sources config/daemon.env before config/x-mode.env"
+  else
+    fail "daemon-cmd: daemon.env is not sourced before x-mode.env ($cmd)"
+  fi
+
+  # (b) absent files: the built command is a silent no-op wrapper around the entry.
+  out=$(FM_HOME="$st" bash -c '. "$1"; cmd=$(fm_afk_launch_daemon_cmd tgt backend true); bash -c "$cmd"' _ "$ROOT/bin/fm-daemon-launch.sh" 2>&1)
+  if [ -z "$out" ]; then
+    pass "daemon-cmd: absent daemon.env and x-mode.env is a silent no-op"
+  else
+    fail "daemon-cmd: absent config files produced unexpected output: $out"
+  fi
+
+  # (c) a daemon.env var reaches the exec'd process env.
+  printf 'export FM_PAUSE_RESURFACE_SECS=14400\n' > "$st/config/daemon.env"
+  out=$(FM_HOME="$st" bash -c '. "$1"; cmd=$(fm_afk_launch_daemon_cmd tgt backend "$2"); bash -c "$cmd"' _ "$ROOT/bin/fm-daemon-launch.sh" "$printer")
+  if [ "$out" = "14400" ]; then
+    pass "daemon-cmd: a var set in config/daemon.env reaches the daemon process env"
+  else
+    fail "daemon-cmd: config/daemon.env var did not reach the process env (got '$out')"
+  fi
+
+  # (d) x-mode.env still wins over daemon.env for an overlapping var.
+  printf 'export FM_PAUSE_RESURFACE_SECS=999\n' > "$st/config/x-mode.env"
+  out=$(FM_HOME="$st" bash -c '. "$1"; cmd=$(fm_afk_launch_daemon_cmd tgt backend "$2"); bash -c "$cmd"' _ "$ROOT/bin/fm-daemon-launch.sh" "$printer")
+  if [ "$out" = "999" ]; then
+    pass "daemon-cmd: config/x-mode.env still wins over config/daemon.env on overlap"
+  else
+    fail "daemon-cmd: x-mode.env did not win over daemon.env on overlap (got '$out')"
+  fi
+
+  override_config="$st/override-config"
+  mkdir -p "$override_config"
+  printf 'export FM_PAUSE_RESURFACE_SECS=14400\n' > "$override_config/daemon.env"
+  out=$(FM_HOME="$st" FM_CONFIG_OVERRIDE="$override_config" bash -c '. "$1"; cmd=$(fm_afk_launch_daemon_cmd tgt backend "$2"); bash -c "$cmd"' _ "$ROOT/bin/fm-daemon-launch.sh" "$printer")
+  if [ "$out" = "14400" ]; then
+    pass "daemon-cmd: daemon.env uses FM_CONFIG_OVERRIDE"
+  else
+    fail "daemon-cmd: daemon.env ignored FM_CONFIG_OVERRIDE (got '$out')"
+  fi
+
+  printf 'export FM_PAUSE_RESURFACE_SECS=777\n' > "$override_config/x-mode.env"
+  out=$(FM_HOME="$st" FM_CONFIG_OVERRIDE="$override_config" bash -c '. "$1"; cmd=$(fm_afk_launch_daemon_cmd tgt backend "$2"); bash -c "$cmd"' _ "$ROOT/bin/fm-daemon-launch.sh" "$printer")
+  if [ "$out" = "777" ]; then
+    pass "daemon-cmd: x-mode.env uses FM_CONFIG_OVERRIDE"
+  else
+    fail "daemon-cmd: x-mode.env ignored FM_CONFIG_OVERRIDE (got '$out')"
+  fi
+
+  rm -rf "$st"
+  rm -f "$printer"
+}
+
+# ---------------------------------------------------------------------------
 # UNIT 2: a FRESH entry clears; a REFRESH (daemon already alive) preserves the
 # current session's buffered escalations.
 # ---------------------------------------------------------------------------
@@ -845,6 +916,7 @@ e2e_tmux() {
 }
 
 unit_clear_stale
+unit_daemon_cmd_sources_config_files
 unit_fresh_vs_refresh
 unit_stop_never_touches_afk
 unit_stop_rejects_reused_pid
