@@ -83,8 +83,9 @@ Full mechanics, scoping, dated commands, payloads, and fail-open evidence live i
 
 At session start, `bin/fm-session-start.sh` prints exactly one supervision block for the detected primary harness.
 Do not substitute another harness's wait shape when resuming supervision.
-Claude on tmux or herdr uses the always-on triage daemon, while Claude on every other backend and Grok use tracked background-notify cycles around `bin/fm-watch-arm.sh`.
-Codex uses bounded foreground checkpoints through `bin/fm-watch-checkpoint.sh` because Codex cannot reason while a foreground tool call is running.
+Claude or Codex on tmux or herdr uses the always-on triage daemon; `docs/alwayson-triage.md` ("Rollout gates") owns the current per-harness/backend flip status and the full mechanism.
+Claude on every other backend, and Grok, use tracked background-notify cycles around `bin/fm-watch-arm.sh`.
+Codex on every other backend uses bounded foreground checkpoints through `bin/fm-watch-checkpoint.sh` because Codex cannot reason while a foreground tool call is running.
 OpenCode uses `.opencode/plugins/fm-primary-watch-arm.js`, which coordinates with the turn-end guard plugin and wakes the TUI with `client.session.promptAsync`.
 Pi uses the tracked `.pi/extensions/fm-primary-turnend-guard.ts` plus the tracked `.pi/extensions/fm-primary-pi-watch.ts`, both project-local extensions Pi auto-discovers once trusted.
 When changing any primary watcher adapter, update `docs/supervision-protocols/`, `docs/turnend-guard.md` if a shared idle or turn-end hook changed, and the relevant concise fact below.
@@ -160,7 +161,7 @@ The firstmate PRIMARY's own `.claude/settings.json` registers `bin/fm-turnend-gu
 Claude Code's stdin payload to a Stop hook carries a `stop_hook_active` boolean that is `true` exactly when the current stop attempt is itself a forced continuation from an earlier block this turn; a hook can and should use that as its own loop-guard (always allow the stop when it is already `true`) rather than tracking state itself.
 A project-level `.claude/settings.json` only takes effect when Claude Code's project root is that exact directory - it does not walk up from a subdirectory looking for one, so firstmate launches the primary from the repo root.
 After those settings are loaded, hook command resolution is still cwd-sensitive because Claude Code runs commands through `/bin/sh` against the session's current cwd; keep the tracked command anchored through `"$CLAUDE_PROJECT_DIR"/bin/fm-turnend-guard.sh` and see `docs/turnend-guard.md` for the verified Stop-hook details.
-Claude Code's primary watcher protocol is the lowest-friction path: run `bin/fm-watch-arm.sh` as its own Claude Code background task and treat background-task completion as the wake.
+See "Primary supervision" above for Claude's watcher protocol, split by backend.
 
 ## codex (VERIFIED 2026-06-11, codex-cli 0.139.0)
 
@@ -202,8 +203,7 @@ Codex Stop hooks block on exit 2 and expose `stop_hook_active` for the same one-
 Codex's Stop payload includes `cwd`, but the tracked primary hook does not use it to choose the guard executable.
 Verified on 2026-07-08: Codex runs the Stop hook command with process PWD set to the hook-loaded project root, and no `CODEX_PROJECT_DIR`, `CODEX_WORKSPACE_ROOT`, or `CODEX_CWD` root variable is set.
 The tracked hook anchors to `pwd -P`, verifies that root is firstmate-shaped and hook-bearing, and then invokes `bin/fm-turnend-guard.sh` with the original payload.
-Codex's primary watcher protocol is `bin/fm-watch-checkpoint.sh --seconds "${FM_CODEX_WATCH_CHECKPOINT:-180}"`, not `bin/fm-watch-arm.sh`.
-The checkpoint is deliberately foreground and bounded so Codex regains control regularly to process user messages and queued wakes.
+See "Primary supervision" above for Codex's watcher protocol, split by backend.
 
 ## opencode (VERIFIED 2026-06-11, v1.15.7-1.17.6)
 
