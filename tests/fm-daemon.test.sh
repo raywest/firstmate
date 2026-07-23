@@ -104,6 +104,23 @@ test_classify_routine_signal_self() {
   case "$out" in self\|*) pass "routine signal self-handles" ;; *) fail "routine signal did not self-handle: $out" ;; esac
 }
 
+# The no-verb-signal "crew not provably working" guard (signal_crew_provably_working,
+# bin/fm-classify-lib.sh) shares crew_absorb_class with housekeeping's stale
+# persistence recheck, so a live harness background-task footer (the SECOND
+# authoritative source, alongside an active run-step) absorbs a no-verb signal
+# here too, with no daemon-side code change needed - captain-approved 2026-07-22
+# scope item 4.
+test_classify_routine_signal_self_via_background_task_footer() {
+  local dir state fakebin out
+  dir=$(make_supercase classify-routine-bg-footer)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  printf 'working: step 1\n' > "$state/foo-x2.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness background task still running' \
+    classify_signal "$state/foo-x2.status" "$state")
+  case "$out" in self\|*) pass "no-verb signal self-handles via a live background-task footer" ;; *) fail "background-task-footer signal did not self-handle: $out" ;; esac
+}
+
 # --- Phase 1 (always-on triage prep) classifier deltas -----------------------
 # Section 8 of the fm-alwayson-triage-s5 report identifies three genuine
 # deltas between the always-on watcher's present-mode triage and the daemon's
@@ -617,6 +634,185 @@ test_housekeeping_resumed_stale_cleared() {
   [ -e "$state/.subsuper-wedge-escalations-$key" ] && fail "resumed stale left a wedge escalation count behind"
   [ -s "$state/.subsuper-escalations" ] && fail "resumed stale was escalated"
   pass "resumed (busy) stale clears its marker and wedge escalation count without escalating"
+}
+
+# Captain-approved 2026-07-22 ("if you can validate the worker directly then so
+# can the daemon"): before wedge-escalating a still-idle pane, housekeeping's
+# persistence recheck now consults the SAME two authoritative sources firstmate
+# itself checks - an active no-mistakes run-step, or the harness's own live
+# background-work footer (crew_absorb_class, bin/fm-classify-lib.sh /
+# bin/fm-crew-state.sh) - and self-handles instead of escalating a false wedge.
+test_housekeeping_stale_absorbed_by_active_run_step() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase stale-absorbed-run-step)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-runstep-w1"; pane="$dir/pane.txt"
+  printf 'working\n' > "$state/runstep-w1.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "runstep-w1" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "an active run-step was wedge-escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "active run-step absorption did not clear the short wedge marker"
+  [ ! -e "$state/.subsuper-wedge-escalations-$key" ] || fail "active run-step absorption left the wedge escalation count behind"
+  [ -e "$state/.subsuper-absorbed-$key" ] || fail "active run-step absorption did not record the long-cadence recheck marker"
+  pass "an idle pane with an active no-mistakes run-step self-handles instead of wedge-escalating"
+}
+
+test_housekeeping_stale_absorbed_by_background_task_footer() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase stale-absorbed-bg-footer)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-bgfoot-w1"; pane="$dir/pane.txt"
+  fm_write_meta "$state/bgfoot-w1.meta" "window=$win" "worktree=$dir" "kind=scout"
+  printf 'working\n' > "$state/bgfoot-w1.status"
+  printf 'idle prompt $\n1 shell, 1 monitor still running\n' > "$pane"
+  key=$(printf '%s' "bgfoot-w1" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  # No FM_CREW_STATE_BIN stub: this exercises the REAL fm-crew-state.sh so the
+  # actual claude-footer regex (crew_pane_has_background_work) is under test,
+  # not a canned verdict.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a live background-task footer was wedge-escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "background-task absorption did not clear the short wedge marker"
+  [ -e "$state/.subsuper-absorbed-$key" ] || fail "background-task absorption did not record the long-cadence recheck marker"
+  pass "an idle pane with a live harness background-task footer self-handles instead of wedge-escalating"
+}
+
+test_housekeeping_stale_neither_source_still_escalates() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase stale-neither-source)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-neither-w1"; pane="$dir/pane.txt"
+  printf 'working\n' > "$state/neither-w1.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "neither-w1" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · finished quietly' \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  grep -F "escalation 1" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "a pane provably NOT working (neither source) was not escalated exactly as today: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ -e "$state/.subsuper-stale-$key" ] || fail "neither-source escalation removed the persistence marker instead of resetting it"
+  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "neither-source escalation incorrectly recorded a long-cadence absorption marker"
+  pass "an idle pane with neither authoritative source still escalates exactly as today"
+}
+
+test_housekeeping_stale_unreadable_source_escalates_fail_safe() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase stale-unreadable-source)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-unreadable-w1"; pane="$dir/pane.txt"
+  printf 'working\n' > "$state/unreadable-w1.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "unreadable-w1" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  cat > "$fakebin/broken-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$fakebin/broken-crew-state.sh"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_CREW_STATE_BIN="$fakebin/broken-crew-state.sh" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  grep -F "escalation 1" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "an unreadable authoritative source did not fail-safe escalate: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "an unreadable source was incorrectly treated as absorbed"
+  pass "an unreadable authoritative source escalates fail-safe, exactly like today's no-verdict case"
+}
+
+test_housekeeping_absorbed_recheck_still_working_resets_window() {
+  local dir state fakebin key before after
+  dir=$(make_supercase absorbed-recheck-still-working)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/absorbed-w1.meta" "window=sess:fm-absorbed-w1"
+  printf 'working\n' > "$state/absorbed-w1.status"
+  key=$(printf '%s' "absorbed-w1" | tr ':/.' '___')
+  before=$(( $(date +%s) - 5000 ))
+  echo "$before" > "$state/.subsuper-absorbed-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w1" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ -e "$state/.subsuper-absorbed-$key" ] || fail "still-working recheck cleared the long-cadence marker instead of resetting it"
+  after=$(cat "$state/.subsuper-absorbed-$key" 2>/dev/null || echo 0)
+  [ "$after" -gt "$before" ] || fail "still-working recheck did not reset the long-cadence window"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "still-working recheck escalated instead of continuing to self-handle"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "still-working recheck created a short wedge marker"
+  pass "a long-cadence absorption recheck that is still provably working resets the window without escalating"
+}
+
+test_housekeeping_absorbed_recheck_no_longer_working_resurfaces() {
+  local dir state fakebin key
+  dir=$(make_supercase absorbed-recheck-no-longer-working)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/absorbed-w2.meta" "window=sess:fm-absorbed-w2"
+  printf 'working\n' > "$state/absorbed-w2.status"
+  key=$(printf '%s' "absorbed-w2" | tr ':/.' '___')
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-absorbed-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w2" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · worktree gone' \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "no-longer-working recheck did not clear the long-cadence marker"
+  grep -Fq "no longer" "$state/.subsuper-escalations" 2>/dev/null \
+    || fail "no-longer-working recheck did not escalate: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ -e "$state/.subsuper-stale-$key" ] \
+    || fail "no-longer-working recheck did not hand the pane back to ordinary short-cadence wedge tracking"
+  [ ! -e "$state/.subsuper-wedge-escalations-$key" ] \
+    || fail "no-longer-working recheck should start the wedge count fresh, not carry one over"
+  pass "a long-cadence absorption that is no longer provably working re-surfaces within the bounded window, never never"
+}
+
+test_housekeeping_absorbed_recheck_terminal_status_clears_marker() {
+  local dir state fakebin key terminal
+  dir=$(make_supercase absorbed-recheck-terminal)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/absorbed-w3.meta" "window=sess:fm-absorbed-w3"
+  terminal='done: validation completed'
+  printf '%s\n' "$terminal" > "$state/absorbed-w3.status"
+  key=$(printf '%s' "absorbed-w3" | tr ':/. ' '____')
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-absorbed-$key"
+  printf '%s\n' "$terminal" > "$state/.subsuper-seen-status-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w3" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · finished quietly' \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "terminal recheck retained the absorbed marker"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "terminal recheck re-escalated a reported status: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "terminal recheck created short-cadence wedge tracking"
+  pass "a terminal absorbed recheck clears tracking without re-escalating"
+}
+
+test_housekeeping_absorbed_recheck_unseen_terminal_escalates() {
+  local dir state fakebin key terminal
+  dir=$(make_supercase absorbed-recheck-unseen-terminal)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/absorbed-w4.meta" "window=sess:fm-absorbed-w4"
+  terminal='failed: validation exited 1'
+  printf '%s\n' "$terminal" > "$state/absorbed-w4.status"
+  key=$(printf '%s' "absorbed-w4" | tr ':/. ' '____')
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-absorbed-$key"
+  printf 'done: an earlier validation\n' > "$state/.subsuper-seen-status-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w4" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · worktree gone' \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "unseen terminal recheck retained the absorbed marker"
+  grep -Fq "$terminal" "$state/.subsuper-escalations" 2>/dev/null \
+    || fail "unseen terminal status was not escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ "$(cat "$state/.subsuper-seen-status-$key" 2>/dev/null || true)" = "$terminal" ] \
+    || fail "unseen terminal escalation did not update the seen-status marker"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "unseen terminal recheck created short-cadence wedge tracking"
+  pass "an unseen terminal absorbed recheck escalates once without wedge tracking"
 }
 
 test_housekeeping_herdr_persistent_stale_resolves_meta() {
@@ -1980,6 +2176,7 @@ test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
+test_classify_routine_signal_self_via_background_task_footer
 test_classify_signal_no_verb_not_working_escalates
 test_classify_signal_declared_pause_exempt_from_provably_working_guard
 test_classify_signal_mixed_pause_and_stopped_crew_escalates
@@ -2005,6 +2202,14 @@ test_housekeeping_wedge_counter_clears_on_resume
 test_housekeeping_wedge_counter_clears_when_window_gone
 test_housekeeping_wedge_counter_survives_capture_failure
 test_housekeeping_resumed_stale_cleared
+test_housekeeping_stale_absorbed_by_active_run_step
+test_housekeeping_stale_absorbed_by_background_task_footer
+test_housekeeping_stale_neither_source_still_escalates
+test_housekeeping_stale_unreadable_source_escalates_fail_safe
+test_housekeeping_absorbed_recheck_still_working_resets_window
+test_housekeeping_absorbed_recheck_no_longer_working_resurfaces
+test_housekeeping_absorbed_recheck_terminal_status_clears_marker
+test_housekeeping_absorbed_recheck_unseen_terminal_escalates
 test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_paused_unpaused_cleared

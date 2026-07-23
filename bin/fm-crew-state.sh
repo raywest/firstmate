@@ -8,8 +8,9 @@
 # or blocked and the crew resumes (responds to the gate, the pipeline fixes, it
 # re-validates), the log's last line stays stale. This helper never infers the
 # current state from a tail of the log: it reads the authoritative source (a
-# no-mistakes run-step attributed to this crew's branch, else the pane
-# busy-signature) and reconciles the possibly-stale log against it.
+# no-mistakes run-step attributed to this crew's branch, else foreground-busy or
+# harness-tracked-background-work pane evidence) and reconciles the possibly-stale
+# log against it.
 #
 # The determinism lives entirely here - only run-step / pane / log reads plus
 # fixed mapping logic, no heuristics and no LLM. Output is one stable, parseable,
@@ -33,9 +34,13 @@
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
 #      agree, and are reported as parked.
 #   4. No run for this crew (pre-validation, or kind=scout): fall back to the
-#      recorded backend's pane busy state, then the status log's last line only
-#      when its verb maps to a recognized run-state. Decision-only events such as
-#      `resolved` never become current state or detail.
+#      recorded backend's pane busy state, then the harness's own live
+#      background-work footer (e.g. claude's "N shell(s)"/"N monitor" still-
+#      running indicator - a crew deliberately parked on a tracked background
+#      shell or monitor tool reads as an idle pane otherwise), then the status
+#      log's last line only when its verb maps to a recognized run-state.
+#      Decision-only events such as `resolved` never become current state or
+#      detail.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
 #      than trusting a stale status log.
@@ -181,6 +186,24 @@ crew_pane_is_busy() {  # <target>
       esac
       ;;
   esac
+}
+
+# Live harness-tracked background work footer: a SEPARATE signal from
+# crew_pane_is_busy's foreground busy banner. Captured 2026-07-22: claude's own
+# status line reads e.g. "1 shell, 1 monitor still running" while a background
+# shell or monitor tool the harness is tracking has not finished, even though
+# the foreground turn is idle and no busy banner is showing - a crew
+# deliberately parked there otherwise reads as a plain idle pane and gets
+# wedge-escalated. FM_BACKGROUND_WORK_REGEX overrides the default pattern.
+FM_BACKGROUND_WORK_REGEX_DEFAULT='[0-9]+ (shells?|monitors?)\b.*\brunning\b'
+crew_pane_has_background_work() {  # <target>
+  local tail40
+  case "$TASK_BACKEND" in
+    tmux) tail40=$(tmux capture-pane -p -t "$1" -S -40 2>/dev/null) || return 1 ;;
+    *) tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || return 1 ;;
+  esac
+  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -1 \
+    | grep -qiE "${FM_BACKGROUND_WORK_REGEX:-$FM_BACKGROUND_WORK_REGEX_DEFAULT}"
 }
 
 # --- no-mistakes run lookup (authoritative when a run matches this branch) --
@@ -554,6 +577,14 @@ pane_readable "$BACKEND_TARGET" || emit unknown none "backend target gone: $BACK
 # signature is not meaningful for them; read their state from the status log only.
 if [ "$KIND" != secondmate ] && crew_pane_is_busy "$BACKEND_TARGET"; then
   emit working pane "harness busy"
+fi
+
+# Foreground turn is idle (no busy banner), but the harness itself still
+# tracks live background work for this crew (see crew_pane_has_background_work
+# above) - report the same working/pane verdict crew_absorb_class already
+# treats as provably working, so this crew is not wedge-escalated either.
+if [ "$KIND" != secondmate ] && crew_pane_has_background_work "$BACKEND_TARGET"; then
+  emit working pane "harness background task still running"
 fi
 
 # Fall back to the status log's last line, but ONLY when its verb maps to a real

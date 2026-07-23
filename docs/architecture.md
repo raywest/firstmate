@@ -9,29 +9,21 @@ firstmate's always-loaded operating contract and routing index for conditional p
 ## Event-driven supervision
 
 A zero-token bash watcher (`bin/fm-watch.sh`) sleeps on the fleet, classifies detected wakes in bash, and wakes the first mate only when something is actionable.
-Actionable wakes include captain-relevant status signals, no-verb signals whose crew is not provably working, authenticated check output such as PR merge polling or an X-mode mention, stale panes that are neither provably working nor eligible for the bounded paused/captain-held cadence whether their status log looks terminal or non-terminal, provably-working stale panes that persist past `FM_STALE_ESCALATE_SECS`, declared external waits that remain paused past `FM_PAUSE_RESURFACE_SECS`, and heartbeat backstop hits.
+Actionable wakes include captain-relevant status signals, no-verb signals whose crew is not provably working, authenticated check output such as PR merge polling or an X-mode mention, eligible stale-pane rechecks, and heartbeat backstop hits.
 Repeated stale escalations on the same unchanged pane add an escalation count to the wake reason and, at `FM_WEDGE_DEMAND_INSPECT_COUNT`, a `demand-deep-inspection` marker.
 Those actionable wakes are written to a durable local queue (`state/.wake-queue`) before detector state advances, so a missed process exit can be recovered by draining the queue.
-No-verb wakes, such as `working:` notes and bare turn-ended signals, are benign only when `bin/fm-crew-state.sh` reports positive evidence that the crew is still working: an actively running no-mistakes step for that crew's branch or a backend busy signature.
-A crew that declares `paused:` for a known external wait is separately absorbed while idle and re-surfaced only on the longer pause cadence, rather than being treated as a possible wedge.
-While that status remains current, only positive working evidence displaces its pause treatment; any other current-state verdict, including a stale/misattributed run-step outcome, remains on the pause cadence.
+[`alwayson-triage.md`](alwayson-triage.md#provably-working-stale-absorption) is the single owner of the shared no-verb and stale-pane classification policy, including positive working evidence and bounded pause or absorption rechecks.
+`bin/fm-crew-state.sh`'s header owns the exact current-state source precedence and reconciliation behavior.
 For an ordinary crew that has stopped, the normal-mode watcher first surfaces one stale wake unless the backend confidently reports its agent dead, then keeps an unchanged `paused:` or durable `captain-held` endpoint on that same cadence for dead or inconclusive liveness.
 Among liveness outcomes, only a confirmed-live agent bypasses that cadence so a live decision gate surfaces immediately, and the secondmate idle-endpoint exemption is unchanged.
 Its initial normal-mode status signal still surfaces through the no-verb path, while away mode self-handles that routine signal and owns the later recheck.
-Fresh stale panes use the same current-state read before trusting the status log, so an active run or busy pane outranks an old captain-relevant status-log line left behind before validation.
 No-change heartbeats are also benign.
 Absorbed wakes advance their suppression markers, log to `state/.watch-triage.log`, and keep the watcher blocking without a queue record or LLM turn.
 After each drain, `fm-wake-drain.sh` runs the same liveness guard as the supervision scripts, so a lapsed watcher chain surfaces even on a turn that only drains and handles queued wakes.
 Routine watcher polling, supervision no-ops, elapsed waiting time, and absorbed benign wakes stay silent.
 A declared external wait trades that silence for one bounded recheck per pause window, so a forgotten pause cannot remain invisible indefinitely.
 Crew status files are append-only wake-event logs, not current-state fields.
-`bin/fm-crew-state.sh <id>` is the cheap current-state read for an actionable heartbeat review: it attributes the matching no-mistakes run, active or terminal, to the crew's own branch and keeps that run-step authoritative even if the pane has closed.
-During no-mistakes' `ci` monitor phase, it also reads the ci step log tail because `axi status` reports both "still waiting on checks" and "checks green, waiting on merge" as `ci,running`.
-The most recent recognized ci log marker wins, so checks-green monitoring reports done while a later re-arm, failed-check, or issue marker returns the crew to working.
-Only when no matching run exists does it fall back to the pane busy-signature and then a status-log event whose verb maps to a recognized run-state; a dead pane without a run reports unknown instead of trusting a stale log.
-Decision-only events such as `resolved` never become current state or leak their prose into the current-state detail.
-In that status-log fallback, a declared external wait reports the distinct `paused` state with its reason.
-For herdr, that pane fallback trusts a native `busy` verdict outright, but corroborates native `idle` or unknown verdicts against the rendered busy signature before deciding the crew is not working.
+`bin/fm-crew-state.sh <id>` provides the current-state read for an actionable heartbeat review.
 For whole-fleet read-only review, `bin/fm-fleet-snapshot.sh --json` emits schema `fm-fleet-snapshot.v1` from the backlog, task metadata, current crew state, endpoint probes, PR/report pointers, scout reports, bounded current summaries from registered secondmate homes, and secondmate return-channel guidance.
 `bin/fm-fleet-view.sh` renders that snapshot as Markdown for humans, while `bin/fm-bearings-snapshot.sh` provides the bounded bearings projection, so both views consume one structured contract instead of reparsing raw fleet files.
 The script header owns the exact JSON schema.
@@ -64,9 +56,9 @@ On every verified primary harness, tracked hook integration gives the primary se
 The guard covers the main primary and genuinely marked secondmate homes, exempts child crewmate/scout worktrees, is loop-safe per harness, and is documented in [turnend-guard.md](turnend-guard.md).
 
 A sub-supervisor daemon (`bin/fm-supervise-daemon.sh`) is the PERMANENT wake consumer on a supported claude or codex primary on tmux or herdr: the session-start bootstrap sweep launches and maintains it (below), and the watcher runs one-shot as its child (`FM_WATCH_DAEMON_OWNED=1`, unconditionally) so the daemon does the triage in both delivery styles - exactly one triage layer ever runs. `/afk` no longer starts or stops it; the durable `state/.afk` flag it owns only picks the delivery STYLE (away: patient batching plus an OS-level wedge alert; present: urgent-immediate plus a short routine batch, no OS-level alert). [`alwayson-triage.md`](alwayson-triage.md) is the full mechanism doc; this section stays a summary.
-The watcher and daemon share `bin/fm-classify-lib.sh` for captain-relevant status verbs, declared-external-wait vocabulary, status-scan primitives, and the provably-working guard for no-verb signals - identical in both delivery styles.
-The always-on watcher also uses that library's absorb classification on first-sighting stale panes before status-log terminality is trusted; the daemon mirrors that first-sight escalation in present mode and keeps its patient persistence-recheck cadence in away mode (the one deliberate mode-split threshold).
-The daemon escalates captain-relevant events, plus a bounded recheck for a declared pause that remains idle, as one batched, single-line digest prefixed with a terminal-safe U+2063 sentinel marker so firstmate can tell daemon injections apart from real messages, in both delivery styles.
+The watcher and daemon share `bin/fm-classify-lib.sh` for their classification primitives.
+[`alwayson-triage.md`](alwayson-triage.md#provably-working-stale-absorption) is the single owner of the shared stale-pane and no-verb classification policy.
+The daemon emits captain-required events as one batched, single-line digest prefixed with a terminal-safe U+2063 sentinel marker so firstmate can tell daemon injections apart from real messages, in both delivery styles.
 Its supervisor injection path supports tmux and herdr panes, with `FM_SUPERVISOR_BACKEND` and `FM_SUPERVISOR_TARGET` resolved independently from the task-spawn backend.
 Pane existence, busy checks, composer checks, capture, and verified submit route through `bin/fm-backend.sh`: tmux keeps the same submit core used by the tmux send backend, while herdr uses native busy state, native agent-state submit confirmation on idle baselines, and its ANSI-aware structural composer classifier for pending-input guards and submit fallback.
 Composer-content classification has one shared owner, `bin/fm-composer-lib.sh`, used by tmux, herdr, Orca, and cmux after each adapter performs its own capture and composer-row recognition.
