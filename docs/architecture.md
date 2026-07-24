@@ -12,6 +12,10 @@ A zero-token bash watcher (`bin/fm-watch.sh`) sleeps on the fleet, classifies de
 Actionable wakes include captain-relevant status signals, no-verb signals whose crew is not provably working, authenticated check output such as PR merge polling or an X-mode mention, eligible stale-pane rechecks, and heartbeat backstop hits.
 Repeated stale escalations on the same unchanged pane add an escalation count to the wake reason and, at `FM_WEDGE_DEMAND_INSPECT_COUNT`, a `demand-deep-inspection` marker.
 Those actionable wakes are written to a durable local queue (`state/.wake-queue`) before detector state advances, so a missed process exit can be recovered by draining the queue.
+When a canonical validated PR poll returns exactly `merged`, the watcher appends that durable notification before publishing a private receipt bound to the poll's registration, bytes, file identities, metadata, provider, URL, and task ID.
+The receipt makes retirement safely retryable across restarts: fixed-path recovery revalidates the same evidence, removes the runnable check first, removes its registration and data sidecars, removes the receipt last, and preserves task metadata including `pr=` and `pr_head=`.
+A concurrent replacement remains armed, every non-merged or invalid observation remains unchanged, and retirement never performs task or persistent-secondmate cleanup.
+`bin/fm-pr-lib.sh` owns the receipt format and strict identity mechanics, while `bin/fm-watch.sh` owns queue-before-retirement ordering.
 [`alwayson-triage.md`](alwayson-triage.md#provably-working-stale-absorption) is the single owner of the shared no-verb and stale-pane classification policy, including positive working evidence and bounded pause or absorption rechecks.
 `bin/fm-crew-state.sh`'s header owns the exact current-state source precedence and reconciliation behavior.
 For an ordinary crew that has stopped, the normal-mode watcher first surfaces one stale wake unless the backend confidently reports its agent dead, then keeps an unchanged `paused:` or durable `captain-held` endpoint on that same cadence for dead or inconclusive liveness.
@@ -33,8 +37,9 @@ The script header owns the exact JSON schema.
 A registered secondmate's validated home is the authority for bearings current state because it owns the child metadata inventory, each child's current-state result, endpoint observations, backlog holds and dependencies, keyed unresolved decisions, and recent Done baseline.
 The original cross-home projection instead treated the secondmate agent as an ordinary parent task, so an idle secondmate's `fm-crew-state` fallback selected the latest append-only parent status event even when structured state in the registered home contradicted it.
 The parent-status contract also required explicit keyed resolution for decisions and blockers but not for a material `working` phase, so a start event could remain unsuperseded after the corresponding home backlog had moved the work to Done.
-Generated secondmate charters now key material routed-work phases and close them with a same-key later state or `resolved` event, while the structured home remains authoritative even if that closure is missing.
-Cross-home reads validate the seeded identity and operational-directory boundaries, use per-home time and output bounds, and classify unavailable, invalid, malformed, or inconsistent structured state as unknown rather than reviving a parent event as current work.
+Generated secondmate charters reject generic receipt or start acknowledgements, key only supervisor-actionable material phase reports, and close an opened phase with a same-key later state or `resolved` event, while the structured home remains authoritative even if that closure is missing.
+Cross-home reads validate the seeded identity and operational-directory boundaries, use per-home time and output bounds, and classify unavailable, malformed, or inconsistent structured state as unknown rather than reviving a parent event as current work.
+When only an owned child's current classification is unavailable, the home classification stays unknown while independently trustworthy structured decisions, holds, queued and landed records, endpoint identities, counts, and provenance remain available; every other invalid path stays strict and exposes none of those child-derived surfaces.
 A bounded direct-report terminal tail can help diagnose a mismatch by showing that historical parent wording is still visible, but it is untrusted supplemental evidence because scrollback, prompts, copied output, idle shells, and agent prose are not durable state.
 The snapshot strips control sequences, retains only capture metadata and literal event-corroboration flags, and never lets terminal evidence override a valid structured classification.
 The default path remains local-only; live GitHub enrichment exists only behind the bearings `--include-prs` opt-in.
@@ -46,7 +51,7 @@ That block owns the live wait shape for the running primary harness: a claude or
 On `attached` it stays live across identity-matched successors, and an unexplained clean child close either attaches to a verified healthy successor or becomes a typed nonzero result: the loud `watcher: FAILED - cycle ended without an actionable reason` only when the wake queue genuinely did not advance during the cycle, an accurate already-queued report otherwise (see [`watcher-continuity.md`](watcher-continuity.md)).
 The arm layer records one bounded lifecycle row per observed cycle in `state/.watch-cycle-exits.log`; `state/.watch-triage.log` remains exclusively the absorbed-wake debug log.
 Pi and OpenCode verify session-lock ownership and launch one singleton successor from their child-close handlers before delivering an actionable wake prompt, with bounded exponential retry for failed restoration.
-Unflipped Claude harness/backend combinations retain the tracked background-task protocol and its narrow PreToolUse continuity gate, which allows drain and arm recovery while refusing only other fleet commands when tasks are in flight and neither an identity-matched live watcher nor a live daemon holds the home lock.
+Unflipped Claude harness/backend combinations retain the tracked background-task protocol and its narrow PreToolUse continuity gate, which allows drain, arm recovery, daemon launch recovery, and fail-closed teardown while refusing only other fleet commands when tasks are in flight and neither an identity-matched live watcher nor a live daemon holds the home lock.
 The turn-end guard remains the final backstop for every harness protocol, and a live daemon lock satisfies it alongside the watcher predicate on supported claude or codex tmux/herdr setups.
 Its `--restart` mode signals only the watcher recorded in the current home's `state/.watch.lock`, so restarting one home cannot kill sibling secondmate watchers.
 A pull-based guard (`bin/fm-guard.sh`) warns through supervision tool output if the primary checkout is tangled, or if tasks are in flight and supervision is down or queued wakes are waiting to be drained.
@@ -57,10 +62,11 @@ The guard covers the main primary and genuinely marked secondmate homes, exempts
 
 A sub-supervisor daemon (`bin/fm-supervise-daemon.sh`) is the PERMANENT wake consumer on a supported claude or codex primary on tmux or herdr: the session-start bootstrap sweep launches and maintains it (below), and the watcher runs one-shot as its child (`FM_WATCH_DAEMON_OWNED=1`, unconditionally) so the daemon does the triage in both delivery styles - exactly one triage layer ever runs. `/afk` no longer starts or stops it; the durable `state/.afk` flag it owns only picks the delivery STYLE (away: patient batching plus an OS-level wedge alert; present: urgent-immediate plus a short routine batch, no OS-level alert). [`alwayson-triage.md`](alwayson-triage.md) is the full mechanism doc; this section stays a summary.
 The watcher and daemon share `bin/fm-classify-lib.sh` for their classification primitives.
-[`alwayson-triage.md`](alwayson-triage.md#provably-working-stale-absorption) is the single owner of the shared stale-pane and no-verb classification policy.
-The daemon emits captain-required events as one batched, single-line digest prefixed with a terminal-safe U+2063 sentinel marker so firstmate can tell daemon injections apart from real messages, in both delivery styles.
+[`alwayson-triage.md`](alwayson-triage.md#provably-working-stale-absorption) is the single owner of the shared stale-pane and no-verb classification policy, including its terminal-verb and away-mode wedge-aging refinements.
+The daemon emits captain-required events as one batched, single-line digest using the canonical `away-supervisor` kind from `bin/fm-operational-input.sh` so firstmate can tell daemon injections apart from real messages, in both delivery styles.
 Its supervisor injection path supports tmux and herdr panes, with `FM_SUPERVISOR_BACKEND` and `FM_SUPERVISOR_TARGET` resolved independently from the task-spawn backend.
 Pane existence, busy checks, composer checks, capture, and verified submit route through `bin/fm-backend.sh`: tmux keeps the same submit core used by the tmux send backend, while herdr uses native busy state, native agent-state submit confirmation on idle baselines, and its ANSI-aware structural composer classifier for pending-input guards and submit fallback.
+The tmux submit core (shared `fm_tmux_submit_enter_core`) treats a busy pane + retries-exhausted + composer-still-pending as a queued Enter (opencode 1.18.4 accepts Enter mid-turn and queues it for after the turn), reported as `empty` so the daemon and `fm-send` do not re-send; an idle pane keeps the `pending` verdict as a genuine swallow. The same opencode busy-queue case is a known gap on the herdr adapter and is recorded in `docs/herdr-backend.md` rather than patched here.
 Composer-content classification has one shared owner, `bin/fm-composer-lib.sh`, used by tmux, herdr, Orca, and cmux after each adapter performs its own capture and composer-row recognition.
 The daemon injects only into an affirmatively `empty` composer, so both `pending` and `unknown` defer and a bare dead-shell prompt cannot receive an escalation; the complete policy is in [Composer-emptiness safety](herdr-backend.md#composer-emptiness-safety-2026-07-10-fleet-wide-across-all-four-backends).
 Unsupported supervisor backends refuse at daemon startup.
@@ -85,7 +91,8 @@ That poll loop is the default event source for backends with no native push even
 For capable herdr sessions, the same watcher replaces its terminal sleep with a bounded native event wait that immediately surfaces `blocked`; [herdr-backend.md](herdr-backend.md#native-paneagent_status_changed-push-escalation-immediate-blocked-wake) owns the mechanism, capability gates, and verification evidence.
 The deeper session-start agent-process liveness probe is separate from that busy-state poll: tmux and herdr have verified classifiers for secondmate recovery, while zellij, Orca, and cmux currently report `unknown` rather than guess.
 Herdr is experimental and can be selected explicitly or by runtime auto-detection: treehouse remains the worktree provider for it exactly as it is for tmux (herdr is a session provider only), and its full verification - the container shape decision, created-vs-adopted default-tab prune safety, restored-layout husk respawn idempotency, verified CLI facts, ANSI-preserved ghost/placeholder classification through the shared extractor, a verified small-`--lines` capture bug and its workaround, and known gaps - is recorded in `docs/herdr-backend.md`.
-Herdr's container shape is workspace-per-home plus tab-per-task: the primary home uses workspace label `firstmate`, secondmate homes use `2ndmate-<secondmate-id>`, and recovery/list-live scopes to the current `FM_HOME`'s workspace.
+Herdr's durable default container shape is workspace-per-home plus tab-per-task: the primary home uses workspace label `firstmate`, secondmate homes use `2ndmate-<secondmate-id>`, and recovery/list-live scopes to the current `FM_HOME`'s workspace.
+Its optional default-off presentation projection may place one clean new task in a disposable workspace without changing endpoint authority or lifecycle ownership; [`docs/herdr-backend.md`](herdr-backend.md#optional-disposable-single-task-presentation-spaces) owns that conditional design.
 Zellij is experimental and selected only explicitly: treehouse remains its worktree provider too, and its full verification - the resolved "gaps to verify" list from the original design report, the unconditional-exit-0 CLI quirk and its mitigation, the focus-steal-on-new-tab finding, the home-scoped tab-title collision fix, and known gaps - is recorded in `docs/zellij-backend.md`.
 Zellij's container shape is simpler than herdr's: one shared `firstmate` session, one tab per task, with no per-home workspace split; visible tab titles are scoped by the active home label plus a short hash of the resolved `FM_ROOT` path.
 Orca is experimental and selected only explicitly: Orca owns both worktree and terminal lifecycle, records `orca_worktree_id=` and `terminal=`, and removes worktrees through `orca worktree rm` only after the usual firstmate teardown checks pass. Its current behavior and limitations are recorded in `docs/orca-backend.md`.
@@ -118,15 +125,16 @@ The helper's header owns the exact signal detection, relocated-home limitation, 
 
 ## Two task shapes
 
-Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`, or `local-only`); scout tasks investigate, plan, reproduce bugs, or audit, then leave a report at `data/<id>/report.md` and never push.
+Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`, or `local-only`); scout tasks leave standalone investigation reports at `data/<id>/report.md` and never push.
+The intake and authority contract in `AGENTS.md` owns when separate scout research is warranted.
 
 ## Dispatch profiles
 
 Crewmate and scout dispatch can stay on the static crewmate harness resolved by `config/crew-harness`, or it can use local dispatch profiles in `config/crew-dispatch.json`.
 The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching rule, resolves that rule directly or through a supported selector, and passes the selected concrete profile to `fm-spawn.sh`.
-The shell scripts validate the JSON shape and applicable profile/harness combinations, and `fm-dispatch-select.sh` owns deterministic selector behavior, but they do not parse task intent or match the natural-language rules.
+The shell scripts validate the JSON shape and applicable profile/harness combinations, and `fm-dispatch-select.sh` owns quota-aware array selection plus OS-backed random fallback, but they do not parse task intent or match the natural-language rules.
 The schema and axis semantics are owned by [configuration.md](configuration.md#crew-dispatch-profiles-configcrew-dispatchjson).
-The session-start bootstrap step surfaces either the active rule block or a concise invalid-config line at startup.
+The session-start bootstrap step keeps valid dispatch configuration silent unless verbose facts are enabled and surfaces a concise invalid-config line when validation fails.
 When the file exists, `fm-spawn.sh` refuses crewmate and scout launches without an explicit harness, so `config/crew-harness` is only automatic when no dispatch profile file is active.
 Secondmate launches are exempt and resolve their separate launch configuration through `config/secondmate-harness`.
 
@@ -144,7 +152,8 @@ Seeding is transactional: if validation, cloning, initialization, or registry up
 `local-only` projects stay with the main first mate because they merge into the main local checkout instead of a remote-backed PR path.
 The same project may appear in multiple secondmate homes when their scopes differ, such as issue triage versus feature development.
 Secondmates are idle by default: after startup recovery reconciles only work already in their own home, an empty queue waits silently for routed tasks, and they never self-initiate surveys or audits.
-When called with `FM_HOME=<this-firstmate-home>` or when `FM_HOME` is already set to the active firstmate home, metadata-routed `fm-send.sh` requests to a live `kind=secondmate` are prefixed with the from-firstmate marker from `bin/fm-marker-lib.sh`, so the secondmate returns terse answers through status lines and detailed answers through docs plus status pointers instead of replying only in its own chat.
+When called with `FM_HOME=<this-firstmate-home>` or when `FM_HOME` is already set to the active firstmate home, metadata-routed `fm-send.sh` requests to a live `kind=secondmate` use the live-charter-compatible `from-firstmate` carrier owned by `bin/fm-operational-input.sh`, so the secondmate returns terse answers through status lines and detailed answers through docs plus status pointers instead of replying only in its own chat.
+The parent guards every marked request against a missing correlated report without reading the secondmate conversation; `bin/fm-pending-reply-lib.sh` owns the correlation, recovery, escalation, and retention contract.
 Explicit backend-target sends and direct human typing stay unmarked, so captain intervention in a secondmate pane remains conversational.
 After seeding a secondmate, `fm-backlog-handoff.sh` validates the fleet-specific handoff, then atomically delegates already-judged in-scope queued item moves to `tasks-axi mv` so the domain queue starts in the right place.
 Idle secondmate panes are healthy; teardown is explicit and refuses while the secondmate home has in-flight work unless the captain has approved discard with `--force`.
@@ -158,7 +167,7 @@ Its optional model, effort, and codex-only harness-profile pins, their four-toke
 Those pins are re-read on every secondmate spawn or respawn.
 `config/crew-harness` remains the crewmate harness and is inherited into secondmate homes.
 `config/crew-dispatch.json` is inherited too; secondmates use the same natural-language dispatch profiles when spawning their own crewmates.
-`config/backlog-backend` is inherited too; absent or `tasks-axi` selects the default tasks-axi backlog backend, while `manual` forces routine backlog updates to hand-editing across the fleet without disabling validated handoff delegation.
+The [`secondmate-provisioning` skill](../.agents/skills/secondmate-provisioning/SKILL.md) owns the complete inherited-local-material allowlist and propagation contract.
 
 The `data/secondmates.md` line contract is owned by the [`secondmate-provisioning` skill](../.agents/skills/secondmate-provisioning/SKILL.md#routing-table), and the secondmate environment variables are documented in [configuration.md](configuration.md).
 
@@ -170,7 +179,7 @@ When a selected delivery path calls for a diff, `bin/fm-review-diff.sh` refreshe
 For target project repos shipped through their own no-mistakes pipeline, commits under `.no-mistakes/evidence/` are the pipeline's PR-viewable validation evidence and are expected to stay in the crew branch until the evidence-hosting design changes.
 The firstmate repo itself is the exception: its `.no-mistakes/` directory is local state, stays gitignored, and is rejected by CI if tracked.
 PR-based task merges go through `bin/fm-pr-merge.sh`, which records `pr=` and any available `pr_head=` through `bin/fm-pr-check.sh` before calling `gh-axi pr merge`.
-The helper requires a full `https://github.com/<owner>/<repo>/pull/<n>` URL, invokes `gh-axi pr merge <n> --repo <owner>/<repo>`, defaults to `--squash`, preserves explicit merge-method flags, and rejects malformed URLs or repo override flags before recording merge state.
+The helper requires a full `https://github.com/<owner>/<repo>/pull/<n>` URL, invokes `gh-axi pr merge <n> --repo <owner>/<repo>`, defaults to `--squash`, preserves explicit merge-method flags, and rejects malformed URLs or repo override flags before recording merge state; a well-formed GitLab merge request URL (see [docs/gitlab-merge-watch.md](gitlab-merge-watch.md)) is refused too, explicitly, rather than sent to the wrong forge.
 Teardown is fail-closed for ship worktrees: dirty worktrees refuse, and committed work must be landed before the worktree is returned.
 [`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the landed-work proofs, PR-discovery fallback, and stale-lock recovery procedure.
 

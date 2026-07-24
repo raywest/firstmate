@@ -51,7 +51,7 @@ path below.
 
 No `/back` is needed. The first genuine message is the return signal:
 
-- A message **without** the sentinel marker and **not** starting with `/afk` -> the captain is back.
+- A message **without** the current operational prefix or a legacy bare marker, and **not** starting with `/afk` -> the captain is back.
   Run `bin/fm-afk-return.sh` before acting on the message that brought the captain back.
   On a supported claude or codex primary, on tmux or herdr, that script clears the away style flag (`bin/fm-daemon-launch.sh afk-exit`) without stopping the daemon, which keeps running and switches to present-mode cadence.
   On every unflipped harness/backend combination, it retains the legacy daemon stop before clearing the same flag.
@@ -60,7 +60,7 @@ No `/back` is needed. The first genuine message is the return signal:
   On a supported claude or codex primary, on tmux or herdr, full per-wake responsiveness resumes immediately through the daemon's present-mode digests.
   On every unflipped harness/backend combination, resume that harness's legacy per-wake supervision protocol from the emitted session-start supervision block in AGENTS.md section 8.
   Do not answer a Bearings request or perform any other ordinary captain work until the check exits successfully.
-- A message **with** the sentinel marker (`FM_INJECT_MARK`, U+2063 INVISIBLE SEPARATOR) -> it is a daemon escalation; stay afk and process it.
+- A message **with** the current operational prefix (`FM_OPERATIONAL_PREFIX`, U+2063 INVISIBLE SEPARATOR followed by `FIRSTMATE_OP: `), or a legacy bare `FM_INJECT_MARK` daemon escalation -> stay afk and process it.
 - Re-invoking `/afk` while already away -> stay afk (refresh the flag); this
   does **not** trigger an exit.
 
@@ -74,11 +74,13 @@ what**. "Away" never means "approves more." A PR ready for merge, a
 needs-decision finding, or anything destructive still waits for the captain's
 explicit word - the daemon just batches the notification.
 
-## Sentinel marker contract
+## Operational prefix contract
 
-The daemon prefixes every injection with `FM_INJECT_MARK` (U+2063 INVISIBLE SEPARATOR), which has no normal keyboard keystroke and survives terminal transport as UTF-8 text.
+The daemon constructs every current injection as the `away-supervisor` kind owned by `bin/fm-operational-input.sh`, beginning with `FM_OPERATIONAL_PREFIX`: `FM_INJECT_MARK` (U+2063 INVISIBLE SEPARATOR) followed by the stable `FIRSTMATE_OP: ` label.
+The bare `FM_INJECT_MARK` form remains accepted for legacy daemon escalations during rollout.
+U+2063 has no normal keyboard keystroke and survives terminal transport as UTF-8 text.
 This is how firstmate tells a daemon escalation apart from a real message in the same pane.
-The marker travels with the message text; it does not rely on harness-level typed-vs-injected detection, which is not portable across claude, codex, opencode, pi, and grok.
+The operational prefix travels with the message text; it does not rely on harness-level typed-vs-injected detection, which is not portable across claude, codex, opencode, pi, and grok.
 
 ## Busy-guard and composer guard
 
@@ -122,6 +124,21 @@ A bordered-empty or ghost-only composer is recognized as empty where that backen
 when a steer's Enter is positively swallowed, so firstmate learns an instruction
 did not land instead of leaving it unsubmitted.
 
+**Busy-queued Enter exception (tmux backend, opencode 1.18.4).** While opencode
+is mid-turn, Enter is accepted and queued for after the current turn but the
+composer keeps showing the typed text the whole time, so the cleared-composer
+check alone false-positives on a swallowed Enter for every steer sent to a
+busy opencode pane. The shared `fm_tmux_submit_enter_core` falls back to
+`fm_pane_is_busy` once the Enter-retry budget is spent: a busy pane means the
+Enter was accepted and queued (reported as `empty` so the caller does not
+re-send), while an idle pane keeps `pending` as a genuine swallow. The
+strict-buffer-clears-only-on-`empty` policy above still holds for the daemon
+and the lenient-`pending`-fails-for-`fm-send` policy still holds for steer
+verification - this exception is a busy-queue is treated as a delivered
+Enter, not a swallowed one. The herdr adapter observes the same opencode
+behavior but needs a separate fix; the gap is recorded in
+`docs/herdr-backend.md` rather than papered over here.
+
 ## Classification policy
 
 The daemon wraps `fm-watch.sh`, runs the watcher as a child, classifies each
@@ -135,20 +152,18 @@ The watcher's own standalone triage code is dormant whenever a daemon owns it; i
 
 Classify each wake this way:
 
-- `signal` whose status content has no captain-relevant verb
-  (`done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged`)
-  -> self-handle only when every affected non-paused crew is provably working.
+- `signal` with a terminal captain verb (`done:`, `needs-decision:`, `blocked:`, or `failed:`) -> escalate.
+  A nonterminal progress verb remains nonterminal even when its prose contains a legacy free-text token such as `PR ready`, `checks green`, `ready in branch`, or `merged`; only a bare legacy line with such a token escalates.
+  Other signals with no captain-relevant status -> self-handle only when every affected non-paused crew is provably working.
   A stopped, unresolvable, or otherwise not-provably-working crew escalates, while a declared `paused:` external wait is exempt from this guard and follows its own recheck cadence.
-  Captain-relevant verb -> escalate.
 - `signal` or `stale` for a declared `paused:` external wait -> self-handle and track the pause rather than a wedge.
   If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping sends one awaiting-external recheck and resets the pause window.
 - `check` -> always escalate. Check scripts print only when firstmate should wake.
-- `stale` with a terminal status -> escalate. Non-terminal stale is transient:
-  record a marker and self-handle. If the pane is still idle past
-  `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a
-  possible wedge. This bounds wedge-detection latency to the threshold plus a
-  tick: a delay, never a loss. Healthy crewmates are autonomous and do not wait
-  on firstmate mid-task.
+- `stale` with a terminal status or bare legacy captain-relevant line -> escalate.
+  Nonterminal progress remains transient even when its prose contains a legacy free-text token or its seen-status marker already matches, so record a marker and self-handle.
+  If the pane is still idle past `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a possible wedge.
+  This bounds wedge-detection latency to the threshold plus a tick: a delay, never a loss.
+  Healthy crewmates are autonomous and do not wait on firstmate mid-task.
   Each escalation resets the persistence window instead of removing it, so an unchanged wedge re-surfaces repeatedly.
   Its consecutive count reaches `FM_WEDGE_DEMAND_INSPECT_COUNT` (default 3) before adding `demand-deep-inspection`, and a resume, disappearance, or pause transition clears that count.
 - `heartbeat` -> self-handle. The daemon runs its own cheap bash fleet scan
@@ -156,12 +171,12 @@ Classify each wake this way:
   captain-relevant status line the per-wake classifier might miss.
 - Unknown reason, or any uncertainty -> escalate fail-safe.
 
-Escalations are buffered and flushed as one single-line digest prefixed with the sentinel
-marker, carrying pre-read status summaries and a recommended action.
+Escalations are buffered and flushed as one single-line digest prefixed with the current
+operational prefix, carrying pre-read status summaries and a recommended action.
 Away mode keeps one `FM_ESCALATE_BATCH_SECS` window (default 90s; 0 = immediate) regardless of item urgency.
 Present mode is two-tier: an urgent item (`check:` output, `failed:`, `needs-decision:`, `blocked:`, `done:`/PR-ready, or a wedge alarm) flushes immediately, while a routine-only buffer (a possible-wedge stale escalation, a declared-pause recheck, or a catch-all scan hit) waits out the shorter `FM_ESCALATE_BATCH_SECS_PRESENT` window (default 30s).
 The single-line format makes the submission unambiguous across harnesses, and
-the marker lets firstmate distinguish it from a real captain message.
+the operational prefix lets firstmate distinguish it from a real captain message.
 
 ## Injection hardening
 
@@ -197,13 +212,13 @@ the marker lets firstmate distinguish it from a real captain message.
   cleared.
   For herdr's normal idle-baseline path it means native agent-state observed a real turn start; herdr uses the ANSI-aware structural classifier for the pre-injection composer guard and fallback paths.
   This lets ghost-only or bordered-empty composers count as empty where a composer read is the active confirmation signal.
-- **Marker strip** - `strip_injection_marker` removes the sentinel prefix before
-  classification or relay, so the digest text firstmate sees is clean.
+- **Marker strip** - `strip_injection_marker` removes the current operational
+  prefix or legacy bare marker before classification or relay, so the digest
+  text firstmate sees is clean.
 - **Portable singleton lock** - the daemon uses the repo's portable lock helper
   (`fm-wake-lib.sh`) instead of `flock`, which is absent on macOS.
-- **Dedupe across signal/stale/scan** - `classify_signal` and `classify_stale`
-  both check the seen-status marker before escalating, so a status escalated by
-  one path is not re-escalated by another in the same digest.
+- **Dedupe across signal/stale/scan** - `classify_signal` and terminal `classify_stale` paths check the seen-status marker before escalating, so a captain-relevant status escalated by one path is not re-escalated by another in the same digest.
+  The marker does not clear or suppress possible-wedge aging for a nonterminal progress line.
 - **Auto-discovered supervisor pane** - the daemon resolves its own BACKEND
   (tmux vs herdr) and TARGET independently, mirroring
   `bin/fm-backend.sh`'s own runtime auto-detection. Backend: `FM_SUPERVISOR_BACKEND`

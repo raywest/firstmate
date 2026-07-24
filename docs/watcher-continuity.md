@@ -20,7 +20,8 @@ After the configured retry bound is exhausted, it delivers the original wake wit
 This is deliberate Option B ordering: the fleet is protected before the model handles the wake whenever restoration succeeds, but the model is never left blind when it does not.
 
 Unflipped Claude harness/backend combinations retain the native tracked background-task completion path.
-Its PreToolUse continuity gate allows wake drain, watcher arm recovery, and daemon launch recovery but refuses only other fleet commands while tasks are in flight and neither an identity-matched live watcher nor a live daemon holds the home lock.
+Its PreToolUse continuity gate allows wake drain, watcher arm recovery, daemon launch recovery, and independently fail-closed teardown, but refuses only other fleet commands while tasks are in flight and neither an identity-matched live watcher nor a live daemon holds the home lock.
+Allowing an ordinary literal teardown prevents a terminal wake from creating a recovery circle: forced or dynamically constructed teardown remains blocked, ordinary teardown itself still refuses dirty, unlanded, incomplete-scout, and unresolved-decision cases, and the turn-end guard continues to require supervision for any tasks left in flight.
 Codex retains its bounded foreground checkpoint protocol on backends other than tmux or herdr.
 Grok retains its tracked background-task notification protocol.
 No adapter starts a replacement with shell `&`.
@@ -52,7 +53,7 @@ Only the watcher process touches `state/.last-watcher-beat`; no helper process c
 
 ## Regression coverage
 
-`tests/fm-pi-watch-extension.test.sh` simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
+`tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops, then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination, and the already-queued-wake report (both the owned and attached shapes) alongside the still-covered genuinely-empty FAILED case.
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery fleet execution in the precise unhealthy state and preserves the existing Stop registration.
 
