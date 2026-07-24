@@ -75,6 +75,12 @@ Urgent items (always flush immediately regardless of style): `check:` output
 and wedge alarms.
 Routine items (subject to the style's batch window): a possible-wedge stale
 escalation, a declared-pause recheck, and catch-all scan hits.
+Terminal verbs remain captain-relevant, while a nonterminal progress verb
+cannot become terminal merely because its prose contains a legacy free-text
+token such as `merged`; bare legacy free-text lines remain compatible.
+In away mode, seen-status dedupe does not clear possible-wedge aging for
+nonterminal progress, so housekeeping still re-escalates an unchanged idle
+pane at the configured bound.
 
 `/afk` and its return path (`bin/fm-afk-return.sh`) only flip the style flag
 via `bin/fm-daemon-launch.sh afk-enter` / `afk-exit` - neither call ever

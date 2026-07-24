@@ -19,9 +19,9 @@ This policy is not a post-arm liveness guarantee.
 
 Claude also registers `bin/fm-continuity-pretool-check.sh` for Bash PreToolUse events.
 This is a separate, tightly bounded recovery gate rather than another watcher-shape policy.
-It runs only in a primary home, and it denies only an executed `bin/fm-*.sh` command other than `bin/fm-wake-drain.sh`, `bin/fm-watch-arm.sh`, or `bin/fm-daemon-launch.sh` when task metadata is in flight and no identity-matched live watcher holds that home's lock AND no live always-on triage daemon lock is held either (`daemon_lock_held_by_live_daemon` - fm-alwayson-triage-s5 phase 2, [`alwayson-triage.md`](alwayson-triage.md)).
-Ordinary shell commands, fleet-script names used as data, all commands in an idle fleet, child worktrees, wake drain, watcher arm, and daemon launch remain allowed.
-This Claude-only continuity gate varies its denial text by backend: on tmux or herdr it tells Claude to ensure the daemon with `bin/fm-daemon-launch.sh start`; otherwise it tells Claude to run `bin/fm-wake-drain.sh` and then re-arm through a tracked Claude background task before retrying the blocked fleet command.
+It runs only in a primary home, and it denies only an executed `bin/fm-*.sh` command other than `bin/fm-wake-drain.sh`, `bin/fm-watch-arm.sh`, `bin/fm-daemon-launch.sh`, or the ordinary literal `bin/fm-teardown.sh` when task metadata is in flight and no identity-matched live watcher holds that home's lock AND no live always-on triage daemon lock is held either (`daemon_lock_held_by_live_daemon` - fm-alwayson-triage-s5 phase 2, [`alwayson-triage.md`](alwayson-triage.md)).
+Ordinary shell commands, fleet-script names used as data, all commands in an idle fleet, child worktrees, wake drain, watcher arm, daemon launch, and ordinary literal teardown remain allowed.
+The denial gives Claude reason-specific recovery guidance per the contract in [`watcher-continuity.md`](watcher-continuity.md): a forced or shell-expanded teardown call is told to retry the literal invocation, while any other blocked command gets backend-aware guidance - on tmux or herdr, ensure the daemon with `bin/fm-daemon-launch.sh start`; otherwise, drain with `bin/fm-wake-drain.sh`, use fail-closed `bin/fm-teardown.sh` for completed tasks when needed, then re-arm through a tracked Claude background task before retrying the blocked fleet command.
 `bin/fm-continuity-command-policy.mjs` reuses this document's shell lexer and command-position analysis but owns the recovery-versus-other-fleet classification.
 Malformed transport or opaque dynamic syntax fails open so this narrow gate cannot become a blanket Bash block.
 The existing `bin/fm-turnend-guard.sh` Stop integration is unchanged and remains the final backstop; it gained the same daemon-liveness satisfier.
@@ -250,5 +250,5 @@ bash -n bin/fm-arm-pretool-check.sh
 shellcheck bin/fm-arm-pretool-check.sh tests/fm-arm-pretool-check.test.sh
 node --check bin/fm-arm-command-policy.mjs
 tests/fm-arm-pretool-check.test.sh
-for test_script in tests/*.test.sh; do bash "$test_script"; done
+bin/fm-test-run.sh --all
 ```

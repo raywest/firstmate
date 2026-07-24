@@ -2,10 +2,11 @@
 # Claude primary watcher-continuity PreToolUse gate.
 #
 # This hook is deliberately narrow. It denies only an executed bin/fm-*.sh fleet
-# command other than bin/fm-wake-drain.sh or bin/fm-watch-arm.sh, and only when
-# the active primary home has task metadata in flight but no identity-matched
-# live watcher holds the home lock. Ordinary shell commands, recovery commands,
-# healthy supervision, fleet-idle homes, and child worktrees are always allowed.
+# command other than bin/fm-wake-drain.sh, bin/fm-watch-arm.sh, or the
+# independently fail-closed bin/fm-teardown.sh, and only when the active primary
+# home has task metadata in flight but no identity-matched live watcher holds the
+# home lock. Ordinary shell commands, recovery commands, healthy supervision,
+# fleet-idle homes, and child worktrees are always allowed.
 #
 # The existing turn-end guard remains the unchanged final backstop. This gate
 # closes the long-turn gap before another fleet mutation, but does not replace or
@@ -98,8 +99,11 @@ case "$CLASSIFICATION" in
 esac
 
 TAB=$(printf '\t')
-BLOCKED_SCRIPT=${CLASSIFICATION#*"$TAB"}
-[ -n "$BLOCKED_SCRIPT" ] && [ "$BLOCKED_SCRIPT" != "$CLASSIFICATION" ] || exit 0
+REST=${CLASSIFICATION#*"$TAB"}
+[ -n "$REST" ] && [ "$REST" != "$CLASSIFICATION" ] || exit 0
+BLOCKED_SCRIPT=${REST%%"$TAB"*}
+REASON_CODE=${REST#*"$TAB"}
+[ "$REASON_CODE" != "$REST" ] || REASON_CODE=""
 # This Claude-only continuity hook tells Claude to ensure the daemon on tmux or
 # herdr, where the daemon already owns the watcher permanently
 # (fm-alwayson-triage-s5 phase 2).
@@ -108,14 +112,18 @@ BLOCKED_SCRIPT=${CLASSIFICATION#*"$TAB"}
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 FM_BACKEND="${FM_SUPERVISOR_BACKEND:-$(fm_backend_detect 2>/dev/null || printf '')}"
-case "$FM_BACKEND" in
-  tmux|herdr)
-    REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; ensure the daemon with bin/fm-daemon-launch.sh start before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
-    ;;
-  *)
-    REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; run bin/fm-wake-drain.sh, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
-    ;;
-esac
+if [ "$REASON_CODE" = "unsafe-teardown" ]; then
+  REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; during recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: $BLOCKED_SCRIPT)"
+else
+  case "$FM_BACKEND" in
+    tmux|herdr)
+      REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; ensure the daemon with bin/fm-daemon-launch.sh start before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+      ;;
+    *)
+      REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+      ;;
+  esac
+fi
 ESCAPED=$(printf '%s' "$REASON" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
 printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}\n' "$ESCAPED" >&2
 exit 2
