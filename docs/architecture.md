@@ -234,7 +234,7 @@ Wake-time refreshes can target a single clone by project name, so the primary ho
 Clean default-branch clones fast-forward to `origin/<default>`, and a clean detached HEAD that holds no unique commits is re-attached to the default branch before the same fast-forward path runs.
 Dirty clones, non-default branches, detached HEADs with unique commits, diverged defaults, and default branches checked out in another worktree are reported as `STUCK:` with their behind count and left untouched.
 Fetches blocked by an orphaned `.git/packed-refs.lock` use bounded retries and remove the lock only when the shared staleness proof can prove it abandoned; [configuration.md](configuration.md#toolchain) owns the recovery details and tuning knobs.
-Local-only projects, clones without an origin remote, and fetch failures remain benign skips.
+Local-only clones with an origin use the same guarded fetch-and-fast-forward path; only a local-only clone without an origin remains a benign local-only skip, while other originless clones and fetch failures retain their existing skips.
 The refresh also prunes local branches whose remote is gone and that no worktree still needs.
 
 ## Self-updates stay safe
