@@ -95,6 +95,11 @@
 #   default-branch commit when safe; skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
 #   git worktree root distinct from the primary project checkout.
+#   For non-Orca ship/scout spawns, FM_SPAWN_WORKTREE_POLL_ATTEMPTS controls the
+#   one-second worktree-discovery poll and defaults to 900. A candidate is accepted
+#   only after two consecutive reads resolve to the same isolated git worktree root
+#   distinct from the primary; timeout reports that no valid isolated worktree was
+#   observed. Lower this only for controlled tests that intentionally bound a failure.
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
