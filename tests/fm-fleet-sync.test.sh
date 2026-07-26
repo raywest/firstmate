@@ -223,6 +223,18 @@ SH
   chmod +x "$1/git"
 }
 
+git_fetch_exit_124() {
+  cat > "$1/git" <<'SH'
+#!/usr/bin/env bash
+real=${REAL_GIT_FOR_TEST:?}
+is_fetch=0
+for a in "$@"; do [ "$a" = fetch ] && is_fetch=1; done
+[ "$is_fetch" = 1 ] && exit 124
+exec "$real" "$@"
+SH
+  chmod +x "$1/git"
+}
+
 # run_sync_guarded <home> <fakebin> <outfile> <errfile> [args...]: run fleet-sync
 # with the fakebin on PATH and stdout/stderr captured separately. Per-test knobs
 # (FM_FLEET_SYNC_PACKED_REFS_LOCK_*, GIT_FETCH_COUNTER) are read from the caller's
@@ -492,6 +504,48 @@ test_local_only_fetch_timeout_reports_drift_and_continues() {
   pass "a local-only fetch exceeding its bound reports drift and the sweep continues"
 }
 
+test_fetch_exit_124_is_not_mistaken_for_timeout() {
+  local home fakebin clone out err before
+  home=$(new_home)
+  fakebin="$home/fb-fetch124"; rm -rf "$fakebin"; mkdir -p "$fakebin"
+  clone=$(build_pair "$home" fetch124)
+  advance_origin "$home" fetch124 C1
+  git_fetch_exit_124 "$fakebin"
+  before=$(head_sha "$clone")
+  out="$home/out-fetch124"; err="$home/err-fetch124"
+
+  run_sync_guarded "$home" "$fakebin" "$out" "$err" fetch124
+
+  assert_contains "$(cat "$out")" "fetch124: skipped: fetch failed" \
+    "an unbounded fetch exit 124 remains a normal fetch failure"
+  assert_not_contains "$(cat "$out")" "fetch exceeded 0s bound" \
+    "an unbounded fetch exit 124 is never reported as a timeout"
+  [ "$(head_sha "$clone")" = "$before" ] || fail "clone was advanced after fetch exit 124"
+  pass "an unbounded fetch exit 124 is not mistaken for a timeout"
+}
+
+test_bounded_fetch_exit_124_is_not_mistaken_for_timeout() {
+  local home fakebin clone out err before
+  home=$(new_home)
+  fakebin="$home/fb-local-fetch124"; rm -rf "$fakebin"; mkdir -p "$fakebin"
+  clone=$(build_pair "$home" local-fetch124)
+  advance_origin "$home" local-fetch124 C1
+  mark_local_only "$home" local-fetch124
+  git_fetch_exit_124 "$fakebin"
+  before=$(head_sha "$clone")
+  out="$home/out-local-fetch124"; err="$home/err-local-fetch124"
+
+  FM_FLEET_LOCAL_ONLY_FETCH_TIMEOUT_SECS=1 \
+    run_sync_guarded "$home" "$fakebin" "$out" "$err" local-fetch124
+
+  assert_contains "$(cat "$out")" "local-fetch124: skipped: fetch failed" \
+    "a bounded fetch exit 124 remains a normal fetch failure"
+  assert_not_contains "$(cat "$out")" "fetch exceeded 1s bound" \
+    "a bounded fetch exit 124 is never reported as a timeout"
+  [ "$(head_sha "$clone")" = "$before" ] || fail "local-only clone was advanced after fetch exit 124"
+  pass "a bounded fetch exit 124 is not mistaken for a timeout"
+}
+
 test_single_project_by_bare_name_resolves() {
   local home out
   home=$(new_home)
@@ -748,6 +802,8 @@ test_local_only_with_origin_fast_forwards
 test_local_only_dirty_clone_reported_and_untouched
 test_local_only_diverged_clone_reported_and_untouched
 test_local_only_fetch_timeout_reports_drift_and_continues
+test_fetch_exit_124_is_not_mistaken_for_timeout
+test_bounded_fetch_exit_124_is_not_mistaken_for_timeout
 test_single_project_by_bare_name_resolves
 test_single_project_by_bare_name_ignores_cwd_shadow
 test_single_project_by_projects_relative_name_resolves

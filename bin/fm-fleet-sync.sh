@@ -177,6 +177,7 @@ packed_refs_lock_path() {
 # that is the accepted cost of a real bound.
 do_fetch() {
   local timeout_secs=${1:-0} outfile pid waited rc
+  FETCH_TIMED_OUT=no
   if [ "$timeout_secs" -le 0 ]; then
     FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1)
     return $?
@@ -190,6 +191,7 @@ do_fetch() {
       kill "$pid" 2>/dev/null
       FETCH_OUTPUT=$(cat "$outfile" 2>/dev/null)
       rm -f "$outfile"
+      FETCH_TIMED_OUT=yes
       return 124
     fi
     sleep 1
@@ -219,7 +221,7 @@ fetch_with_packed_refs_lock_guard() {
   local rc attempt=0 lock lock_desc timeout_secs=${1:-0}
   do_fetch "$timeout_secs"; rc=$?
   [ "$rc" -eq 0 ] && return 0
-  [ "$rc" -eq 124 ] && return "$rc"
+  [ "$FETCH_TIMED_OUT" = yes ] && return "$rc"
   is_packed_refs_lock_error "$FETCH_OUTPUT" || return "$rc"
 
   lock=$(packed_refs_lock_path) || lock=""
@@ -236,7 +238,7 @@ fetch_with_packed_refs_lock_guard() {
       echo "$label: recovered: packed-refs lock cleared on its own during retry"
       return 0
     fi
-    [ "$rc" -eq 124 ] && return "$rc"
+    [ "$FETCH_TIMED_OUT" = yes ] && return "$rc"
     is_packed_refs_lock_error "$FETCH_OUTPUT" || return "$rc"
   done
 
@@ -386,7 +388,7 @@ sync_project() {
     :
   else
     fetch_rc=$?
-    if [ "$fetch_rc" -eq 124 ]; then
+    if [ "$FETCH_TIMED_OUT" = yes ]; then
       echo "$label: skipped: fetch exceeded ${fetch_timeout}s bound - clone may be behind its origin and could not be refreshed in time"
     else
       reason="fetch failed"
