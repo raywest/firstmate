@@ -387,7 +387,6 @@ sync_project() {
   if fetch_with_packed_refs_lock_guard "$fetch_timeout"; then
     :
   else
-    fetch_rc=$?
     if [ "$FETCH_TIMED_OUT" = yes ]; then
       echo "$label: skipped: fetch exceeded ${fetch_timeout}s bound - clone may be behind its origin and could not be refreshed in time"
     else
