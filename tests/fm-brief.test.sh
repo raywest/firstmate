@@ -136,6 +136,30 @@ test_ship_project_memory_wording() {
   pass "fm-brief.sh: ship project-memory wording carries the AGENTS.md authoring bar"
 }
 
+SCOPE_RULE='Deliver what was asked, at the scope intended.'
+LENGTH_CALIBRATION="Match the report's length to what the task needs"
+
+test_scope_rule_and_report_length_calibration() {
+  local home id brief
+  home="$TMP_ROOT/scope-length-home"
+  write_registry "$home"
+
+  id="brief-scope-scout-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "$SCOPE_RULE" "$brief" "scout brief missing the scope discipline rule"
+  assert_grep "$LENGTH_CALIBRATION" "$brief" "scout brief missing the report length calibration"
+
+  for id_proj in "brief-scope-nomistakes-e2:no-registry-proj" "brief-scope-directpr-e3:direct-proj" "brief-scope-localonly-e4:local-proj"; do
+    id=${id_proj%%:*}
+    proj=${id_proj##*:}
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" "$proj" >/dev/null 2>&1
+    brief="$home/data/$id/brief.md"
+    assert_grep "$SCOPE_RULE" "$brief" "$id: ship brief missing the scope discipline rule"
+  done
+  pass "fm-brief.sh: scope discipline rule and report length calibration render where expected"
+}
+
 test_herdr_lab_contract_is_explicit_and_complete() {
   local home id brief
   home="$TMP_ROOT/herdr-lab-home"
@@ -388,6 +412,7 @@ test_ship_modes_generate_clean_briefs
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_ship_project_memory_wording
+test_scope_rule_and_report_length_calibration
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout
