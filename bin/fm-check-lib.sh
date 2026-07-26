@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Trust model for a task's registered custom watcher check (state/<id>.check.sh).
+# fm-check-register.sh binds a check to its current bytes as state/<id>.check-trust
+# (fm-custom-check-v1: version + sha256 hash, 0600, single hard link). The watcher
+# only executes a check whose current sha256 matches the bound hash; any other
+# state/<id>.check.sh is rejected without execution, never run unregistered or on
+# a stale/mismatched hash.
 
 FM_CUSTOM_CHECK_HASH=
 FM_CUSTOM_CHECK_SNAPSHOT=

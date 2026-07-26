@@ -63,17 +63,17 @@ README.md            public overview and development notes
 skills/              standalone public installer-facing skills, committed; not loaded by firstmate
 bin/                 helper scripts, committed; read each script's header before first use
 .env                 optional X-mode pairing token; LOCAL, gitignored; presence-gates section 14
-config/crew-harness  crewmate harness override; LOCAL, gitignored; absent or "default" = same as firstmate. Inherited as the literal file: a concrete primary adapter value also controls a secondmate home's own crewmates (section 4)
-config/crew-dispatch.json  optional crewmate dispatch profiles; LOCAL, gitignored; firstmate-maintained but human-editable natural-language rules that choose a per-task launch profile (docs/configuration.md "Crew dispatch profiles"). Inherited by secondmate homes
-config/secondmate-harness  harness the PRIMARY uses to launch SECONDMATE agents, with optional launch-profile settings (docs/configuration.md "Harness support"); LOCAL, gitignored; absent or "default" harness falls back to config/crew-harness then firstmate's own. The primary's own setting; NOT inherited into secondmate homes (secondmates do not spawn secondmates)
-config/backlog-backend  backlog backend override; LOCAL, gitignored; absent or "tasks-axi" = default tasks-axi backend, "manual" = force routine backlog updates to hand-editing; inherited by secondmate homes (section 10)
-config/backend  runtime session-provider backend override for new tasks; LOCAL, gitignored; absent = falls through to runtime auto-detection (the runtime firstmate itself is executing inside), then tmux; tmux is the verified reference backend (docs/tmux-backend.md), while herdr, zellij, orca, and cmux are experimental spawn backends (docs/herdr-backend.md, docs/zellij-backend.md, docs/orca-backend.md, docs/cmux-backend.md) - herdr and cmux can also be selected by runtime auto-detection, zellij and orca never are (always explicit), and codex-app is not accepted; see docs/codex-app-backend.md; not inherited into secondmate homes
-config/calm     Pi Calm presentation preference; LOCAL, gitignored, and not inherited; see docs/configuration.md "Pi Calm preference"
-config/herdr-presentation-spaces  optional presence flag for Herdr's default-off disposable single-task visual projection; LOCAL, gitignored; inherited by secondmate homes; see docs/herdr-backend.md "Optional disposable single-task presentation spaces"
-config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
-config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
-config/x-mode.env    generated X-mode watcher cadence; LOCAL, gitignored; source before arming watcher when present
-config/daemon.env    optional durable daemon runtime env var tuning (e.g. FM_PAUSE_RESURFACE_SECS); LOCAL, gitignored; sourced by the daemon launcher before config/x-mode.env, so X-mode cadence still wins on overlap; see docs/configuration.md "Daemon local tuning"
+config/crew-harness  crewmate/scout harness override; LOCAL, gitignored; a concrete value is also inherited into a secondmate home's own crewmates (docs/configuration.md "Harness support")
+config/crew-dispatch.json  optional crewmate dispatch profiles; LOCAL, gitignored; inherited by secondmate homes (docs/configuration.md "Crew dispatch profiles")
+config/secondmate-harness  harness the PRIMARY uses to launch SECONDMATE agents; LOCAL, gitignored; the primary's own setting, NOT inherited into secondmate homes (docs/configuration.md "Harness support")
+config/backlog-backend  backlog backend override; LOCAL, gitignored; inherited by secondmate homes (section 10; docs/configuration.md "Backlog backend")
+config/backend  runtime session-provider backend override for new tasks; LOCAL, gitignored; not inherited into secondmate homes (docs/configuration.md "Runtime backend")
+config/calm     Pi Calm presentation preference; LOCAL, gitignored, and not inherited (docs/configuration.md "Pi Calm preference")
+config/herdr-presentation-spaces  optional presence flag for Herdr's default-off disposable single-task visual projection; LOCAL, gitignored; inherited by secondmate homes (docs/herdr-backend.md "Optional disposable single-task presentation spaces")
+config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored (docs/cmux-backend.md "Setup")
+config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored (docs/wedge-alarm.md)
+config/x-mode.env    generated X-mode watcher cadence; LOCAL, gitignored (docs/configuration.md "X mode")
+config/daemon.env    optional durable daemon runtime env var tuning; LOCAL, gitignored (docs/configuration.md "Daemon local tuning")
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update
@@ -86,32 +86,32 @@ data/                personal fleet records; LOCAL, gitignored as a whole
 projects/            cloned repos; gitignored; READ-ONLY for you
 state/               volatile runtime signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
-  <id>.turn-ended    touched by turn-end hooks
-  <id>.grok-turnend-token   firstmate-owned grok hook registry token for the task; removed by teardown
-  <id>.kimi-turnend-token   firstmate-owned kimi hook registry token for the task; removed by teardown
-  <id>.meta          written by fm-spawn, which owns its task-meta base fields and mutation mechanics; kind=secondmate also records home= and projects=; a non-default runtime backend records further backend-specific fields (docs/configuration.md "Runtime backend"; bin/fm-backend.sh, section 8); fm-pr-check, including through fm-pr-merge, records one canonical pr= and the forge's pr_head= when available (GitHub pull requests and GitLab merge requests; docs/gitlab-merge-watch.md); fm-x-link appends x_request=, x_request_ts=, x_followups=, and optional x_platform=/x_reply_max_chars= for an X-mode-originated task (section 14)
-  <id>.herdr-presentation  quarantinable attempt journal for Herdr's optional visual projection; never task or endpoint authority; see docs/herdr-backend.md "Optional disposable single-task presentation spaces"
-  <id>.check.sh      authenticated slow poll; the watcher dispatches validated PR data and the byte-identified X shim through trusted repository scripts, runs registered custom checks from hash-validated private snapshots, and rejects every other state check without execution
+  <id>.turn-ended    touched by turn-end hooks (docs/turnend-guard.md)
+  <id>.grok-turnend-token   grok hook registry token; removed by teardown
+  <id>.kimi-turnend-token   kimi hook registry token; removed by teardown
+  <id>.meta          task metadata written by fm-spawn; base fields and mutation mechanics owned by bin/fm-spawn.sh, backend-specific fields by docs/configuration.md "Runtime backend", pr=/pr_head= by docs/gitlab-merge-watch.md, and X-mode fields by section 14
+  <id>.herdr-presentation  quarantinable attempt journal for Herdr's optional visual projection; never task or endpoint authority (docs/herdr-backend.md "Optional disposable single-task presentation spaces")
+  <id>.check.sh      authenticated slow poll; trust model and rejection of unregistered checks owned by bin/fm-check-lib.sh
   <id>.check-trust   private content binding created by fm-check-register.sh for an intentional custom check
   <id>.pr-poll       private validated data sidecar for the byte-static PR merge poll
-  <id>.pr-poll-registration  private transactional provenance record binding the task, canonical metadata identity, sidecar, and static poll publication
-  <id>.pr-poll-retirement  private identity-bound crash-recovery receipt for one exact validated merged result; removed after its poll artifacts retire
-  .pr-check-quarantine/  private non-runnable storage for checks neutralized by the non-executing migration
-  .pr-check-migration.log  private per-task outcomes distinguishing rebuilt or canonically registered replacement polls, quarantined unarmed polls, and incomplete migrations
-  .pr-check-migration-scan-v1  private marker proving the non-executing scan disabled every unsafe legacy check; .pr-check-migration-v1 separately records completed private repairs
+  <id>.pr-poll-registration  private transactional provenance record for one PR poll (docs/gitlab-merge-watch.md)
+  <id>.pr-poll-retirement  private crash-recovery receipt for one merged result, removed after retirement (docs/gitlab-merge-watch.md)
+  .pr-check-quarantine/  private storage for checks neutralized by the non-executing migration
+  .pr-check-migration.log  private per-task migration outcomes (bin/fm-pr-check-migrate.sh)
+  .pr-check-migration-scan-v1  private marker proving the migration scan ran; .pr-check-migration-v1 separately records completed repairs
   x-watch.check.sh   generated X-mode relay poll shim; present only when opted in (section 14)
-  pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
+  pending-replies/   parent-owned secondmate pending-reply records (bin/fm-pending-reply-lib.sh)
   x-inbox/           generated X-mode pending mention payloads; fmx-respond drains it (section 14)
-  x-context/         generated X-mode durable per-request reply context and one-wake offer markers, keyed by request_id; survives inbox cleanup and expires within seven days (section 14; bin/fm-x-lib.sh)
-  x-outbox/          generated X-mode dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
+  x-context/         generated X-mode durable per-request reply context, keyed by request_id (section 14; bin/fm-x-lib.sh)
+  x-outbox/          generated X-mode dry-run reply and dismiss previews (fmx-respond skill)
   x-poll.error x-poll.claim-error  generated X-mode relay and offer-claim diagnostic dedupe markers
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
-  .afk               durable away-mode delivery-style flag; present = patient batching and active wedge alerts, absent = present-mode cadence (set by /afk, cleared on user return)
+  .afk               durable away-mode delivery-style flag (set by /afk; docs/alwayson-triage.md "Mode model: one daemon, two delivery styles")
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
   .hash-* .count-* .stale-* .stale-since-* .paused-* .wedge-escalations-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
-  .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it
-  .subsuper-* .supervise-daemon.*   sub-supervisor internals; never touch
+  .last-watcher-beat watcher liveness beacon, touched every poll; guard scripts READ it, distinct from the never-touch group above
+  .subsuper-* .supervise-daemon.*   sub-supervisor internals; never touch (docs/alwayson-triage.md)
 .no-mistakes/        local validation state and evidence; gitignored
 ```
 
@@ -134,11 +134,8 @@ If the session lock is refused, tell the captain another active session is manag
 A lock-refused session must not spawn, steer, merge, drain the wake queue, repair supervision, repair a checkout, or perform any other fleet mutation.
 
 1. **Lock** - acquires the per-home session lock first, before anything mutates shared state.
-2. **Bootstrap** - detect-only checks (tool/version problems, GitHub auth, the worktree-tangle check, harness override, dispatch-profile validation, backlog-backend status) always run, but routine confirmations stay silent by default.
-   When the lock could not be acquired, the worktree-tangle check uses read-only advisory wording without a checkout repair command.
-   The six MUTATING sweeps - non-executing legacy PR-check migration, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, the always-on daemon liveness sweep, and X-mode artifact writes - run only when this session actually holds the lock from step 1.
-   The secondmate liveness sweep deterministically guarantees every registered secondmate is actually running: it probes each live secondmate's endpoint for a real agent process (not just pane presence), respawns only on a confident dead reading, and reports only skipped or failed guarantees as `SECONDMATE_LIVENESS:` lines (`bin/fm-bootstrap.sh`; `bin/fm-backend.sh`'s `fm_backend_agent_alive`).
-   The always-on daemon liveness sweep (docs/alwayson-triage.md) guarantees the triage daemon is running on a supported claude or codex primary, on tmux or herdr: it launches `bin/fm-daemon-launch.sh start` when dead, restarts the daemon when the captain's pane has moved (retarget), and takes over a harness-armed watcher still holding the singleton from before the daemon existed - all home-scoped, never touching another home's state.
+2. **Bootstrap** - detect-only checks (tool/version problems, GitHub auth, the worktree-tangle check, harness override, dispatch-profile validation, backlog-backend status) always run, but routine confirmations stay silent by default; the six MUTATING sweeps (non-executing legacy PR-check migration, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, the always-on daemon liveness sweep, and X-mode artifact writes) run only when this session actually holds the lock from step 1.
+   `bin/fm-bootstrap.sh`'s header is the single owner of exactly what each detect check and mutating sweep does, every printed diagnostic line, and lock-refused read-only behavior, including the worktree-tangle check's advisory-only wording with no checkout command.
 3. **Wake queue** - when locked, drains the durable wake queue and prints the raw records prominently as this turn's first work queue; a bounded, clearly labeled historical status-event annotation may follow a valid `signal` record but never replaces it or current-state reconciliation, and a lapsed watcher chain still surfaces here via the same guard alarm.
    When the lock could not be acquired, the queue is left untouched because another session owns it, and the guard's tangle/watcher-liveness alarms still print in read-only advisory mode without drain, supervision repair, or checkout repair commands.
 4. **Context digest** - the full contents of `data/projects.md`, `data/secondmates.md`, `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md`, each clearly delimited.
