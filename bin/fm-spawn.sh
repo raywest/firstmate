@@ -124,6 +124,11 @@
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> window=<backend-target> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
+# Task metadata base contract: write_task_meta replaces window=, worktree=,
+# project=, harness=, kind=, mode=, yolo=, tasktmp=, model=, effort=, and
+# harness_profile=; Kimi adds kimi_home=, and secondmate adds home= and
+# projects=. docs/configuration.md "Runtime backend" owns backend fields,
+# while fm-pr-check.sh and fm-x-link.sh own their respective appended fields.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

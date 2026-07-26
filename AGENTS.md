@@ -86,19 +86,19 @@ data/                personal fleet records; LOCAL, gitignored as a whole
 projects/            cloned repos; gitignored; READ-ONLY for you
 state/               volatile runtime signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
-  <id>.turn-ended    touched by turn-end hooks (docs/turnend-guard.md)
-  <id>.grok-turnend-token   grok hook registry token; removed by teardown
-  <id>.kimi-turnend-token   kimi hook registry token; removed by teardown
-  <id>.meta          task metadata written by fm-spawn; base fields and mutation mechanics owned by bin/fm-spawn.sh, backend-specific fields by docs/configuration.md "Runtime backend", pr=/pr_head= by docs/gitlab-merge-watch.md, and X-mode fields by section 14
+  <id>.turn-ended    touched by turn-end hooks (bin/fm-spawn.sh; docs/turnend-guard.md)
+  <id>.grok-turnend-token   grok hook registry token; removed by teardown (bin/fm-spawn.sh; bin/fm-teardown.sh)
+  <id>.kimi-turnend-token   kimi hook registry token; removed by teardown (bin/fm-spawn.sh; bin/fm-teardown.sh)
+  <id>.meta          task metadata written by fm-spawn; base fields and mutation mechanics owned by bin/fm-spawn.sh, backend-specific fields by docs/configuration.md "Runtime backend", pr=/pr_head= by bin/fm-pr-check.sh, and X-mode fields by section 14
   <id>.herdr-presentation  quarantinable attempt journal for Herdr's optional visual projection; never task or endpoint authority (docs/herdr-backend.md "Optional disposable single-task presentation spaces")
   <id>.check.sh      authenticated slow poll; trust model and rejection of unregistered checks owned by bin/fm-check-lib.sh
   <id>.check-trust   private content binding created by fm-check-register.sh for an intentional custom check
   <id>.pr-poll       private validated data sidecar for the byte-static PR merge poll
   <id>.pr-poll-registration  private transactional provenance record for one PR poll (docs/gitlab-merge-watch.md)
   <id>.pr-poll-retirement  private crash-recovery receipt for one merged result, removed after retirement (docs/gitlab-merge-watch.md)
-  .pr-check-quarantine/  private storage for checks neutralized by the non-executing migration
+  .pr-check-quarantine/  private storage for checks neutralized by the non-executing migration (bin/fm-pr-check-migrate.sh)
   .pr-check-migration.log  private per-task migration outcomes (bin/fm-pr-check-migrate.sh)
-  .pr-check-migration-scan-v1  private marker proving the migration scan ran; .pr-check-migration-v1 separately records completed repairs
+  .pr-check-migration-scan-v1  private marker proving the migration scan ran; .pr-check-migration-v1 separately records completed repairs (bin/fm-pr-check-migrate.sh)
   x-watch.check.sh   generated X-mode relay poll shim; present only when opted in (section 14)
   pending-replies/   parent-owned secondmate pending-reply records (bin/fm-pending-reply-lib.sh)
   x-inbox/           generated X-mode pending mention payloads; fmx-respond drains it (section 14)
@@ -109,8 +109,8 @@ state/               volatile runtime signals; gitignored
   .afk               durable away-mode delivery-style flag (set by /afk; docs/alwayson-triage.md "Mode model: one daemon, two delivery styles")
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
   .hash-* .count-* .stale-* .stale-since-* .paused-* .wedge-escalations-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch
-  .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
-  .last-watcher-beat watcher liveness beacon, touched every poll; guard scripts READ it, distinct from the never-touch group above
+  .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete (docs/watcher-continuity.md)
+  .last-watcher-beat watcher liveness beacon, touched every poll; guard scripts READ it, distinct from the never-touch group above (bin/fm-guard.sh; docs/watcher-continuity.md)
   .subsuper-* .supervise-daemon.*   sub-supervisor internals; never touch (docs/alwayson-triage.md)
 .no-mistakes/        local validation state and evidence; gitignored
 ```

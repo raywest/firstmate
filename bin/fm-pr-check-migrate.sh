@@ -6,6 +6,9 @@
 # registered custom checks remain armed, and every other task poll is
 # quarantined for private review. A current X-mode shim is preserved by exact
 # content, while the recognized older byte-static shim is refreshed in place.
+# state/.pr-check-quarantine/ holds the private unarmed artifacts; the log
+# records per-task outcomes; the scan marker is published only after that
+# non-executing scan is safe; and the migration marker records completed repairs.
 # Usage: fm-pr-check-migrate.sh [--checks-safe]
 set -u
 
