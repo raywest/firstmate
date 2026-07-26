@@ -9,8 +9,18 @@
 #   - every other off-default state is left untouched and reported as a loud,
 #     quantified "STUCK: ... N commits behind ... - needs attention" warning
 #     instead of a quiet skip.
-# The pre-existing fast-forward / already-current / local-only / no-origin paths
-# must be unchanged, and bootstrap must relay the new outcomes as FLEET_SYNC lines.
+# The pre-existing fast-forward / already-current / no-origin paths must be
+# unchanged, and bootstrap must relay the new outcomes as FLEET_SYNC lines.
+#
+# It also pins the local-only-with-origin refresh: local-only only means
+# firstmate must not push/PR/merge for that project, not that its clone is
+# unworthy of a read-only refresh. A local-only project with no origin still
+# gets the old benign skip; one WITH an origin gets the same guarded
+# fetch-and-fast-forward every other mode gets (still never a push/PR/merge),
+# a dirty or diverged local-only clone is left untouched and reported exactly
+# like any other mode's, and a local-only fetch that exceeds
+# FM_FLEET_LOCAL_ONLY_FETCH_TIMEOUT_SECS is killed and reported as a drift
+# line instead of hanging the sweep or failing it.
 #
 # It also pins the orphaned .git/packed-refs.lock recovery in the fetch step
 # (fetch_with_packed_refs_lock_guard, backed by bin/fm-lock-lib.sh's shared
@@ -89,6 +99,14 @@ advance_origin() {
 }
 
 head_sha() { git -C "$1" rev-parse HEAD; }
+
+# mark_local_only <home> <name>: register <name> as local-only in the home's
+# project registry, appending so multiple projects in one home can each be marked.
+mark_local_only() {
+  local home=$1 name=$2
+  mkdir -p "$home/data"
+  printf -- '- %s [local-only] - test project (added 2026-06-27)\n' "$name" >> "$home/data/projects.md"
+}
 
 # run_sync <home> [args...]: run fleet-sync against an isolated home, stdout only.
 run_sync() {
@@ -182,6 +200,23 @@ if [ "$is_fetch" = 1 ]; then
     rm -f "$lock"
     exit 1
   fi
+fi
+exec "$real" "$@"
+SH
+  chmod +x "$1/git"
+}
+
+# git shim: sleep for FLEET_TEST_SLOW_FETCH_SECS before delegating a `fetch` call
+# to the real git, simulating a slow/hanging origin (e.g. the SMB-mounted case the
+# local-only fetch timeout exists for). Every other git subcommand is unaffected.
+git_slow_fetch() {
+  cat > "$1/git" <<'SH'
+#!/usr/bin/env bash
+real=${REAL_GIT_FOR_TEST:?}
+is_fetch=0
+for a in "$@"; do [ "$a" = fetch ] && is_fetch=1; done
+if [ "$is_fetch" = 1 ]; then
+  sleep "${FLEET_TEST_SLOW_FETCH_SECS:?}"
 fi
 exec "$real" "$@"
 SH
@@ -362,19 +397,99 @@ test_no_origin_skipped() {
   pass "no-origin clone is skipped (benign), not flagged STUCK"
 }
 
-test_local_only_skipped() {
+test_local_only_no_origin_still_skipped() {
   local home clone out
   home=$(new_home)
-  clone=$(build_pair "$home" iota)
-  advance_origin "$home" iota C1
-  mkdir -p "$home/data"
-  printf -- '- iota [local-only] - test project (added 2026-06-27)\n' > "$home/data/projects.md"
+  clone="$home/projects/iota"
+  git init -q "$clone"
+  git -C "$clone" symbolic-ref HEAD refs/heads/main
+  commit_file "$clone" file.txt v0 C0
+  mark_local_only "$home" iota
 
   out=$(run_sync "$home" "$clone")
 
-  assert_contains "$out" "iota: skipped: local-only project" "local-only clone is skipped as before"
-  assert_not_contains "$out" "STUCK" "local-only skip is not escalated to STUCK"
-  pass "local-only clone is skipped (benign), not flagged STUCK"
+  assert_contains "$out" "iota: skipped: local-only project" \
+    "local-only clone with no origin is still skipped benignly with the exact original wording"
+  assert_not_contains "$out" "STUCK" "local-only no-origin skip is not escalated to STUCK"
+  pass "local-only clone with no origin keeps the benign skip"
+}
+
+test_local_only_with_origin_fast_forwards() {
+  local home clone out
+  home=$(new_home)
+  clone=$(build_pair "$home" iota-origin)
+  advance_origin "$home" iota-origin C1
+  mark_local_only "$home" iota-origin
+
+  out=$(run_sync "$home" "$clone")
+
+  assert_contains "$out" "iota-origin: synced" \
+    "local-only clone WITH an origin is refreshed like any other mode"
+  assert_not_contains "$out" "skipped: local-only" \
+    "local-only-with-origin is no longer silently skipped"
+  [ "$(head_sha "$clone")" = "$(git -C "$clone" rev-parse origin/main)" ] \
+    || fail "local-only clone was not fast-forwarded to origin/main"
+  pass "local-only clone with an origin fast-forwards its default branch"
+}
+
+test_local_only_dirty_clone_reported_and_untouched() {
+  local home clone out before
+  home=$(new_home)
+  clone=$(build_pair "$home" iota-dirty)
+  advance_origin "$home" iota-dirty C1
+  mark_local_only "$home" iota-dirty
+  before=$(head_sha "$clone")
+  printf 'uncommitted edit\n' >> "$clone/file.txt"
+
+  out=$(run_sync "$home" "$clone")
+
+  assert_contains "$out" "iota-dirty: STUCK:" "dirty local-only clone reports STUCK, not a quiet skip"
+  assert_contains "$out" "uncommitted changes" "STUCK names the dirty state for local-only too"
+  [ "$(head_sha "$clone")" = "$before" ] || fail "dirty local-only clone HEAD was moved"
+  grep -q "uncommitted edit" "$clone/file.txt" || fail "dirty local-only working-tree change was discarded"
+  pass "a dirty local-only clone is reported and left untouched, never merged/reset/forced"
+}
+
+test_local_only_diverged_clone_reported_and_untouched() {
+  local home clone out before
+  home=$(new_home)
+  clone=$(build_pair "$home" iota-diverged)
+  commit_file "$clone" local.txt local "local divergent commit"
+  before=$(head_sha "$clone")
+  advance_origin "$home" iota-diverged C1
+  mark_local_only "$home" iota-diverged
+
+  out=$(run_sync "$home" "$clone")
+
+  assert_contains "$out" "iota-diverged: STUCK:" "diverged local-only clone reports STUCK, not a quiet skip"
+  assert_contains "$out" "diverged main" "STUCK names the diverged state for local-only too"
+  [ "$(head_sha "$clone")" = "$before" ] || fail "diverged local-only clone was moved"
+  pass "a diverged local-only clone is reported and left untouched, never merged/reset/forced"
+}
+
+test_local_only_fetch_timeout_reports_drift_and_continues() {
+  local home fakebin clone out err before
+  home=$(new_home)
+  fakebin="$home/fb-slowfetch"; rm -rf "$fakebin"; mkdir -p "$fakebin"
+  clone=$(build_pair "$home" iota-slow)
+  advance_origin "$home" iota-slow C1
+  mark_local_only "$home" iota-slow
+  git_slow_fetch "$fakebin"
+  before=$(head_sha "$clone")
+  out="$home/out-slow"; err="$home/err-slow"
+
+  set +e
+  FLEET_TEST_SLOW_FETCH_SECS=5 \
+  FM_FLEET_LOCAL_ONLY_FETCH_TIMEOUT_SECS=1 \
+    run_sync_guarded "$home" "$fakebin" "$out" "$err" iota-slow
+  set -e
+
+  assert_contains "$(cat "$out")" \
+    "iota-slow: skipped: fetch exceeded 1s bound - clone may be behind its origin and could not be refreshed in time" \
+    "a fetch exceeding the local-only bound reports drift instead of hanging"
+  assert_not_contains "$(cat "$out")" "synced" "a bounded-out fetch never fast-forwards"
+  [ "$(head_sha "$clone")" = "$before" ] || fail "clone was advanced despite the fetch timing out"
+  pass "a local-only fetch exceeding its bound reports drift and the sweep continues"
 }
 
 test_single_project_by_bare_name_resolves() {
@@ -458,7 +573,7 @@ test_whole_fleet_form() {
 }
 
 test_bootstrap_relays_recovered_and_stuck() {
-  local home stuck rec out
+  local home stuck rec quiet out
   home=$(new_home)
   # A clone we will leave STUCK (dirty), and one that self-heals (detached-clean-ancestor).
   stuck=$(build_pair "$home" stuck-clone)
@@ -467,6 +582,14 @@ test_bootstrap_relays_recovered_and_stuck() {
   rec=$(build_pair "$home" rec-clone)
   advance_origin "$home" rec-clone C1
   git -C "$rec" checkout --detach --quiet
+  # A local-only clone with no origin: bootstrap's relay filter pattern-matches
+  # fm-fleet-sync.sh's exact "skipped: local-only project" wording to keep this
+  # combination silent - this pins that the two stay in sync.
+  quiet="$home/projects/quiet-clone"
+  git init -q "$quiet"
+  git -C "$quiet" symbolic-ref HEAD refs/heads/main
+  commit_file "$quiet" file.txt v0 C0
+  mark_local_only "$home" quiet-clone
 
   # Full bootstrap: no state/ dir -> secondmate sync no-ops; no .env -> X mode off.
   # We only assert the fleet-sync relay lines; other detect lines are irrelevant.
@@ -474,7 +597,8 @@ test_bootstrap_relays_recovered_and_stuck() {
 
   assert_contains "$out" "FLEET_SYNC: stuck-clone: STUCK:" "bootstrap relays the STUCK outcome"
   assert_contains "$out" "FLEET_SYNC: rec-clone: recovered:" "bootstrap relays the recovered outcome"
-  pass "bootstrap relays recovered: and STUCK: fleet-sync outcomes"
+  assert_not_contains "$out" "quiet-clone" "a local-only clone with no origin stays silent through bootstrap's relay filter"
+  pass "bootstrap relays recovered: and STUCK: fleet-sync outcomes, keeps local-only-no-origin silent"
 }
 
 # --- packed-refs.lock guard tests -------------------------------------------
@@ -619,7 +743,11 @@ test_diverged_is_stuck_untouched
 test_on_default_clean_behind_fast_forwards
 test_already_current_unchanged
 test_no_origin_skipped
-test_local_only_skipped
+test_local_only_no_origin_still_skipped
+test_local_only_with_origin_fast_forwards
+test_local_only_dirty_clone_reported_and_untouched
+test_local_only_diverged_clone_reported_and_untouched
+test_local_only_fetch_timeout_reports_drift_and_continues
 test_single_project_by_bare_name_resolves
 test_single_project_by_bare_name_ignores_cwd_shadow
 test_single_project_by_projects_relative_name_resolves
