@@ -1052,19 +1052,23 @@ real_path_or_raw() {  # <path>
 # herdr-sm-spaces-k4). Both branches converge on the same $T ("target") string
 # that every downstream operation (send/capture/kill) already treats as opaque
 # per-backend routing (fm_backend_resolve_selector).
+# True only when <path> is itself a git worktree's top-level directory and
+# that top-level differs from the primary checkout. This is the one
+# definition of "isolated worktree"; the pane poll below uses it to decide
+# whether a repeating candidate path is acceptable, and validate_spawn_worktree
+# uses it as the hard safety boundary on the path the poll settled on.
+spawn_path_is_isolated_worktree() {  # <path>
+  local path=$1 real top top_real
+  real=$(cd "$path" 2>/dev/null && pwd -P) || return 1
+  top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 1
+  top_real=$(cd "$top" 2>/dev/null && pwd -P) || return 1
+  [ "$real" = "$top_real" ] && [ "$real" != "$PROJ_ABS_REAL" ]
+}
+
 validate_spawn_worktree() {  # <source> <inspect-target>
-  local source=$1 inspect_target=$2 wt_real proj_real wt_top wt_top_real
-  wt_real=
-  if ! wt_real=$(cd "$WT" 2>/dev/null && pwd -P); then
-    wt_real=
-  fi
-  proj_real=$PROJ_ABS_REAL
-  wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)
-  wt_top_real=
-  if ! wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P); then
-    wt_top_real=
-  fi
-  if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] || [ "$wt_real" != "$wt_top_real" ] || [ "$wt_real" = "$proj_real" ]; then
+  local source=$1 inspect_target=$2 wt_top
+  if ! spawn_path_is_isolated_worktree "$WT"; then
+    wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)
     echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
     exit 1
   fi
@@ -1320,20 +1324,36 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # settled there: on some tmux/WSL setups a brand-new window's pane_current_path
   # transiently reports an unrelated stale path (seen live as another real git
   # checkout entirely) before the shell catches up with treehouse get's cd. That
-  # stale path still passes the PROJ_ABS_REAL comparison and validate_spawn_worktree
-  # below (it resolves to a real, distinct worktree top-level too), so accepting it
-  # on one read alone silently records the wrong worktree= in state/<id>.meta. Require
-  # two consecutive reads to agree on the same non-project path before accepting it;
-  # a mismatch just becomes the new candidate rather than resetting the wait, so a
-  # pane that is already settled by the first real read only costs the one existing
-  # inter-poll sleep as confirmation, not a whole extra cycle on top.
+  # stale path still passes the PROJ_ABS_REAL comparison (it resolves to a real,
+  # distinct path too), so accepting it on one read alone silently records the
+  # wrong worktree= in state/<id>.meta. Require two consecutive reads to agree
+  # on the same non-project path before accepting it; a mismatch just becomes
+  # the new candidate rather than resetting the wait, so a pane that is already
+  # settled by the first real read only costs the one existing inter-poll sleep
+  # as confirmation, not a whole extra cycle on top.
+  #
+  # Two agreeing reads are necessary but not sufficient: `treehouse get` itself
+  # passes through intermediate directories while it fetches (observed live:
+  # sitting in the project's own .git/ for the whole duration of a slow-origin
+  # fetch), and a slow fetch can make one of those repeat on consecutive
+  # one-second reads too. Only accept a repeating candidate that is itself a
+  # git worktree top-level (spawn_path_is_isolated_worktree); otherwise keep
+  # polling; the timeout below is what catches a genuinely-too-slow fetch.
+  #
+  # The poll window is generous (FM_SPAWN_WORKTREE_POLL_ATTEMPTS, default 900s)
+  # because a cold fetch on a slow origin is a real observed case (~12 minutes
+  # against an SMB-backed origin) and a correct refusal after a long wait is
+  # fine, whereas the old 60s window could only ever be wrong here: the loop
+  # breaks as soon as two reads agree, so widening it would not by itself have
+  # stopped the latch onto an intermediate path - only the check above does that.
   candidate=""
-  for _ in $(seq 1 60); do
+  poll_attempts=${FM_SPAWN_WORKTREE_POLL_ATTEMPTS:-900}
+  for _ in $(seq 1 "$poll_attempts"); do
     p=$(spawn_current_path "$WT_TARGET" || true)
     if [ -n "$p" ]; then
       p_real=$(real_path_or_raw "$p")
       if [ "$p_real" != "$PROJ_ABS_REAL" ]; then
-        if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
+        if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ] && spawn_path_is_isolated_worktree "$p"; then
           WT="$p"
           break
         fi
@@ -1347,7 +1367,7 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     sleep 1
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
+    echo "error: treehouse get poll timed out after ${poll_attempts}s without ever observing a valid isolated worktree; inspect window $T" >&2
     exit 1
   fi
 

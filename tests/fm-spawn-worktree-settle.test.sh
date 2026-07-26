@@ -141,7 +141,82 @@ test_already_settled_pane_costs_one_confirm_sleep() {
   pass "an already-settled pane confirms via the existing inter-poll sleep, not an extra full cycle"
 }
 
+# make_git_dir_latch_case <name> <id> builds a home and project/worktree pair
+# where the "stale" candidate is the project's OWN .git directory - a real,
+# distinct, repeating path that is nonetheless not a worktree top-level. This
+# reproduces the live UBP incident: a slow `treehouse get` fetch sits in the
+# project's .git/ throughout, so two consecutive one-second reads agree on
+# that path long before the fetch (and the real cd into the worktree) finishes.
+make_git_dir_latch_case() {
+  local name=$1 id=$2 case_dir home proj wt fakebin countfile
+  case_dir="$TMP_ROOT/$name"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  countfile="$case_dir/pane-call-count"
+  fakebin=$(make_settle_fakebin "$case_dir/fake")
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
+  printf 'codex\n' > "$home/config/crew-harness"
+  fm_git_worktree "$proj" "$wt" "wt-$name"
+  mkdir -p "$home/data/$id"
+  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  touch "$home/state/.last-watcher-beat"
+  printf '%s\n' "$case_dir|$home|$proj|$wt|$proj/.git|$fakebin|$countfile"
+}
+
+# A repeating candidate that is a real, distinct path but NOT itself a git
+# worktree top-level (the project's own .git/) must never be accepted, no
+# matter how many consecutive reads agree on it - only the eventual read of
+# the real worktree may be accepted.
+test_repeated_nonworktree_intermediate_path_is_not_accepted() {
+  local rec id out status
+  id=settle-git-dir-latch-z3
+  rec=$(make_git_dir_latch_case settle-git-dir-latch "$id")
+  read_settle_record "$rec"
+
+  # STALE_READS=5: the transient .git path repeats for five straight reads
+  # (agreeing on every consecutive pair) before the pane settles into the
+  # real worktree - long enough that the old two-reads-agree acceptance test
+  # would have latched onto it on the very second read.
+  STALE_READS=5
+  out=$(run_settle_spawn "$id")
+  status=$?
+  expect_code 0 "$status" "spawn should succeed once the pane leaves the transient .git path"
+  assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
+    "meta did not record the real worktree after the transient .git latch"
+  assert_no_grep "worktree=$STALE_DIR" "$HOME_DIR/state/$id.meta" \
+    "meta wrongly recorded the project's .git directory as the worktree"
+  pass "a repeating non-worktree intermediate path (project .git/) is never latched onto, even across many consecutive reads"
+}
+
+# When the pane never settles into a valid worktree before the poll gives up,
+# the failure must say plainly that it never observed one, in wording distinct
+# from validate_spawn_worktree's "did not yield an isolated worktree ...
+# refusing to launch to avoid tangling the primary checkout" message (which
+# means the poll DID settle on a path, and that path failed the safety check).
+test_timeout_without_ever_observing_valid_worktree_reports_honestly() {
+  local rec id out status
+  id=settle-git-dir-timeout-z4
+  rec=$(make_git_dir_latch_case settle-git-dir-timeout "$id")
+  read_settle_record "$rec"
+
+  # STALE_READS higher than the poll window means the pane never leaves the
+  # transient .git path within the (deliberately short, test-only) window.
+  STALE_READS=999
+  out=$(FM_SPAWN_WORKTREE_POLL_ATTEMPTS=3 run_settle_spawn "$id")
+  status=$?
+  expect_code 1 "$status" "spawn should fail when the pane never settles into a valid worktree"
+  assert_contains "$out" "without ever observing a valid isolated worktree" \
+    "timeout error did not use the honest never-observed wording"
+  assert_not_contains "$out" "refusing to launch to avoid tangling the primary checkout" \
+    "timeout error must read distinctly from validate_spawn_worktree's isolation-assertion message"
+  assert_absent "$HOME_DIR/state/$id.meta" "no worktree should have been recorded on timeout"
+  pass "a pane that never settles into a valid worktree times out with an honest, distinguishable message"
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_sleep
+test_repeated_nonworktree_intermediate_path_is_not_accepted
+test_timeout_without_ever_observing_valid_worktree_reports_honestly
 
 echo "# all fm-spawn-worktree-settle tests passed"
