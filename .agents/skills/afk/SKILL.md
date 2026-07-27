@@ -69,10 +69,10 @@ a false exit is self-correcting (the captain re-runs `/afk`).
 
 ## Orthogonal to approval authority
 
-afk changes how aggressively firstmate surfaces things, **not who approves
-what**. "Away" never means "approves more." A PR ready for merge, a
-needs-decision finding, or anything destructive still waits for the captain's
-explicit word - the daemon just batches the notification.
+afk changes how aggressively firstmate surfaces things, **not who approves what**.
+"Away" never means "approves more" or "approves less."
+A PR ready for merge or a needs-decision finding keeps the same configured authority and exceptions from `AGENTS.md` section 7, while anything requiring the captain still waits for the captain's explicit word.
+The daemon only batches the notification.
 
 ## Operational prefix contract
 
@@ -80,7 +80,7 @@ The daemon constructs every current injection as the `away-supervisor` kind owne
 The bare `FM_INJECT_MARK` form remains accepted for legacy daemon escalations during rollout.
 U+2063 has no normal keyboard keystroke and survives terminal transport as UTF-8 text.
 This is how firstmate tells a daemon escalation apart from a real message in the same pane.
-The operational prefix travels with the message text; it does not rely on harness-level typed-vs-injected detection, which is not portable across claude, codex, opencode, pi, and grok.
+The operational prefix travels with the message text; it does not rely on harness-level typed-vs-injected detection, which is not portable across claude, codex, opencode, pi, grok, and kimi.
 
 ## Busy-guard and composer guard
 
@@ -92,7 +92,7 @@ backend (tmux or herdr; see "Auto-discovered supervisor pane" below):
 - **Composer-state guard** - `inject_msg` reads the full `empty`/`pending`/`unknown` verdict from `fm_backend_composer_state` and injects only when it is affirmatively `empty`.
   `pending` means real unsubmitted text, while `unknown` includes an unreadable pane and a bare shell prompt left after the agent exits, so both defer.
   The shared `bin/fm-composer-lib.sh` owns the content decision after each backend captures and structurally identifies its own composer row.
-  It preserves idle bordered composers such as claude's `│ > … │` and bare agent glyphs as empty, but a bare shell glyph is unknown unless inside a genuine bordered composer box; see `docs/herdr-backend.md` "Composer-emptiness safety" for the complete contract.
+  It preserves idle bordered composers such as claude's `│ > … │` and bare agent glyphs as empty, but a bare shell glyph is unknown unless inside a genuine bordered composer box; see `docs/herdr-backend.md` "Composer and injection safety" for the complete contract.
   `pane_input_pending` remains the tested predicate for callers that only need to know whether real unsubmitted text is present, but it is insufficient for an injection-safety decision because it cannot distinguish `empty` from `unknown`.
 
 Either condition, or any composer verdict other than `empty`, defers the injection; the buffered escalation survives in `state/.subsuper-escalations` and is retried on the next housekeeping tick.
@@ -106,7 +106,7 @@ If that submit cannot be confirmed, it raises a loud, rate-limited wedge alarm:
 an ERROR in the daemon log, a durable
 `state/.subsuper-inject-wedged` marker (surface it on the "while you were out"
 catch-up if present), a tmux status-line flash when applicable, and a configurable backend-independent active alert.
-`docs/wedge-alarm.md` owns the alert channel setup and verification record.
+`docs/wedge-alarm.md` owns the alert channel setup, and `docs/verification/supervision.md` "Wedge-alarm channels" owns active evidence.
 So a guard false-positive becomes a visible stall, never an unbounded silent no-op.
 
 ## Submit model
@@ -232,7 +232,7 @@ the operational prefix lets firstmate distinguish it from a real captain message
   backends, including zellij, orca, and cmux, are not yet supported as
   supervisor backends; the daemon refuses loudly at startup instead of
   misapplying tmux primitives to a pane that isn't one
-  (docs/herdr-backend.md "Away-mode daemon: herdr supervisor-pane support").
+  (docs/herdr-backend.md "Away-mode supervisor support").
 
 ## Stale-artifact lifecycle
 

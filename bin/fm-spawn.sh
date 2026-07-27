@@ -42,13 +42,16 @@
 #   Herdr additionally supports a default-off presentation-only layout when the
 #   local config/herdr-presentation-spaces flag exists. A clean fresh task first
 #   writes state/<id>.herdr-presentation atomically, then creates a disposable
-#   workspace containing only the ordinary task pane. The journal and visible
-#   random token are never endpoint or ownership authority. Existing, ambiguous,
-#   or recovered state is never adopted, reused, closed, or deleted through that
-#   presentation path; a flat launch is allowed only after duplicate-agent risk
-#   is independently absent. Treehouse allocation and task metadata are unchanged.
-#   A clean projected create makes one bounded attempt to hold the one
-#   session-scoped presentation-order lock (keyed by named session plus
+#   workspace containing only the ordinary task pane. A successful clean create
+#   upgrades its attempt journal with exact home, session, workspace, tab, pane,
+#   parent, and label bindings. On a same-identity restart, that complete binding
+#   plus authoritative metadata may replace one exact agent-free husk in place.
+#   The journal, visible token, and labels alone are never endpoint or ownership
+#   authority, and every ambiguous recovery stays on the flat fallback after
+#   duplicate-agent risk is independently absent. Treehouse allocation and task
+#   metadata are unchanged.
+#   A clean projected create or exact resume makes one bounded attempt to hold
+#   the one session-scoped presentation-order lock (keyed by named session plus
 #   canonical socket, outside any home's state/) through launch handoff. Lock
 #   contention warns and falls back to the ordinary flat layout before any
 #   projection mutation. The exact response-derived new workspace is inserted
@@ -70,10 +73,8 @@
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
 #   /updatefirstmate, restart). A bare adapter name
 #   (claude|codex|opencode|pi|grok|kimi) overrides it for this spawn (either
-#   kind); the kimi template is crewmate/scout-only on the tmux backend and a
-#   kimi-template --secondmate or non-tmux spawn is refused. A non-flag string
-#   containing whitespace is treated as a RAW launch command - the escape hatch
-#   for verifying new adapters, intentionally outside adapter scope gates.
+#   kind). A non-flag string containing whitespace is treated as a RAW launch
+#   command - the escape hatch for verifying new adapters.
 #   config/secondmate-harness may also carry optional model, effort, and
 #   harness-profile tokens ("<harness> [<model>] [<effort>] [<harness_profile>]").
 #   For a --secondmate spawn, those tokens apply only when this spawn also resolves
@@ -117,22 +118,18 @@
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
-# Per-harness turn-end hooks are installed automatically; some live outside the worktree.
+# Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
+# Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
+# a firstmate-owned global hook and registry, and a gitignored per-task pointer.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
-# kimi uses a firstmate-owned guarded script under
-# ${KIMI_CODE_HOME:-$HOME/.kimi-code}/hooks plus one idempotent, doctor-validated
-# [[hooks]] Stop append to kimi's config.toml, a gitignored .fm-kimi-turnend
-# worktree pointer, and a state token; kimi's brief is delivered post-launch by
-# bracketed paste because kimi rejects a positional prompt (crewmate/scout on
-# tmux only).
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> window=<backend-target> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
 # Task metadata base contract: write_task_meta replaces window=, worktree=,
 # project=, harness=, kind=, mode=, yolo=, tasktmp=, model=, effort=, and
-# harness_profile=; Kimi adds kimi_home=, and secondmate adds home= and
-# projects=. docs/configuration.md "Runtime backend" owns backend fields,
+# harness_profile=; secondmate adds home= and projects=.
+# docs/configuration.md "Runtime backend" owns backend fields,
 # while fm-pr-check.sh and fm-x-link.sh own their respective appended fields.
 set -eu
 
@@ -257,9 +254,6 @@ fi
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
-KIMI_CONFIG_LOCK=
-KIMI_CONFIG_LOCK_HELD=0
-KIMI_CONFIG_SNAPSHOT=
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -290,14 +284,6 @@ parse_orca_worktree_result() {
 
 spawn_abort_cleanup() {
   local status=$?
-  if [ -n "$KIMI_CONFIG_SNAPSHOT" ]; then
-    mv -f "$KIMI_CONFIG_SNAPSHOT" "$KIMI_CONFIG" 2>/dev/null || rm -f "$KIMI_CONFIG_SNAPSHOT"
-    KIMI_CONFIG_SNAPSHOT=
-  fi
-  if [ "$KIMI_CONFIG_LOCK_HELD" -eq 1 ]; then
-    fm_lock_release "$KIMI_CONFIG_LOCK"
-    KIMI_CONFIG_LOCK_HELD=0
-  fi
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] \
      && [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ]; then
     if ! spawn_herdr_presentation_order_lock_acquire "${HERDR_PROJECTION_ABORT_SESSION:-}"; then
@@ -495,20 +481,14 @@ launch_template() {
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
     grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-    # kimi (kimi-code TUI): REJECTS a positional prompt ("unknown command ...",
-    # verified 0.27.0), and -p is non-interactive print mode, so the brief cannot
-    # ride the launch command. The launch opens the bare TUI with --yolo (verified
-    # fully unattended tool execution, no permission gate); the brief is then
-    # delivered post-launch by deliver_kimi_brief below via tmux bracketed paste,
-    # which kimi's composer holds as one multi-line message until Enter (verified).
-    # Still no CLI effort flag on 0.28.1 (--effort/--thinking/--reasoning-effort
-    # are all "unknown option"), but __EFFORTFLAG__ here carries a
-    # KIMI_MODEL_THINKING_EFFORT=<level> env prefix instead of a trailing arg
-    # (effort_flag_for_harness's kimi case), so it sits before the binary name.
-    # kimi's turn-end signal is a Stop-event [[hooks]] entry installed below
-    # (guarded global hook + per-task pointer, the grok pattern). Verified for
-    # crewmate/scout duty on the tmux backend only; --secondmate is refused.
-    kimi) printf '%s' '__EFFORTFLAG__kimi --yolo __MODELFLAG__' ;;
+    # Kimi Code rejects a positional prompt, so it launches bare and receives
+    # only an absolute brief pointer after the TUI readiness gate below.
+    # Its turn-end signal is a globally configured Stop hook plus a guarded
+    # per-task worktree token, so no launch placeholder belongs here.
+    # __EFFORTFLAG__ here carries a KIMI_MODEL_THINKING_EFFORT=<level> env
+    # prefix instead of a trailing arg (effort_flag_for_harness's kimi case),
+    # so it sits before the binary path rather than after the flags.
+    kimi) printf '%s' '__EFFORTFLAG____KIMIBIN__ __MODELFLAG__--auto' ;;
     *) return 1 ;;
   esac
 }
@@ -554,9 +534,7 @@ esac
 
 # kimi scope gates (fail closed): kimi is verified for crewmate/scout duty on the
 # tmux backend only. A Kimi template secondmate launch and a Kimi template launch
-# on any other backend are unverified paths - the post-launch brief delivery and
-# the guarded turn-end hook were validated against tmux bracketed paste and a live
-# crewmate supervision cycle, nothing else. Refuse loudly instead of launching a
+# on any other backend are unverified paths - refuse loudly instead of launching a
 # shape no evidence covers (harness-adapters skill, kimi section). This is
 # deliberately template-only: raw launch commands remain the adapter-verification
 # escape hatch.
@@ -568,7 +546,7 @@ if [ "$LAUNCH_SOURCE" = template ]; then
         exit 1
       fi
       if [ "$BACKEND" != tmux ]; then
-        echo "error: kimi spawns are verified on the tmux backend only (post-launch brief delivery uses tmux bracketed paste); backend=$BACKEND is unverified for kimi." >&2
+        echo "error: kimi spawns are verified on the tmux backend only; backend=$BACKEND is unverified for kimi." >&2
         exit 1
       fi
       ;;
@@ -644,23 +622,6 @@ if [ -n "$HARNESS_PROFILE" ]; then
   fi
 fi
 
-KIMI_HOME_DIR=
-KIMI_CONFIG=
-case "$HARNESS" in
-  kimi*)
-    KIMI_HOME_DIR="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
-    KIMI_CONFIG="$KIMI_HOME_DIR/config.toml"
-    if ! command -v kimi >/dev/null 2>&1; then
-      echo "error: kimi is not on PATH; install kimi-code before dispatching kimi crewmates" >&2
-      exit 1
-    fi
-    if [ ! -f "$KIMI_CONFIG" ]; then
-      echo "error: kimi is not initialized (no config.toml at $KIMI_CONFIG); run kimi once and authenticate before dispatching kimi crewmates" >&2
-      exit 1
-    fi
-    ;;
-esac
-
 secondmate_registry_value() {
   local id=$1 key=$2 reg line value
   reg="$DATA/secondmates.md"
@@ -682,13 +643,35 @@ shell_quote() {
   printf "'"
 }
 
+resolve_kimi_binary() {
+  local candidate dir fallback
+  candidate=$(command -v kimi 2>/dev/null || true)
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    case "$candidate" in
+      /*) printf '%s\n' "$candidate"; return 0 ;;
+      *)
+        dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || dir=
+        if [ -n "$dir" ]; then
+          printf '%s/%s\n' "$dir" "$(basename "$candidate")"
+          return 0
+        fi
+        ;;
+    esac
+  fi
+  fallback="${HOME:-}/.kimi-code/bin/kimi"
+  if [ -n "${HOME:-}" ] && [ -x "$fallback" ]; then
+    printf '%s\n' "$fallback"
+    return 0
+  fi
+  echo "error: kimi executable not found; searched PATH for 'kimi' and fallback '$fallback'" >&2
+  return 1
+}
+
 model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
     claude|codex|opencode|pi|grok|kimi)
-      # kimi: --model <alias> verified on 0.27.0 (the long form of -m; a bad
-      # alias fails loudly with config.invalid before any launch).
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -802,18 +785,19 @@ effort_flag_for_harness() {
       # Kimi's effort override is an env prefix, not a CLI flag or config write.
       # It bypasses the declared support list, so resolve the selected model and
       # inject it only when the parser below confirms the mapped value is listed.
-      local mapped resolved_alias
+      local mapped resolved_alias kimi_config
       mapped=$(kimi_thinking_effort_for_profile "$effort")
       [ -n "$mapped" ] || return 0
+      kimi_config="${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml"
       resolved_alias=$MODEL
       if [ -z "$resolved_alias" ] || [ "$resolved_alias" = default ]; then
-        resolved_alias=$(kimi_default_model_alias "$KIMI_CONFIG")
+        resolved_alias=$(kimi_default_model_alias "$kimi_config")
       fi
       # Fail-safe: the resolved model's config.toml entry must declare it accepts
-      # this effort. Absent that proof (no matching block, no support_efforts, or
-      # the value not listed), fall back to today's behavior - record-only in
-      # meta, no override, launch unchanged.
-      if kimi_model_supports_effort "$KIMI_CONFIG" "$resolved_alias" "$mapped"; then
+      # this effort. Absent that proof (no matching block, no support_efforts, a
+      # missing config, or the value not listed), fall back to today's behavior -
+      # record-only in meta, no override, launch unchanged.
+      if kimi_model_supports_effort "$kimi_config" "$resolved_alias" "$mapped"; then
         printf -- 'KIMI_MODEL_THINKING_EFFORT=%s ' "$(shell_quote "$mapped")"
       fi
       ;;
@@ -832,28 +816,21 @@ harness_profile_flag_for_harness() {
   esac
 }
 
+case "$LAUNCH" in
+  *__KIMIBIN__*)
+    KIMI_BIN=$(resolve_kimi_binary) || exit 1
+    LAUNCH=${LAUNCH//__KIMIBIN__/$(shell_quote "$KIMI_BIN")}
+    if [ "$KIND" != secondmate ]; then
+      "$FM_ROOT/bin/fm-kimi-turnend-hook.sh" install || {
+        echo "error: refusing Kimi spawn because the global turn-end hook could not be installed safely" >&2
+        exit 1
+      }
+    fi
+    ;;
+esac
+
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-
-acquire_kimi_config_lock() {
-  local attempt=0
-  while [ "$attempt" -lt 100 ]; do
-    if fm_lock_try_acquire "$KIMI_CONFIG_LOCK"; then
-      KIMI_CONFIG_LOCK_HELD=1
-      return 0
-    fi
-    sleep 0.05
-    attempt=$((attempt + 1))
-  done
-  echo "error: kimi config.toml turn-end hook lock remained held for 5s; spawn aborted" >&2
-  return 1
-}
-
-release_kimi_config_lock() {
-  [ "$KIMI_CONFIG_LOCK_HELD" -eq 1 ] || return 0
-  fm_lock_release "$KIMI_CONFIG_LOCK"
-  KIMI_CONFIG_LOCK_HELD=0
 }
 
 resolved_existing_dir() {
@@ -1027,6 +1004,8 @@ else
   BRIEF="$DATA/$ID/brief.md"
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
+BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
+BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
 # PROJ_ABS can still carry a symlinked path component (e.g. macOS's /tmp ->
 # /private/tmp) when it came from the ship/scout branch's logical `pwd` above.
@@ -1079,25 +1058,59 @@ validate_spawn_worktree() {  # <source> <inspect-target>
   fi
 }
 
+herdr_projection_meta_field_exact() {  # <meta> <key>
+  local meta=$1 key=$2 count
+  [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
+  count=$(grep -c "^${key}=" "$meta" 2>/dev/null || true)
+  [ "$count" = 1 ] || return 1
+  grep "^${key}=" "$meta" 2>/dev/null | cut -d= -f2-
+}
+
 # A stale presentation journal never grants launch authority.
-# When authoritative metadata already exists, require its endpoint to be
-# positively dead before the journal's read-only token inspection may allow a
-# flat fallback.
+# Under the session lock, authoritative metadata must identify one positively
+# dead or agent-free endpoint before token inspection may allow flat fallback.
+# Exact Herdr fields are retained for the narrower version 2 reclaim path.
 herdr_projection_existing_meta_allows_flat() {  # <meta>
-  local meta=$1 old_backend old_target old_session old_pane old_state
+  local meta=$1 old_backend old_target old_session old_pane old_state target_session target_pane
+  HERDR_RECOVERY_BACKEND=""
+  HERDR_RECOVERY_WORKSPACE_ID=""
+  HERDR_RECOVERY_TAB_ID=""
+  HERDR_RECOVERY_PANE_ID=""
   old_backend=$(fm_backend_of_meta "$meta")
   old_target=$(fm_backend_target_of_meta "$meta")
   [ -n "$old_target" ] || {
     echo "error: existing metadata for $ID has no endpoint; refusing duplicate launch while its herdr presentation journal is quarantined" >&2
     return 1
   }
+  HERDR_RECOVERY_BACKEND=$old_backend
   if [ "$old_backend" = herdr ]; then
     fm_backend_herdr_parse_target "$old_target" || {
       echo "error: existing herdr endpoint for $ID is malformed; refusing duplicate launch" >&2
       return 1
     }
-    old_session=$FM_BACKEND_HERDR_SESSION
-    old_pane=$FM_BACKEND_HERDR_PANE
+    target_session=$FM_BACKEND_HERDR_SESSION
+    target_pane=$FM_BACKEND_HERDR_PANE
+    old_session=$(herdr_projection_meta_field_exact "$meta" herdr_session) || {
+      echo "error: existing herdr metadata for $ID has an ambiguous session; refusing duplicate launch" >&2
+      return 1
+    }
+    HERDR_RECOVERY_WORKSPACE_ID=$(herdr_projection_meta_field_exact "$meta" herdr_workspace_id) || {
+      echo "error: existing herdr metadata for $ID has an ambiguous workspace; refusing duplicate launch" >&2
+      return 1
+    }
+    HERDR_RECOVERY_TAB_ID=$(herdr_projection_meta_field_exact "$meta" herdr_tab_id) || {
+      echo "error: existing herdr metadata for $ID has an ambiguous tab; refusing duplicate launch" >&2
+      return 1
+    }
+    old_pane=$(herdr_projection_meta_field_exact "$meta" herdr_pane_id) || {
+      echo "error: existing herdr metadata for $ID has an ambiguous pane; refusing duplicate launch" >&2
+      return 1
+    }
+    [ "$target_session" = "$old_session" ] && [ "$target_pane" = "$old_pane" ] || {
+      echo "error: existing herdr metadata for $ID has inconsistent endpoint identities; refusing duplicate launch" >&2
+      return 1
+    }
+    HERDR_RECOVERY_PANE_ID=$old_pane
     fm_backend_herdr_server_ensure "$old_session" || {
       echo "error: existing herdr endpoint for $ID could not be inspected; refusing duplicate launch" >&2
       return 1
@@ -1154,46 +1167,101 @@ case "$BACKEND" in
     HERDR_PRESENTATION_JOURNAL=$(fm_backend_herdr_projection_journal_path "$STATE" "$ID")
     HERDR_PROJECTED=0
     if [ "$KIND" != secondmate ] && [ -f "$CONFIG/herdr-presentation-spaces" ]; then
+      HERDR_SES=$(fm_backend_herdr_session)
+      HERDR_PARENT_LABEL=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_workspace_label)
       if [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; then
+        fm_backend_herdr_server_ensure "$HERDR_SES" || {
+          echo "error: herdr presentation recovery could not ensure its exact named session" >&2
+          exit 1
+        }
+        spawn_herdr_presentation_order_lock_acquire "$HERDR_SES" || {
+          echo "error: herdr presentation recovery could not acquire its session lock; refusing a concurrent resume" >&2
+          exit 1
+        }
         if [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; then
           herdr_projection_existing_meta_allows_flat "$STATE/$ID.meta" || exit 1
         fi
-        HERDR_RECOVERY_SESSION=$(fm_backend_herdr_session)
         fm_backend_herdr_projection_recovery_allows_flat \
-          "$HERDR_RECOVERY_SESSION" "$HERDR_PRESENTATION_JOURNAL" "$ID" || exit 1
+          "$HERDR_SES" "$HERDR_PRESENTATION_JOURNAL" "$ID" || exit 1
+        if [ "${HERDR_RECOVERY_BACKEND:-}" = herdr ]; then
+          set +e
+          FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_reclaim_task \
+            "$HERDR_SES" "$HERDR_PRESENTATION_JOURNAL" "$ID" "$HERDR_LABEL_HOME" \
+            "$HERDR_RECOVERY_WORKSPACE_ID" "$HERDR_RECOVERY_TAB_ID" "$HERDR_RECOVERY_PANE_ID" \
+            "$HERDR_PARENT_LABEL" "$W" "$PROJ_ABS"
+          HERDR_RECLAIM_STATUS=$?
+          set -e
+          case "$HERDR_RECLAIM_STATUS" in
+            0)
+              HERDR_PROJECTED=1
+              HERDR_WORKSPACE_ID=$HERDR_RECOVERY_WORKSPACE_ID
+              HERDR_SEEDED_DEFAULT_TAB_ID=""
+              HERDR_TAB_ID=$FM_BACKEND_HERDR_PROJECTION_TAB_ID
+              HERDR_PANE_ID=$FM_BACKEND_HERDR_PROJECTION_PANE_ID
+              HERDR_PROJECTION_ABORT_CLEANUP=1
+              HERDR_PROJECTION_ABORT_SESSION=$HERDR_SES
+              HERDR_PROJECTION_ABORT_TASK_PANE=$HERDR_PANE_ID
+              HERDR_PROJECTION_ABORT_SEEDED_PANE=""
+              ;;
+            2)
+              spawn_herdr_presentation_order_lock_release
+              ;;
+            *) exit 1 ;;
+          esac
+        else
+          spawn_herdr_presentation_order_lock_release
+        fi
       elif [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
-        HERDR_SES=$(fm_backend_herdr_session)
-        HERDR_PARENT_LABEL=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_workspace_label)
-        # Session lock path resolution needs a live named-session socket.
-        # Ensure the server before journal publication so lock failure degrades
-        # to flat without ever creating an unlocked projection.
+        # Session lock path resolution and exact parent binding both need a
+        # live named-session socket before journal publication.
         if ! fm_backend_herdr_server_ensure "$HERDR_SES"; then
           echo "warning: herdr presentation could not ensure its session server; using the ordinary flat layout without projection" >&2
         elif spawn_herdr_presentation_order_lock_acquire "$HERDR_SES"; then
-          HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
-          HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
-          if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
-            "$PROJ_ABS" "$HERDR_PROJECTION_LABEL" "$W"; then
-            if [ "${FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE:-0}" = 1 ]; then
-              HERDR_PROJECTION_ABORT_CLEANUP=1
-              HERDR_PROJECTION_ABORT_SESSION=$FM_BACKEND_HERDR_PROJECTION_SESSION
-              HERDR_PROJECTION_ABORT_TASK_PANE=$FM_BACKEND_HERDR_PROJECTION_PANE_ID
-              HERDR_PROJECTION_ABORT_SEEDED_PANE=$FM_BACKEND_HERDR_PROJECTION_SEEDED_PANE_ID
+          HERDR_PARENT_WORKSPACE_ID=$(fm_backend_herdr_projection_parent_workspace_exact \
+            "$HERDR_SES" "$HERDR_PARENT_LABEL" 2>/dev/null || true)
+          if [ -z "$HERDR_PARENT_WORKSPACE_ID" ]; then
+            echo "warning: herdr presentation parent is absent or ambiguous; using the ordinary flat layout without projection" >&2
+            spawn_herdr_presentation_order_lock_release
+          else
+            HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
+            HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
+            if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
+              "$PROJ_ABS" "$HERDR_PROJECTION_LABEL" "$W"; then
+              if [ "${FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE:-0}" = 1 ]; then
+                HERDR_PROJECTION_ABORT_CLEANUP=1
+                HERDR_PROJECTION_ABORT_SESSION=$FM_BACKEND_HERDR_PROJECTION_SESSION
+                HERDR_PROJECTION_ABORT_TASK_PANE=$FM_BACKEND_HERDR_PROJECTION_PANE_ID
+                HERDR_PROJECTION_ABORT_SEEDED_PANE=$FM_BACKEND_HERDR_PROJECTION_SEEDED_PANE_ID
+              fi
+              exit 1
             fi
-            exit 1
+            HERDR_PROJECTED=1
+            HERDR_SES=$FM_BACKEND_HERDR_PROJECTION_SESSION
+            HERDR_WORKSPACE_ID=$FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID
+            HERDR_SEEDED_DEFAULT_TAB_ID=$FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID
+            HERDR_TAB_ID=$FM_BACKEND_HERDR_PROJECTION_TAB_ID
+            HERDR_PANE_ID=$FM_BACKEND_HERDR_PROJECTION_PANE_ID
+            HERDR_PROJECTION_ABORT_CLEANUP=1
+            HERDR_PROJECTION_ABORT_SESSION=$HERDR_SES
+            HERDR_PROJECTION_ABORT_TASK_PANE=$HERDR_PANE_ID
+            HERDR_PROJECTION_ABORT_SEEDED_PANE=$FM_BACKEND_HERDR_PROJECTION_SEEDED_PANE_ID
+            fm_backend_herdr_projection_order_best_effort \
+              "$HERDR_SES" "$HERDR_WORKSPACE_ID" "$HERDR_PARENT_LABEL"
+            HERDR_HOME_ID=$(fm_backend_herdr_projection_home_identity "$HERDR_LABEL_HOME" 2>/dev/null || true)
+            if [ -n "$HERDR_HOME_ID" ] \
+               && fm_backend_herdr_projection_live_binding_matches \
+                 "$HERDR_SES" "$HERDR_PROJECTION_ID" "$HERDR_WORKSPACE_ID" \
+                 "$HERDR_TAB_ID" "$HERDR_PANE_ID" "$HERDR_PARENT_WORKSPACE_ID" \
+                 "$HERDR_PARENT_LABEL" "$HERDR_PROJECTION_LABEL" "$W" \
+               && fm_backend_herdr_projection_journal_bind \
+                 "$HERDR_PRESENTATION_JOURNAL" "$ID" "$HERDR_HOME_ID" "$HERDR_SES" \
+                 "$HERDR_WORKSPACE_ID" "$HERDR_TAB_ID" "$HERDR_PANE_ID" \
+                 "$HERDR_PARENT_WORKSPACE_ID" "$HERDR_PARENT_LABEL" "$HERDR_PROJECTION_LABEL" "$W"; then
+              :
+            else
+              echo "warning: herdr presentation could not publish an exact restart binding; this task will use flat fallback after a restart" >&2
+            fi
           fi
-          HERDR_PROJECTED=1
-          HERDR_SES=$FM_BACKEND_HERDR_PROJECTION_SESSION
-          HERDR_WORKSPACE_ID=$FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID
-          HERDR_SEEDED_DEFAULT_TAB_ID=$FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID
-          HERDR_TAB_ID=$FM_BACKEND_HERDR_PROJECTION_TAB_ID
-          HERDR_PANE_ID=$FM_BACKEND_HERDR_PROJECTION_PANE_ID
-          HERDR_PROJECTION_ABORT_CLEANUP=1
-          HERDR_PROJECTION_ABORT_SESSION=$HERDR_SES
-          HERDR_PROJECTION_ABORT_TASK_PANE=$HERDR_PANE_ID
-          HERDR_PROJECTION_ABORT_SEEDED_PANE=$FM_BACKEND_HERDR_PROJECTION_SEEDED_PANE_ID
-          fm_backend_herdr_projection_order_best_effort \
-            "$HERDR_SES" "$HERDR_WORKSPACE_ID" "$HERDR_PARENT_LABEL"
         else
           echo "warning: herdr presentation focus lock unavailable; using the ordinary flat layout without projection" >&2
         fi
@@ -1313,6 +1381,58 @@ spawn_send_key() {  # <target> <key>
     cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
   esac
 }
+
+kimi_capture() {
+  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
+}
+
+kimi_capture_has_empty_composer() {  # <plain-pane-capture>
+  printf '%s\n' "$1" \
+    | grep -Eq '^[[:space:]]*(│|┃|\|)[[:space:]]*>[[:space:]]*(│|┃|\|)[[:space:]]*$'
+}
+
+kimi_wait_for_ready() {
+  local pane i=0 max=${FM_KIMI_READY_POLLS:-60} interval=${FM_KIMI_POLL_INTERVAL:-0.5}
+  while [ "$i" -lt "$max" ]; do
+    pane=$(kimi_capture)
+    if printf '%s\n' "$pane" | grep -Fq 'Welcome to Kimi Code!' \
+       || kimi_capture_has_empty_composer "$pane"; then
+      return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -ge "$max" ] || sleep "$interval"
+  done
+  return 1
+}
+
+kimi_delivery_is_confirmed() {  # <plain-pane-capture>
+  local pane=$1
+  kimi_capture_has_empty_composer "$pane" || return 1
+  if { printf '%s\n' "$pane" | grep -Fq '✨' \
+       && printf '%s\n' "$pane" | grep -Fq 'Read the brief at'; } \
+     || printf '%s\n' "$pane" \
+       | grep -qiE 'context:[[:space:]]*(0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*([.][0-9]+)?)[[:space:]]*%'; then
+    return 0
+  fi
+  return 1
+}
+
+kimi_wait_for_delivery() {
+  local pane i=0 max=${FM_KIMI_DELIVERY_POLLS:-40} interval=${FM_KIMI_POLL_INTERVAL:-0.5}
+  while [ "$i" -lt "$max" ]; do
+    pane=$(kimi_capture)
+    kimi_delivery_is_confirmed "$pane" && return 0
+    i=$((i + 1))
+    [ "$i" -ge "$max" ] || sleep "$interval"
+  done
+  return 1
+}
+
+kimi_spawn_fail() {  # <detail>
+  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
+  echo "error: $1; inspect window $T" >&2
+}
+
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
@@ -1415,9 +1535,6 @@ write_task_meta() {
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
     echo "harness_profile=${HARNESS_PROFILE:-default}"
-    case "$HARNESS" in
-      kimi*) echo "kimi_home=$KIMI_HOME_DIR" ;;
-    esac
     [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
     if [ "$BACKEND" = herdr ]; then
       echo "herdr_session=$HERDR_SES"
@@ -1449,9 +1566,11 @@ case "$HARNESS" in
   kimi*) write_task_meta ;;
 esac
 
-# Per-harness turn-end hook: a file that touches state/<id>.turn-ended when the
-# agent finishes a turn. Worktree-resident hooks are kept out of git's view so
-# they never block teardown's dirty check or leak into a commit.
+# Per-harness turn-end hook where enabled: a file that touches
+# state/<id>.turn-ended when the agent finishes a turn. Worktree-resident hooks
+# and token pointers stay out of git's view so they never block teardown's dirty
+# check or leak into a commit.
+mkdir -p "$STATE"
 STATE_REAL=$(cd "$STATE" && pwd -P)
 TURNEND="$STATE_REAL/$ID.turn-ended"
 exclude_path() {
@@ -1549,87 +1668,17 @@ EOF
       exclude_path '.fm-grok-turnend'
       ;;
     kimi*)
-      # kimi fires a Stop hook at every completed turn (verified 0.27.0, incl.
-      # -p mode; it does NOT fire on interrupt - the Interrupt event does). Hooks
-      # load ONLY from $KIMI_CODE_HOME/config.toml's [[hooks]] array: there is no
-      # hooks directory and the project-local .kimi-code/local.toml schema is
-      # locked to [workspace], so a per-worktree hook file is impossible. The
-      # grok pattern adapts: a single firstmate-owned guarded script lives at
-      # $KIMI_CODE_HOME/hooks/fm-turn-end.sh (the docs' own convention for user
-      # hook scripts), token-guarded through the fm-turn-end.d registry plus a
-      # per-task .fm-kimi-turnend worktree pointer, a no-op for every
-      # non-firstmate kimi session. One [[hooks]] Stop entry referencing that
-      # script is appended ONCE to config.toml - an additive edit to a file
-      # kimi's docs designate for hand-editing, validated with `kimi doctor`
-      # (exit 1 on invalid, verified) and restored from backup on failure, so a
-      # bad append can never brick the captain's kimi. kimi was never observed
-      # rewriting config.toml, so the entry is durable. The hook script reads the
-      # session's project dir from the Stop payload's cwd (falling back to its
-      # own cwd, which kimi sets to the same dir) - kimi exposes no workspace
-      # env var to hooks (verified: no kimi-added env at all).
-      KIMI_HOOKS_DIR="$KIMI_HOME_DIR/hooks"
-      KIMI_AUTH_DIR="$KIMI_HOOKS_DIR/fm-turn-end.d"
-      mkdir -p "$KIMI_AUTH_DIR"
+      # Kimi's Stop hook is global, but it is inert unless cwd contains this
+      # task's token pointer and the token resolves through Firstmate's private
+      # registry. The installer above owns the format-preserving config edit and
+      # the always-zero, silent hook script.
+      KIMI_AUTH_DIR="$HOME/.kimi-code/fm-turn-end.d"
       old_umask=$(umask)
       umask 077
       auth_file=$(mktemp "$KIMI_AUTH_DIR/fm.XXXXXXXXXXXX")
       umask "$old_umask"
       printf '%s\n' "$TURNEND" > "$auth_file"
       printf '%s\n' "${auth_file##*/}" > "$STATE/$ID.kimi-turnend-token"
-      cat > "$KIMI_HOOKS_DIR/fm-turn-end.sh" <<'EOF'
-#!/usr/bin/env bash
-# Firstmate turn-end signal for kimi crewmates; written by fm-spawn.
-# Guarded no-op for every non-firstmate kimi session: it acts only when the
-# session's project dir holds a .fm-kimi-turnend token pointer that matches the
-# firstmate-owned registry in fm-turn-end.d/. Always exits 0 (kimi Stop hooks
-# block on exit 2; this hook must never block a turn).
-set -u
-auth_dir="${KIMI_CODE_HOME:-$HOME/.kimi-code}/hooks/fm-turn-end.d"
-payload=$(cat 2>/dev/null || true)
-workspace=$(printf '%s' "$payload" | sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p')
-[ -n "$workspace" ] || workspace=$(pwd -P)
-p="$workspace/.fm-kimi-turnend"
-[ -f "$p" ] || exit 0
-first=
-IFS= read -r -n 256 first < "$p" 2>/dev/null || [ -n "$first" ] || exit 0
-case "$first" in token=*) token=${first#token=} ;; *) exit 0 ;; esac
-case "$token" in fm.????????????) : ;; *) exit 0 ;; esac
-case "$token" in *[!A-Za-z0-9._-]*) exit 0 ;; esac
-t=$(cat "$auth_dir/$token" 2>/dev/null) || exit 0
-case "$t" in /*.turn-ended) : ;; *) exit 0 ;; esac
-touch "$t" 2>/dev/null || true
-exit 0
-EOF
-      chmod +x "$KIMI_HOOKS_DIR/fm-turn-end.sh"
-      # fm-wake-lib creates STATE on load, so defer it until the abort trap protects
-      # the Orca resources created before this Kimi-only lock path.
-      # shellcheck source=bin/fm-wake-lib.sh
-      . "$SCRIPT_DIR/fm-wake-lib.sh"
-      KIMI_CONFIG_LOCK="$KIMI_CONFIG.fm-prehook.lock"
-      acquire_kimi_config_lock || exit 1
-      if ! grep -qF "hooks/fm-turn-end.sh" "$KIMI_CONFIG"; then
-        KIMI_CONFIG_SNAPSHOT=$(mktemp "$KIMI_CONFIG.fm-prehook.XXXXXXXXXXXX")
-        if ! cp "$KIMI_CONFIG" "$KIMI_CONFIG_SNAPSHOT"; then
-          rm -f "$KIMI_CONFIG_SNAPSHOT"
-          KIMI_CONFIG_SNAPSHOT=
-          exit 1
-        fi
-        {
-          printf '\n# firstmate-owned turn-end hook: a token-guarded no-op for every kimi\n'
-          printf '# session firstmate did not launch (see fm-turn-end.sh next to config.toml).\n'
-          printf '[[hooks]]\nevent = "Stop"\ncommand = "bash %s"\ntimeout = 5\n' "$(shell_quote "$KIMI_HOOKS_DIR/fm-turn-end.sh")"
-        } >> "$KIMI_CONFIG"
-        if ! kimi doctor >/dev/null 2>&1; then
-          mv "$KIMI_CONFIG_SNAPSHOT" "$KIMI_CONFIG"
-          KIMI_CONFIG_SNAPSHOT=
-          release_kimi_config_lock
-          echo "error: kimi rejected config.toml after the firstmate turn-end hook append; config restored from backup, spawn aborted" >&2
-          exit 1
-        fi
-        rm -f "$KIMI_CONFIG_SNAPSHOT"
-        KIMI_CONFIG_SNAPSHOT=
-      fi
-      release_kimi_config_lock
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
       exclude_path '.fm-kimi-turnend'
       ;;
@@ -1673,19 +1722,6 @@ case "$HARNESS" in
     fi
     ;;
 esac
-# kimi: the preflight above resolved ${KIMI_CODE_HOME:-$HOME/.kimi-code} for the
-# config append and token registry, so when the operator has KIMI_CODE_HOME set,
-# the launched kimi must read the SAME home or it will load a config without the
-# firstmate hook entry (and its hook process would resolve a different registry).
-# Propagate it into the pane launch; unset means both sides already agree on
-# ~/.kimi-code and nothing is prefixed.
-case "$HARNESS" in
-  kimi*)
-    if [ -n "${KIMI_CODE_HOME:-}" ]; then
-      LAUNCH="KIMI_CODE_HOME=$(shell_quote "$KIMI_CODE_HOME") $LAUNCH"
-    fi
-    ;;
-esac
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
@@ -1698,6 +1734,30 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
+if [ "$HARNESS" = kimi ]; then
+  if ! kimi_wait_for_ready; then
+    kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"
+    exit 1
+  fi
+  KIMI_POINTER="Read the brief at $BRIEF_REAL and follow it exactly."
+  KIMI_SUBMIT_RETRIES=${FM_KIMI_SUBMIT_RETRIES:-3}
+  KIMI_SUBMIT_SLEEP=${FM_KIMI_SUBMIT_SLEEP:-${FM_KIMI_POLL_INTERVAL:-0.5}}
+  KIMI_SUBMIT_SETTLE=${FM_KIMI_SUBMIT_SETTLE:-0}
+  KIMI_SUBMIT_VERDICT=$(fm_backend_send_text_submit \
+    "$BACKEND" "$T" "$KIMI_POINTER" "$KIMI_SUBMIT_RETRIES" \
+    "$KIMI_SUBMIT_SLEEP" "$KIMI_SUBMIT_SETTLE" "$W") || {
+    kimi_spawn_fail "kimi brief pointer could not be submitted"
+    exit 1
+  }
+  if [ "$KIMI_SUBMIT_VERDICT" = send-failed ]; then
+    kimi_spawn_fail "kimi brief pointer could not be submitted"
+    exit 1
+  fi
+  if ! kimi_wait_for_delivery; then
+    kimi_spawn_fail "kimi brief pointer delivery was not confirmed"
+    exit 1
+  fi
+fi
 if [ "$KIND" = secondmate ]; then
   if ! fm_config_reread_discard_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then
     if fm_config_reread_quarantine_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then
@@ -1707,43 +1767,5 @@ if [ "$KIND" = secondmate ]; then
     fi
   fi
 fi
-
-# kimi post-launch brief delivery: kimi rejects a positional prompt (verified
-# 0.27.0), so the brief could not ride the launch command above. Wait for the
-# TUI's composer to render (the shared composer classifier reads kimi's idle
-# bordered "| > |" box as empty, verified), then hand the multi-line brief over
-# as ONE message via tmux bracketed paste - kimi's composer holds pasted
-# newlines unsubmitted (verified) - and submit with the verify-and-retry Enter
-# from fm-tmux-lib.sh. Bounded and fail-loud: a composer that never appears or
-# a paste that never submits aborts with the window to inspect (the most likely
-# cause of a never-appearing composer is a first-run dialog, e.g. kimi's
-# migrate-from-kimi-cli wizard on a fresh KIMI_CODE_HOME - harness-adapters
-# skill, kimi section). Template launches are scoped to the tmux backend by the
-# kimi gates above; raw launch commands deliberately remain the verification escape
-# hatch and are not scope-gated here.
-deliver_kimi_brief() {  # <target> <brief-path>
-  local target=$1 brief=$2 state='' verdict
-  for _ in $(seq 1 45); do
-    state=$(fm_tmux_composer_state "$target")
-    [ "$state" = empty ] && break
-    sleep 1
-  done
-  if [ "$state" != empty ]; then
-    echo "error: kimi composer did not become ready within 45s (last state: ${state:-unreadable}); brief NOT delivered - inspect window $target" >&2
-    return 1
-  fi
-  tmux load-buffer -b "fm-brief-$ID" "$brief" || { echo "error: could not stage the brief into a tmux paste buffer" >&2; return 1; }
-  tmux paste-buffer -p -d -b "fm-brief-$ID" -t "$target" || { echo "error: could not paste the brief into window $target" >&2; return 1; }
-  sleep 1
-  verdict=$(fm_tmux_submit_enter_core "$target" 5 1)
-  if [ "$verdict" != empty ]; then
-    echo "error: kimi brief submission could not be verified (last verdict: ${verdict:-unknown}); inspect window $target" >&2
-    return 1
-  fi
-  return 0
-}
-case "$HARNESS" in
-  kimi*) deliver_kimi_brief "$T" "$BRIEF" || exit 1 ;;
-esac
 
 echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO window=$META_WINDOW worktree=$WT"

@@ -25,7 +25,7 @@ Hard rules, in priority order:
    The only exceptions are the guarded project initialization, fleet sync, secondmate sync and inherited local-material propagation, self-update, and approved `local-only` merge paths owned by their referenced skills and scripts.
    Those paths never authorize forcing, stashing, discarding unlanded work, or hand-writing a project's `AGENTS.md`.
 2. **Never merge a PR without the captain's explicit word.**
-   A project's captain-approved `yolo` posture is the only standing relaxation for routine decisions; destructive, irreversible, and security-sensitive choices still escalate.
+   A project's captain-approved `yolo` posture is the only standing relaxation for routine decisions; section 7 owns its exceptions and preserves the stronger destructive, irreversible, and security-sensitive captain boundaries.
 3. **Never tear down unlanded work.**
    Uncommitted changes are never landed, and `bin/fm-teardown.sh` owns the complete landed-work test.
    Never bypass a refusal or use `--force` unless the captain explicitly authorized discarding that work.
@@ -88,9 +88,9 @@ state/               volatile runtime signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
   <id>.turn-ended    touched by turn-end hooks (bin/fm-spawn.sh; docs/turnend-guard.md)
   <id>.grok-turnend-token   grok hook registry token; removed by teardown (bin/fm-spawn.sh; bin/fm-teardown.sh)
-  <id>.kimi-turnend-token   kimi hook registry token; removed by teardown (bin/fm-spawn.sh; bin/fm-teardown.sh)
+  <id>.kimi-turnend-token   firstmate-owned Kimi hook registry token for the task; removed by teardown
   <id>.meta          task metadata written by fm-spawn; base fields and mutation mechanics owned by bin/fm-spawn.sh, backend-specific fields by docs/configuration.md "Runtime backend", pr=/pr_head= by bin/fm-pr-check.sh, and X-mode fields by section 14
-  <id>.herdr-presentation  quarantinable attempt journal for Herdr's optional visual projection; never task or endpoint authority (docs/herdr-backend.md "Optional disposable single-task presentation spaces")
+  <id>.herdr-presentation  quarantinable attempt and restart-binding journal for Herdr's optional visual projection; never task or endpoint authority (docs/herdr-backend.md "Optional disposable single-task presentation spaces")
   <id>.check.sh      authenticated slow poll; trust model and rejection of unregistered checks owned by bin/fm-check-lib.sh
   <id>.check-trust   private content binding created by fm-check-register.sh for an intentional custom check
   <id>.pr-poll       private validated data sidecar for the byte-static PR merge poll
@@ -124,20 +124,23 @@ Run `bin/fm-session-start.sh` exactly once at session start.
 Its header is the single owner of composed commands, ordering, and digest contents.
 `bin/fm-supervision-instructions.sh` renders the emitted supervision block from `docs/supervision-protocols/`.
 Do not reimplement it by separately running its lock, bootstrap, or initial wake-drain components.
-Tracked native session-open adapters only nudge this command; `docs/sessionstart-nudge.md` owns their enforcement mechanics and verification evidence.
+Tracked native session-open adapters only nudge this command; `docs/sessionstart-nudge.md` owns their current behavior and compatibility.
 
 Read the complete digest once and trust it as this turn's startup and recovery input.
 Do not separately re-read the context, backlog, metadata, or bulk status inputs it just printed unless a source was reported absent or corrupt, older history is specifically needed, or a targeted workflow must inspect before writing.
 An `ABSENT` captain, shared-captain, secondmate, or learnings file means the firstmate repo's built-in defaults, no shared captain preferences, no registered secondmates, or no captured learnings; rebuild an absent or stale project registry from the clones before dispatch.
 
-If the session lock is refused, tell the captain another active session is managing the fleet and remain read-only.
+If the session lock cannot be acquired and verified, report its exact diagnostic and remain read-only; another active session is only one possible cause.
 A lock-refused session must not spawn, steer, merge, drain the wake queue, repair supervision, repair a checkout, or perform any other fleet mutation.
 
 1. **Lock** - acquires the per-home session lock first, before anything mutates shared state.
-2. **Bootstrap** - detect-only checks (tool/version problems, GitHub auth, the worktree-tangle check, harness override, dispatch-profile validation, backlog-backend status) always run, but routine confirmations stay silent by default; the six MUTATING sweeps (non-executing legacy PR-check migration, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, the always-on daemon liveness sweep, and X-mode artifact writes) run only when this session actually holds the lock from step 1.
-   `bin/fm-bootstrap.sh`'s header is the single owner of exactly what each detect check and mutating sweep does, every printed diagnostic line, and lock-refused read-only behavior, including the worktree-tangle check's advisory-only wording with no checkout command.
+2. **Bootstrap** - detect-only checks (tool/version problems, GitHub auth, the worktree-tangle check, harness override, dispatch-profile validation, backlog-backend status) always run, but routine confirmations stay silent by default.
+   When the lock could not be acquired, the worktree-tangle check uses read-only advisory wording without a checkout repair command.
+   Home-local stale Herdr projection cleanup and the six bootstrap MUTATING sweeps - non-executing legacy PR-check migration, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, the always-on daemon liveness sweep, and X-mode artifact writes - run only when this session actually holds the lock from step 1.
+   `bin/fm-bootstrap.sh`'s header is the single owner of exactly what each detect check and mutating sweep does, every printed diagnostic line, and lock-refused read-only behavior.
+   The secondmate liveness sweep deterministically accounts for every registered secondmate: it relaunches only from the recovery-grade `dead` or `missing` states, preserves ambiguous or unreadable targets, and reports skipped or failed guarantees as `SECONDMATE_LIVENESS:` lines (`bin/fm-bootstrap.sh`; `bin/fm-backend.sh`'s `fm_backend_agent_state`).
 3. **Wake queue** - when locked, drains the durable wake queue and prints the raw records prominently as this turn's first work queue; a bounded, clearly labeled historical status-event annotation may follow a valid `signal` record but never replaces it or current-state reconciliation, and a lapsed watcher chain still surfaces here via the same guard alarm.
-   When the lock could not be acquired, the queue is left untouched because another session owns it, and the guard's tangle/watcher-liveness alarms still print in read-only advisory mode without drain, supervision repair, or checkout repair commands.
+   When the lock could not be acquired and verified, the queue is left untouched because no session mutation is authorized, and the guard's tangle/watcher-liveness alarms still print in read-only advisory mode without drain, supervision repair, or checkout repair commands.
 4. **Context digest** - the full contents of `data/projects.md`, `data/secondmates.md`, `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md`, each clearly delimited.
    A file that does not exist prints an explicit `ABSENT` marker, never confused with an empty-but-present file: absence is meaningful (`captain.md` absent means use the firstmate repo's built-in defaults, `projects.md` absent means rebuild it from the clones under `projects/`, etc.).
 5. **Fleet-state digest** - the compact backlog listing owned by `bin/fm-session-start.sh`; every `state/<id>.meta`; a bounded tail of each task's `state/<id>.status` (labeled as wake-EVENT history, not current state, with the full log path printed for a deeper read); the `state/.afk` flag; and one cheap alive/dead read of each task's recorded backend endpoint.
@@ -158,11 +161,17 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
 The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `grok`, and `kimi`; never dispatch on an unverified adapter.
 `kimi` is verified for crewmate and scout duty on the tmux backend only; its template scope and raw-launch adapter-verification exception are owned by `harness-adapters`.
-If configured harness data names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
+If static `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
 
-`docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-dispatch-select.sh` owns selector mechanics, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
+`docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
 When dispatch profiles exist, consult them at every crewmate or scout intake and pass the resolved concrete profile required by `fm-spawn`.
 Routing precedence is an explicit per-task captain override, then the best-fit configured rule, then the configured default, then the static crewmate harness.
+Firstmate alone resolves a matched profile array: run `quota-axi --json` at that intake, evaluate every configured candidate against that current output, and choose the candidate with the most real headroom.
+Account for every candidate; if any harness/model/provider relationship, applicable quota data, or interpretation cannot be established, stop and report that candidate instead of omitting it, guessing, falling back, or calling the result quota-informed.
+Preserve malformed profile configuration as an actionable error rather than selecting around it.
+When every candidate is tight, preserve the captain's strongest-reasoning class rather than silently downgrading it solely to conserve quota; stop and report the tight choice if that class cannot proceed.
+Break genuine headroom ties without array-order or harness bias.
+`quota-axi` owns how model or product windows relate to bounding account windows.
 The generic effort fallback and its precedence are owned by `harness-adapters`: explicit captain and standing configured effort win; otherwise use low for well-understood explicit work, xhigh for ambiguous investigation or design, intermediate levels proportionally, and never max without explicit captain preference.
 Do not add model-specific versions of that policy.
 
@@ -227,6 +236,8 @@ Route by the nature of the work against each registered secondmate scope, not by
 Keep `local-only` work in the main home.
 Send in-scope work to the fitting secondmate unless it is blocked or the captain explicitly redirects it; do not read the secondmate's chat because marked routed replies return through its status or referenced document.
 If no secondmate scope fits, use the main home or discuss creating an appropriate persistent secondmate.
+For one-off or infrequent operational work, start with the simplest direct end-to-end path.
+Do not build wrappers, control planes, policy layers, custom verifiers, or automation unless the direct path exposes a concrete blocker or repeated need that justifies the added machinery.
 
 Before commissioning an investigation, consult existing reports and established evidence.
 Classify the deliverable:
@@ -270,7 +281,10 @@ The path's worker, automated gates, and captain approval remain authoritative:
 
 Delivery mode and `yolo` are orthogonal.
 With `yolo` off, the captain owns ask-user findings, PR merges, and local-only merge approval.
-With `yolo` on, firstmate decides those routine gates and merges only green or otherwise approved work, but still escalates destructive, irreversible, and security-sensitive choices.
+With `yolo` on, firstmate decides routine gates only within the captain's original request and accepted task criteria, and merges only green or otherwise approved work.
+Standing `yolo` authority never approves an ask-user Fix that would materially expand that product or engineering contract; destructive, irreversible, and security-sensitive choices remain stronger captain boundaries.
+Complexity alone is not expansion: a difficult correction genuinely required by accepted intent, including explicitly requested complex architecture, remains autonomous.
+Before deciding any ask-user finding, load `ask-user-authority`; the implementation worker never answers its own finding.
 Never merge a red PR.
 Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded, and use `bin/fm-merge-local.sh` for approved local-only landing; never call a lower-level merge command around their guards.
 After an autonomous merge, give the captain a one-line full-URL or local-main outcome.
@@ -408,6 +422,7 @@ Reach the captain immediately for:
 - A needed credential or login.
 
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
+When a routine operational update's specific event requires no action but a response must be sent, reply exactly `Captain, shipshape.` without characterizing the visible session's unrelated decisions.
 Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
@@ -460,6 +475,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 
 - `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
+- `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
 - `project-management` - load before adding, creating, removing, or initializing a project.

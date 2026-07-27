@@ -66,7 +66,7 @@ It also writes the required `.fm-secondmate-home` identity marker, which is giti
 `bin/fm-spawn.sh --secondmate` launches it through the secondmate harness path, resolving `config/secondmate-harness` -> `config/crew-harness` -> the primary's own harness unless an explicit per-spawn harness override is passed.
 
 `config/secondmate-harness` may also pin concrete model, effort, and codex-only harness-profile values for the secondmate agent in the same file rather than a new one.
-Its four-token format and axis-specific precedence are owned by [`docs/configuration.md`](../../docs/configuration.md#harness-support).
+Its four-token format and axis-specific precedence are owned by [`docs/configuration.md`](../../../docs/configuration.md#harness-support).
 For a `--secondmate` spawn, `bin/fm-spawn.sh` reads those pins only when the harness itself came from the secondmate config path for that spawn.
 An explicit per-spawn `--harness` flag, positional harness arg, or raw launch command starts clean on every pin unless the caller also passes the matching explicit axis flag.
 When the file's pins do apply, explicit `--model`, `--effort`, and `--harness-profile` flags always win for their respective axes.
