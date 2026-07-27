@@ -194,7 +194,8 @@ If a move response is lost after Herdr applied it, the current order may already
 After creation, the ordinary task metadata remains the sole operational endpoint record.
 Its `window=`, `herdr_session=`, `herdr_workspace_id=`, `herdr_tab_id=`, and `herdr_pane_id=` fields have exactly the same shape as the flag-off path.
 No projection ownership flag is added.
-The existing `treehouse get`, cwd polling, worktree validation, harness launch, and teardown return sequence is unchanged.
+The shared `treehouse get`, isolated-worktree validation, harness launch, and teardown return sequence applies to both paths.
+`bin/fm-spawn.sh`'s header owns the worktree-discovery polling contract.
 
 If the same spawning process fails after both creates returned complete exact IDs, its abort trap may close only the exact task and seeded panes returned by those calls.
 An ambiguous create result grants no cleanup authority, so Firstmate performs no lookup, adoption, reuse, or cleanup and leaves the journal quarantined.
