@@ -11,8 +11,17 @@
 # is left untouched and reported as a quantified, loud "STUCK: ... N commits behind
 # ... - needs attention" warning rather than a quiet drift. Nothing is ever forced,
 # stashed, or discarded.
-# Still skips (benignly) local-only/no-origin projects, missing remotes/branches,
-# and fetch failures.
+# A local-only project (no push, no PR, no merge for that delivery mode) still gets
+# this same read-only refresh whenever it has a real origin: "local-only" describes
+# how a finished change ships, not whether the clone is worth keeping current. Only
+# a local-only project with NO origin remote keeps the benign skip, alongside
+# projects missing a remote/branch and outright fetch failures.
+# A local-only project's origin fetch is bounded
+# (FM_FLEET_LOCAL_ONLY_FETCH_TIMEOUT_SECS, default 20s) so a slow or unreachable
+# origin - e.g. an SMB-mounted checkout - cannot stall the whole sweep or session
+# start; a fetch that exceeds the bound is reported as a loud "may be behind ...
+# could not be refreshed in time" line rather than a silent drift or a hang. Every
+# other mode's fetch stays unbounded, unchanged.
 # Pruning never deletes the checked-out branch or a branch that still has a
 # worktree, so it cannot discard unlanded work; set FM_FLEET_PRUNE=0 to disable it.
 # When the fetch fails on an orphaned .git/packed-refs.lock (left by a ref rewrite
@@ -53,6 +62,11 @@ if ! [[ "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS" =~ ^([0-9]+([.][0-9]*)?|[
   echo "fleet-sync: invalid packed-refs lock retry wait '$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS'; using 1s" >&2
   FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS=1
 fi
+
+# Bound, in seconds, on a local-only project's origin fetch (see the header
+# comment); 0 means unbounded, matching do_fetch's own convention.
+FLEET_LOCAL_ONLY_FETCH_TIMEOUT_SECS=${FM_FLEET_LOCAL_ONLY_FETCH_TIMEOUT_SECS:-20}
+case "$FLEET_LOCAL_ONLY_FETCH_TIMEOUT_SECS" in ''|*[!0-9]*) FLEET_LOCAL_ONLY_FETCH_TIMEOUT_SECS=20 ;; esac
 
 usage() {
   echo "usage: fm-fleet-sync.sh [<project-dir-or-name>]" >&2
@@ -148,21 +162,66 @@ packed_refs_lock_path() {
   esac
 }
 
-# Run `git -C "$PROJ" fetch origin --prune --quiet`, tolerating an orphaned
-# packed-refs.lock left by a killed ref rewrite. Sets FETCH_OUTPUT to the git
-# command's combined output and returns its exit status. On the packed-refs.lock
-# signature ONLY: retry up to FLEET_SYNC_PACKED_REFS_LOCK_RETRIES times (a
-# transient lock self-clears as the owning process exits), then - only if the lock
-# is provably stale per fm-lock-lib.sh (still present, mtime age past the
-# threshold, no lsof holder of the lock or the clone worktree $PROJ) - remove it
-# and retry once more. A live lock, an unprovable one, or any other failure keeps
-# today's behavior. Every wait, retry, and removal prints to stderr, and a
-# successful recovery also prints one "$label: recovered: ..." summary to stdout so
-# a session-start refresh (which discards fleet-sync stderr) still surfaces it.
+# One `git -C "$PROJ" fetch origin --prune --quiet` attempt, optionally bounded by
+# a timeout in seconds ($1, default 0 = unbounded, the historical behavior). Sets
+# FETCH_OUTPUT to the command's combined output and returns its exit status, or 124
+# (matching the coreutils `timeout` convention) when the bound is hit. A bounded
+# fetch runs in the background under a plain polling loop rather than the external
+# `timeout` command, which is not guaranteed present (e.g. stock macOS).
+# On timeout we signal the fetch and return immediately WITHOUT waiting for it to
+# actually exit: the motivating case is a hung network mount (e.g. SMB), where the
+# fetch can be stuck in uninterruptible I/O and may not die - or may take just as
+# long to die - as the read that is hanging it. Waiting there would silently turn
+# our bound back into an unbounded hang. The unreaped process is left for the
+# kernel to clean up whenever its I/O eventually unblocks or the mount recovers;
+# that is the accepted cost of a real bound.
+do_fetch() {
+  local timeout_secs=${1:-0} outfile pid waited rc
+  FETCH_TIMED_OUT=no
+  if [ "$timeout_secs" -le 0 ]; then
+    FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1)
+    return $?
+  fi
+  outfile=$(mktemp) || { FETCH_OUTPUT="mktemp failed"; return 1; }
+  git -C "$PROJ" fetch origin --prune --quiet >"$outfile" 2>&1 &
+  pid=$!
+  waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$timeout_secs" ]; then
+      kill "$pid" 2>/dev/null
+      FETCH_OUTPUT=$(cat "$outfile" 2>/dev/null)
+      rm -f "$outfile"
+      FETCH_TIMED_OUT=yes
+      return 124
+    fi
+    sleep 1
+    waited=$(( waited + 1 ))
+  done
+  wait "$pid"; rc=$?
+  FETCH_OUTPUT=$(cat "$outfile" 2>/dev/null)
+  rm -f "$outfile"
+  return "$rc"
+}
+
+# Run do_fetch (optionally bounded by a timeout in seconds, $1, forwarded to
+# do_fetch), tolerating an orphaned packed-refs.lock left by a killed ref rewrite.
+# Sets FETCH_OUTPUT to the git command's combined output and returns its exit
+# status, including 124 on a timeout - which is returned immediately, never
+# retried, since a slow origin is not the packed-refs.lock signature this retry
+# loop exists for. On the packed-refs.lock signature ONLY: retry up to
+# FLEET_SYNC_PACKED_REFS_LOCK_RETRIES times (a transient lock self-clears as the
+# owning process exits), then - only if the lock is provably stale per
+# fm-lock-lib.sh (still present, mtime age past the threshold, no lsof holder of
+# the lock or the clone worktree $PROJ) - remove it and retry once more. A live
+# lock, an unprovable one, or any other failure keeps today's behavior. Every wait,
+# retry, and removal prints to stderr, and a successful recovery also prints one
+# "$label: recovered: ..." summary to stdout so a session-start refresh (which
+# discards fleet-sync stderr) still surfaces it.
 fetch_with_packed_refs_lock_guard() {
-  local rc attempt=0 lock lock_desc
-  FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1); rc=$?
+  local rc attempt=0 lock lock_desc timeout_secs=${1:-0}
+  do_fetch "$timeout_secs"; rc=$?
   [ "$rc" -eq 0 ] && return 0
+  [ "$FETCH_TIMED_OUT" = yes ] && return "$rc"
   is_packed_refs_lock_error "$FETCH_OUTPUT" || return "$rc"
 
   lock=$(packed_refs_lock_path) || lock=""
@@ -171,7 +230,7 @@ fetch_with_packed_refs_lock_guard() {
     attempt=$(( attempt + 1 ))
     echo "$label: fetch blocked by packed-refs lock ($lock_desc); waiting ${FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS}s and retrying ($attempt/${FLEET_SYNC_PACKED_REFS_LOCK_RETRIES}) (owning process may be exiting)" >&2
     sleep "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS"
-    FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1); rc=$?
+    do_fetch "$timeout_secs"; rc=$?
     if [ "$rc" -eq 0 ]; then
       echo "$label: fetch succeeded on retry; packed-refs lock cleared on its own" >&2
       # One stdout summary so a session-start refresh (which discards fleet-sync
@@ -179,6 +238,7 @@ fetch_with_packed_refs_lock_guard() {
       echo "$label: recovered: packed-refs lock cleared on its own during retry"
       return 0
     fi
+    [ "$FETCH_TIMED_OUT" = yes ] && return "$rc"
     is_packed_refs_lock_error "$FETCH_OUTPUT" || return "$rc"
   done
 
@@ -195,7 +255,7 @@ fetch_with_packed_refs_lock_guard() {
         return "$rc"
       fi
       echo "$label: removed provably-stale packed-refs lock $lock (age >= ${FLEET_SYNC_PACKED_REFS_LOCK_AGE_SECS}s, no live holder) and retrying fetch" >&2
-      FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1); rc=$?
+      do_fetch "$timeout_secs"; rc=$?
       if [ "$rc" -eq 0 ]; then
         echo "$label: fetch succeeded after stale packed-refs lock cleanup" >&2
         echo "$label: recovered: removed a stale packed-refs lock (no live holder)"
@@ -303,21 +363,39 @@ sync_project() {
   fi
   mode_line=$("$FM_ROOT/bin/fm-project-mode.sh" "$label" 2>/dev/null || echo "no-mistakes off")
   mode=${mode_line%% *}
-  if [ "$mode" = "local-only" ]; then
-    echo "$label: skipped: local-only project"
-    return 0
-  fi
+  # local-only means firstmate must not push, open a PR, or merge for this
+  # project - it says nothing about whether the clone is worth reading current.
+  # Only a local-only project with no origin at all has nothing to refresh from,
+  # so that combination alone keeps the old benign skip; a local-only project WITH
+  # an origin falls through to the same guarded fetch and fast-forward every other
+  # mode gets, just with a bounded fetch (below) so a slow origin cannot stall the
+  # sweep.
   if ! git -C "$PROJ" remote get-url origin >/dev/null 2>&1; then
-    echo "$label: skipped: no origin remote"
+    if [ "$mode" = "local-only" ]; then
+      # Exact wording preserved: bootstrap's fleet_sync_relay_filtered_output
+      # pattern-matches this literal string to keep it silent.
+      echo "$label: skipped: local-only project"
+    else
+      echo "$label: skipped: no origin remote"
+    fi
     return 0
   fi
 
-  if ! fetch_with_packed_refs_lock_guard; then
-    reason="fetch failed"
-    if [ -n "$FETCH_OUTPUT" ]; then
-      reason="$reason: $(first_line "$FETCH_OUTPUT")"
+  fetch_timeout=0
+  [ "$mode" = "local-only" ] && fetch_timeout=$FLEET_LOCAL_ONLY_FETCH_TIMEOUT_SECS
+
+  if fetch_with_packed_refs_lock_guard "$fetch_timeout"; then
+    :
+  else
+    if [ "$FETCH_TIMED_OUT" = yes ]; then
+      echo "$label: skipped: fetch exceeded ${fetch_timeout}s bound - clone may be behind its origin and could not be refreshed in time"
+    else
+      reason="fetch failed"
+      if [ -n "$FETCH_OUTPUT" ]; then
+        reason="$reason: $(first_line "$FETCH_OUTPUT")"
+      fi
+      echo "$label: skipped: $reason"
     fi
-    echo "$label: skipped: $reason"
     return 0
   fi
 
