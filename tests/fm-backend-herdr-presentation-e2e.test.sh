@@ -726,6 +726,8 @@ ORDER_FAIL_META="$HOME_DIR/state/order-fail.meta"
 remember_meta_worktree "$ORDER_FAIL_META" >/dev/null
 ORDER_FAIL_WSID=$(grep '^herdr_workspace_id=' "$ORDER_FAIL_META" | cut -d= -f2-)
 ORDER_FAIL_PANE=$(grep '^herdr_pane_id=' "$ORDER_FAIL_META" | cut -d= -f2-)
+[ "$(grep '^version=' "$HOME_DIR/state/order-fail.herdr-presentation")" = version=2 ] \
+  || fail "workspace.move failure prevented publication of the exact live binding"
 FAIL_LIST=$(lab workspace list) || fail "could not inspect the move-failure fallback"
 [ "$(printf '%s' "$FAIL_LIST" | jq -r '.result.workspaces[-1].workspace_id')" = "$ORDER_FAIL_WSID" ] \
   || fail "workspace.move failure did not leave the safe worker in Herdr's default appended order"
