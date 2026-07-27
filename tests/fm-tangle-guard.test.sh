@@ -203,15 +203,21 @@ test_spawn_isolation_abort() {
   mkdir -p "$TMP_ROOT/spawn-notgit" "$proj/sub"
 
   # Abort: the pane resolves to a plain non-git directory (not a worktree at all).
-  out=$(run_spawn "$home" abort-notgit-dd4 "$proj" "$TMP_ROOT/spawn-notgit" "$fakebin"); status=$?
+  # This candidate never passes spawn_path_is_isolated_worktree, so the poll
+  # never latches onto it and instead runs out its window; bound the window so
+  # the fixture still exercises the abort quickly.
+  out=$(FM_SPAWN_WORKTREE_POLL_ATTEMPTS=2 run_spawn "$home" abort-notgit-dd4 "$proj" "$TMP_ROOT/spawn-notgit" "$fakebin"); status=$?
   expect_code 1 "$status" "spawn into a non-worktree dir should abort"
-  assert_contains "$out" "did not yield an isolated worktree" "non-worktree spawn lacked the isolation error"
+  assert_contains "$out" "without ever observing a valid isolated worktree" "non-worktree spawn lacked the poll-timeout error"
   assert_absent "$home/state/abort-notgit-dd4.meta" "aborted spawn must not record meta"
 
   # Abort: the pane resolves INTO the primary checkout (a subdir of PROJ_ABS).
-  out=$(run_spawn "$home" abort-primary-ee5 "$proj" "$proj/sub" "$fakebin"); status=$?
+  # Same reasoning: a subdir of the primary checkout's own repo resolves to the
+  # primary as its worktree top-level, so it never satisfies the isolation
+  # check either and only times out.
+  out=$(FM_SPAWN_WORKTREE_POLL_ATTEMPTS=2 run_spawn "$home" abort-primary-ee5 "$proj" "$proj/sub" "$fakebin"); status=$?
   expect_code 1 "$status" "spawn landing inside the primary checkout should abort"
-  assert_contains "$out" "did not yield an isolated worktree" "primary-checkout spawn lacked the isolation error"
+  assert_contains "$out" "without ever observing a valid isolated worktree" "primary-checkout spawn lacked the poll-timeout error"
 
   # Proceed: the pane resolves to a genuine, isolated worktree.
   out=$(run_spawn "$home" ok-isolated-ff6 "$proj" "$TMP_ROOT/spawn-wt" "$fakebin"); status=$?
