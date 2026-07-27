@@ -2,7 +2,7 @@
 # Install or remove Firstmate's guarded Kimi crew turn-end hook.
 #
 # This command is the sole owner of the text-level edit to
-# $HOME/.kimi-code/config.toml. It validates the existing TOML but never
+# ${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml. It validates the existing TOML but never
 # serializes it: install adds or replaces one marker-delimited Firstmate region,
 # and remove excises only that region. Missing, malformed, symlinked, partially
 # marked, or otherwise surprising config is refused without a config write.
@@ -10,7 +10,7 @@
 # The installed Stop hook always exits 0 and stays silent. It reads cwd from the
 # hook payload, checks for a .fm-kimi-turnend pointer before registry work, and
 # touches a task turn-end marker only when the pointer names a Firstmate-created
-# token in $HOME/.kimi-code/fm-turn-end.d/.
+# token in ${KIMI_CODE_HOME:-$HOME/.kimi-code}/fm-turn-end.d/.
 #
 # Usage:
 #   fm-kimi-turnend-hook.sh install
@@ -29,8 +29,8 @@ case "${1:-}" in
     ;;
 esac
 
-if [ -z "${HOME:-}" ]; then
-  printf 'fm-kimi-turnend-hook: refused: HOME is unset.\n' >&2
+if [ -z "${KIMI_CODE_HOME:-}" ] && [ -z "${HOME:-}" ]; then
+  printf 'fm-kimi-turnend-hook: refused: KIMI_CODE_HOME and HOME are unset.\n' >&2
   exit 1
 fi
 if ! command -v python3 >/dev/null 2>&1; then
@@ -42,7 +42,8 @@ if [ "$ACTION" = install ] && ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-python3 - "$ACTION" "$HOME/.kimi-code" <<'PY'
+KIMI_HOME="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+python3 - "$ACTION" "$KIMI_HOME" <<'PY'
 import os
 import re
 import shutil
@@ -87,8 +88,12 @@ IFS= read -r -n 256 first < "$pointer" 2>/dev/null || [ -n "$first" ] || exit 0
 case "$first" in token=*) token=${first#token=} ;; *) exit 0 ;; esac
 case "$token" in fm.????????????) : ;; *) exit 0 ;; esac
 case "$token" in *[!A-Za-z0-9._-]*) exit 0 ;; esac
-auth_dir=${HOME:-}/.kimi-code/fm-turn-end.d
-[ -n "${HOME:-}" ] || exit 0
+kimi_home=${KIMI_CODE_HOME:-}
+if [ -z "$kimi_home" ]; then
+  [ -n "${HOME:-}" ] || exit 0
+  kimi_home=$HOME/.kimi-code
+fi
+auth_dir=$kimi_home/fm-turn-end.d
 target=$(cat "$auth_dir/$token" 2>/dev/null) || exit 0
 case "$target" in /*.turn-ended) : ;; *) exit 0 ;; esac
 touch -- "$target" 2>/dev/null || true
@@ -162,7 +167,7 @@ def block(marker: bytes) -> bytes:
             b"[[hooks]]",
             b'event = "Stop"',
             b'matcher = "^$"',
-            b'command = "bash \\"$HOME/.kimi-code/fm-turn-end.sh\\" >/dev/null 2>&1 || true"',
+            b'command = "bash \\"${KIMI_CODE_HOME:-$HOME/.kimi-code}/fm-turn-end.sh\\" >/dev/null 2>&1 || true"',
             b"timeout = 1",
             END,
             b"",

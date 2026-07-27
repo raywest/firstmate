@@ -205,7 +205,7 @@ test_kimi_launch_then_send_is_verified() {
   assert_contains "$out" "spawned $id harness=kimi" "kimi spawn did not report success"
 
   launch=$(cat "$CASE_DIR/launch.log")
-  [ "$launch" = "'$FAKEBIN_DIR/kimi' --model 'kimi-code/k3' --auto" ] \
+  [ "$launch" = "KIMI_CODE_HOME='$HOME_DIR/.kimi-code' '$FAKEBIN_DIR/kimi' --model 'kimi-code/k3' --auto" ] \
     || fail "kimi launch did not use the absolute binary, model, and --auto only: $launch"
   assert_not_contains "$launch" "--effort" "kimi launch emitted a nonexistent effort flag"
   assert_not_contains "$launch" "turn-ended" "kimi launch embedded a turn-end path"
@@ -567,6 +567,54 @@ test_kimi_teardown_removes_pointer_and_registry_token() {
   pass "fm-teardown: Kimi task pointer and registry token are removed"
 }
 
+test_kimi_custom_home_is_used_end_to_end() {
+  local id rec out rc launch custom_home hook target token
+  id=kimi-custom-home-z9
+  rec=$(make_spawn_case custom-home "$id")
+  read_spawn_record "$rec"
+  custom_home="$CASE_DIR/custom-kimi-home"
+  mkdir -p "$custom_home"
+  write_kimi_model_config "$custom_home/config.toml" '"low", "high", "max"'
+
+  out=$(KIMI_CODE_HOME="$custom_home" run_spawn \
+    "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --model kimi-code/k3 --effort high)
+  rc=$?
+  expect_code 0 "$rc" "Kimi custom-home spawn should succeed: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  assert_contains "$launch" "KIMI_CODE_HOME='$custom_home'" \
+    "Kimi launch did not preserve the resolved custom home"
+  assert_contains "$launch" "KIMI_MODEL_THINKING_EFFORT='high'" \
+    "Kimi custom-home model config did not drive effort selection"
+  assert_grep 'BEGIN FIRSTMATE KIMI TURN-END HOOK' "$custom_home/config.toml" \
+    "Kimi custom-home config did not receive the guarded hook region"
+  assert_not_contains "$(cat "$HOME_DIR/.kimi-code/config.toml")" "FIRSTMATE KIMI TURN-END HOOK" \
+    "Kimi custom-home spawn changed the default-home config"
+
+  hook="$custom_home/fm-turn-end.sh"
+  target="$HOME_DIR/state/$id.turn-ended"
+  token=$(sed -n 's/^token=//p' "$WT_DIR/.fm-kimi-turnend")
+  assert_present "$custom_home/fm-turn-end.d/$token" \
+    "Kimi custom-home registry token is missing"
+  out=$(printf '{"hook_event_name":"Stop","session_id":"crew","cwd":"%s","stop_hook_active":false}\n' "$WT_DIR" \
+    | HOME="$HOME_DIR" KIMI_CODE_HOME="$custom_home" bash "$hook" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "Kimi custom-home hook invocation did not exit zero"
+  [ -z "$out" ] || fail "Kimi custom-home hook printed output: $out"
+  assert_present "$target" "Kimi custom-home hook did not touch the task marker"
+
+  HOME="$HOME_DIR" KIMI_CODE_HOME="$custom_home" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
+    FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+    FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
+    FM_SPAWN_NO_GUARD=1 PATH="$FAKEBIN_DIR:$BASE_PATH" \
+    "$TEARDOWN" "$id" --force >/dev/null 2>&1 || fail "Kimi custom-home teardown failed"
+  assert_absent "$custom_home/fm-turn-end.d/$token" \
+    "Kimi custom-home registry token survived teardown"
+  assert_absent "$WT_DIR/.fm-kimi-turnend" \
+    "Kimi custom-home pointer survived teardown"
+  pass "Kimi custom home drives config, launch, hook registry, and teardown"
+}
+
 test_kimi_falls_back_to_expanded_home_binary() {
   local id rec out rc launch fallback
   id=kimi-fallback-z4
@@ -580,7 +628,7 @@ test_kimi_falls_back_to_expanded_home_binary() {
   rc=$?
   expect_code 0 "$rc" "Kimi HOME fallback spawn should succeed"
   launch=$(cat "$CASE_DIR/launch.log")
-  [ "$launch" = "'$fallback' --auto" ] \
+  [ "$launch" = "KIMI_CODE_HOME='$HOME_DIR/.kimi-code' '$fallback' --auto" ] \
     || fail "Kimi fallback did not expand HOME into an absolute executable: $launch"
   pass "fm-spawn: Kimi fallback expands the active HOME"
 }
@@ -834,6 +882,7 @@ test_kimi_effort_falls_back_without_a_models_block
 test_kimi_hook_is_silent_and_requires_registered_workspace_token
 test_kimi_spawn_refuses_unsafe_global_config_before_pane_creation
 test_kimi_teardown_removes_pointer_and_registry_token
+test_kimi_custom_home_is_used_end_to_end
 test_kimi_falls_back_to_expanded_home_binary
 test_kimi_missing_binary_refuses_before_pane_creation
 test_kimi_secondmate_spawn_is_refused

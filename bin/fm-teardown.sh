@@ -204,7 +204,7 @@ remove_kimi_turnend_auth() {
   local state_dir=$1 id=$2 token hooks_dir
   token=$(cat "$state_dir/$id.kimi-turnend-token" 2>/dev/null || true)
   case "$token" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
-  hooks_dir="$HOME/.kimi-code/fm-turn-end.d"
+  hooks_dir="${KIMI_CODE_HOME:-$HOME/.kimi-code}/fm-turn-end.d"
   rm -f "$hooks_dir/$token"
 }
 
@@ -1122,20 +1122,39 @@ HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
 HERDR_PRESENTATION_RETIRE_CANDIDATE=0
 HERDR_PRESENTATION_SESSION=
 HERDR_PRESENTATION_PANE=
+HERDR_PRESENTATION_CORRELATION=none
 if [ "$BACKEND" = herdr ] \
    && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
-  fm_backend_source herdr || true
   HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
   HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
   HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
-  if [ -n "$HERDR_PRESENTATION_SESSION" ] \
+  if fm_backend_source herdr; then
+    if fm_backend_herdr_projection_endpoint_matches_journal \
+      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
+      "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
+      HERDR_PRESENTATION_CORRELATION=match
+    else
+      herdr_correlation_rc=$?
+      case "$herdr_correlation_rc" in
+        1) HERDR_PRESENTATION_CORRELATION=authoritative-mismatch ;;
+        *) HERDR_PRESENTATION_CORRELATION=indeterminate ;;
+      esac
+    fi
+  else
+    HERDR_PRESENTATION_CORRELATION=indeterminate
+  fi
+  if [ "$HERDR_PRESENTATION_CORRELATION" = indeterminate ]; then
+    echo "error: herdr presentation correlation is indeterminate; refusing teardown before worktree return can trigger a focus-unsafe pane close" >&2
+    exit 1
+  fi
+  if [ "$HERDR_PRESENTATION_CORRELATION" = match ] \
+     && [ -n "$HERDR_PRESENTATION_SESSION" ] \
      && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
      && [ -n "$HERDR_PRESENTATION_PANE" ] \
-     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
-     && fm_backend_herdr_projection_endpoint_matches_journal \
-       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
-       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
+     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ]; then
     HERDR_PRESENTATION_RETIRE_CANDIDATE=1
+  elif [ "$HERDR_PRESENTATION_CORRELATION" = match ]; then
+    HERDR_PRESENTATION_CORRELATION=authoritative-mismatch
   fi
 fi
 

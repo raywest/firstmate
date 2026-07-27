@@ -1283,6 +1283,10 @@ set -u
 printf '%s\n' "$*" >> "${FM_FAKE_HERDR_LOG:?}"
 case "${1:-} ${2:-}" in
   "workspace list")
+    case "${FM_FAKE_HERDR_WORKSPACE_LIST_MODE:-valid}" in
+      failed) exit 1 ;;
+      malformed) printf '%s\n' 'not-json'; exit 0 ;;
+    esac
     if [ -e "${FM_FAKE_HERDR_RESTORED:?}" ]; then
       printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","label":"2ndmate-alpha","focused":false}]}}'
     elif [ -e "${FM_FAKE_HERDR_CLOSED:?}" ]; then
@@ -1393,6 +1397,40 @@ test_herdr_projection_teardown_refuses_worktree_return_when_close_unconfirmed() 
   pass "herdr projection teardown retains task state and refuses worktree return when exact close is unconfirmed"
 }
 
+assert_herdr_indeterminate_correlation_refuses() {  # <name> <workspace-list-mode> [malformed-journal]
+  local name=$1 mode=$2 malformed_journal=${3:-0} case_dir log closed restored returned
+  case_dir=$(make_case "$name")
+  write_meta "$case_dir" local-only ship
+  configure_herdr_projection_teardown_case "$case_dir"
+  if [ "$malformed_journal" = 1 ]; then
+    printf '%s\n' 'unexpected=field' >> "$case_dir/state/task-x1.herdr-presentation"
+  fi
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"
+  returned="$case_dir/treehouse-returned"; : > "$log"
+
+  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
+    FM_FAKE_TREEHOUSE_RETURNED="$returned" FM_FAKE_HERDR_WORKSPACE_LIST_MODE="$mode" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    && fail "$name: teardown should fail closed on indeterminate correlation"
+  assert_grep "correlation is indeterminate" "$case_dir/stderr" \
+    "$name: teardown did not report indeterminate Herdr correlation"
+  assert_present "$case_dir/state/task-x1.herdr-presentation" \
+    "$name: indeterminate correlation incorrectly retired the presentation journal"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "$name: indeterminate correlation incorrectly retired task metadata"
+  assert_absent "$returned" \
+    "$name: indeterminate correlation allowed a focus-unsafe worktree return"
+  assert_not_contains "$(cat "$log")" "pane close" \
+    "$name: indeterminate correlation attempted an exact-pane close"
+}
+
+test_herdr_projection_teardown_refuses_indeterminate_correlation() {
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-malformed-journal valid 1
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-list-failed failed
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-list-malformed malformed
+  pass "herdr projection teardown refuses worktree return when correlation is indeterminate"
+}
+
 test_local_only_fork_remote_allows
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
@@ -1404,6 +1442,7 @@ test_local_only_force_overrides_unpushed
 test_herdr_teardown_clears_escalation_marker
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_refuses_worktree_return_when_close_unconfirmed
+test_herdr_projection_teardown_refuses_indeterminate_correlation
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows

@@ -119,7 +119,8 @@
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
-# Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
+# Kimi uses one surgically installed Firstmate region in
+# ${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml,
 # a firstmate-owned global hook and registry, and a gitignored per-task pointer.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
@@ -553,6 +554,11 @@ if [ "$LAUNCH_SOURCE" = template ]; then
   esac
 fi
 
+KIMI_CODE_HOME_RESOLVED=
+case "$HARNESS" in
+  kimi*) KIMI_CODE_HOME_RESOLVED="${KIMI_CODE_HOME:-$HOME/.kimi-code}" ;;
+esac
+
 # config/secondmate-harness may carry optional model, effort, and harness-profile
 # tokens alongside the harness ("<harness> [<model>] [<effort>] [<harness_profile>]").
 # They apply only when this is a --secondmate spawn and no explicit per-spawn
@@ -788,7 +794,7 @@ effort_flag_for_harness() {
       local mapped resolved_alias kimi_config
       mapped=$(kimi_thinking_effort_for_profile "$effort")
       [ -n "$mapped" ] || return 0
-      kimi_config="${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml"
+      kimi_config="$KIMI_CODE_HOME_RESOLVED/config.toml"
       resolved_alias=$MODEL
       if [ -z "$resolved_alias" ] || [ "$resolved_alias" = default ]; then
         resolved_alias=$(kimi_default_model_alias "$kimi_config")
@@ -821,7 +827,7 @@ case "$LAUNCH" in
     KIMI_BIN=$(resolve_kimi_binary) || exit 1
     LAUNCH=${LAUNCH//__KIMIBIN__/$(shell_quote "$KIMI_BIN")}
     if [ "$KIND" != secondmate ]; then
-      "$FM_ROOT/bin/fm-kimi-turnend-hook.sh" install || {
+      KIMI_CODE_HOME="$KIMI_CODE_HOME_RESOLVED" "$FM_ROOT/bin/fm-kimi-turnend-hook.sh" install || {
         echo "error: refusing Kimi spawn because the global turn-end hook could not be installed safely" >&2
         exit 1
       }
@@ -1672,7 +1678,7 @@ EOF
       # task's token pointer and the token resolves through Firstmate's private
       # registry. The installer above owns the format-preserving config edit and
       # the always-zero, silent hook script.
-      KIMI_AUTH_DIR="$HOME/.kimi-code/fm-turn-end.d"
+      KIMI_AUTH_DIR="$KIMI_CODE_HOME_RESOLVED/fm-turn-end.d"
       old_umask=$(umask)
       umask 077
       auth_file=$(mktemp "$KIMI_AUTH_DIR/fm.XXXXXXXXXXXX")
@@ -1709,6 +1715,9 @@ LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
+if [ "$LAUNCH_SOURCE" = template ] && [ "$HARNESS" = kimi ]; then
+  LAUNCH="KIMI_CODE_HOME=$(shell_quote "$KIMI_CODE_HOME_RESOLVED") $LAUNCH"
+fi
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"

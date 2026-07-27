@@ -1632,14 +1632,32 @@ EOF
 # teardown.
 # Exactly one token-bearing workspace must match the endpoint workspace.
 # This verdict never authorizes a Herdr mutation.
+# Returns 0 for a match, 1 for an authoritative mismatch, and 2 when
+# correlation cannot be determined from trusted inputs.
 fm_backend_herdr_projection_endpoint_matches_journal() {  # <session> <workspace-id> <journal> <task-id>
-  local session=$1 workspace_id=$2 journal=$3 id=$4 token list matches
-  token=$(fm_backend_herdr_projection_journal_token "$journal" "$id") || return 1
-  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 1
-  printf '%s' "$list" | jq -e '(.result.workspaces | type) == "array"' >/dev/null 2>&1 || return 1
-  matches=$(printf '%s' "$list" | jq -r --arg suffix " · p:$token" \
-    '.result.workspaces[]? | select((.label | type) == "string" and (.label | endswith($suffix))) | .workspace_id' 2>/dev/null)
-  [ "$matches" = "$workspace_id" ]
+  local session=$1 workspace_id=$2 journal=$3 id=$4 token list verdict
+  token=$(fm_backend_herdr_projection_journal_token "$journal" "$id") || return 2
+  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 2
+  verdict=$(printf '%s' "$list" | jq -r --arg suffix " · p:$token" --arg workspace "$workspace_id" '
+    (.result.workspaces // null) as $spaces
+    | if ($spaces | type) != "array" then
+        error("workspaces is not an array")
+      else
+        [$spaces[]
+          | select((.label | type) == "string" and (.label | endswith($suffix)))
+          | if ((.workspace_id | type) == "string" and (.workspace_id | length) > 0)
+            then .workspace_id
+            else error("matching workspace has an invalid id")
+            end
+        ] as $matches
+        | if $matches == [$workspace] then "match" else "mismatch" end
+      end
+  ' 2>/dev/null) || return 2
+  case "$verdict" in
+    match) return 0 ;;
+    mismatch) return 1 ;;
+    *) return 2 ;;
+  esac
 }
 
 # fm_backend_herdr_parse_target: split "<session>:<pane_id>" (pane_id itself
