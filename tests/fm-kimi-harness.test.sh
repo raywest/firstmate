@@ -181,9 +181,15 @@ run_spawn() {
     FM_FAKE_KIMI_SWALLOW_FIRST="${FM_FAKE_KIMI_SWALLOW_FIRST:-no}" \
     FM_FAKE_TMUX_CALL_LOG="$case_dir/tmux-calls.log" \
     FM_FAKE_BRIEF_REAL="$(cd "$home/data/$id" && pwd -P)/brief.md" \
+    FM_TEST_KIMI_RAW="${FM_TEST_KIMI_RAW:-0}" \
+    KIMI_CODE_HOME="${KIMI_CODE_HOME:-}" \
     FM_KIMI_READY_POLLS=2 FM_KIMI_DELIVERY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
-    PATH="$fakebin:$BASE_PATH" \
-    "$SPAWN" "$id" "$proj" --harness kimi "$@" 2>&1
+    PATH="$fakebin:$BASE_PATH" bash -c '
+      if [ "${FM_TEST_KIMI_RAW:-0}" = 1 ]; then
+        exec "$1" "$2" "$3" "kimi --auto" "${@:4}"
+      fi
+      exec "$1" "$2" "$3" --harness kimi "${@:4}"
+    ' _ "$SPAWN" "$id" "$proj" "$@" 2>&1
 }
 
 read_spawn_record() {
@@ -218,6 +224,7 @@ test_kimi_launch_then_send_is_verified() {
   meta="$HOME_DIR/state/$id.meta"
   assert_grep 'model=kimi-code/k3' "$meta" "kimi meta lost the requested model"
   assert_grep 'effort=high' "$meta" "kimi meta did not retain the unsupported effort axis"
+  assert_grep "kimi_home=$HOME_DIR/.kimi-code" "$meta" "kimi meta did not retain its resolved home"
   assert_grep 'BEGIN FIRSTMATE KIMI TURN-END HOOK' "$HOME_DIR/.kimi-code/config.toml" \
     "kimi spawn did not install its guarded global hook region"
   assert_grep 'token=' "$WT_DIR/.fm-kimi-turnend" "kimi spawn did not write its token pointer"
@@ -555,6 +562,8 @@ test_kimi_teardown_removes_pointer_and_registry_token() {
   rc=$?
   expect_code 0 "$rc" "Kimi spawn should succeed before teardown"
   token=$(sed -n 's/^token=//p' "$WT_DIR/.fm-kimi-turnend")
+  sed -i.bak '/^kimi_home=/d' "$HOME_DIR/state/$id.meta"
+  rm -f "$HOME_DIR/state/$id.meta.bak"
 
   HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
     FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
@@ -568,7 +577,7 @@ test_kimi_teardown_removes_pointer_and_registry_token() {
 }
 
 test_kimi_custom_home_is_used_end_to_end() {
-  local id rec out rc launch custom_home hook target token
+  local id rec out rc launch custom_home teardown_home hook target token
   id=kimi-custom-home-z9
   rec=$(make_spawn_case custom-home "$id")
   read_spawn_record "$rec"
@@ -588,6 +597,8 @@ test_kimi_custom_home_is_used_end_to_end() {
     "Kimi custom-home model config did not drive effort selection"
   assert_grep 'BEGIN FIRSTMATE KIMI TURN-END HOOK' "$custom_home/config.toml" \
     "Kimi custom-home config did not receive the guarded hook region"
+  assert_grep "kimi_home=$custom_home" "$HOME_DIR/state/$id.meta" \
+    "Kimi custom-home spawn did not persist its resolved home"
   assert_not_contains "$(cat "$HOME_DIR/.kimi-code/config.toml")" "FIRSTMATE KIMI TURN-END HOOK" \
     "Kimi custom-home spawn changed the default-home config"
 
@@ -603,16 +614,48 @@ test_kimi_custom_home_is_used_end_to_end() {
   [ -z "$out" ] || fail "Kimi custom-home hook printed output: $out"
   assert_present "$target" "Kimi custom-home hook did not touch the task marker"
 
-  HOME="$HOME_DIR" KIMI_CODE_HOME="$custom_home" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
+  teardown_home="$CASE_DIR/teardown-kimi-home"
+  mkdir -p "$teardown_home/fm-turn-end.d"
+  printf '%s\n' "$target" > "$teardown_home/fm-turn-end.d/$token"
+  HOME="$HOME_DIR" KIMI_CODE_HOME="$teardown_home" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
     FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
     FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
     FM_SPAWN_NO_GUARD=1 PATH="$FAKEBIN_DIR:$BASE_PATH" \
     "$TEARDOWN" "$id" --force >/dev/null 2>&1 || fail "Kimi custom-home teardown failed"
   assert_absent "$custom_home/fm-turn-end.d/$token" \
     "Kimi custom-home registry token survived teardown"
+  assert_present "$teardown_home/fm-turn-end.d/$token" \
+    "Kimi teardown used its ambient environment instead of the recorded home"
   assert_absent "$WT_DIR/.fm-kimi-turnend" \
     "Kimi custom-home pointer survived teardown"
   pass "Kimi custom home drives config, launch, hook registry, and teardown"
+}
+
+test_kimi_raw_launch_skips_managed_turnend() {
+  local id rec out rc launch
+  id=kimi-raw-z0
+  rec=$(make_spawn_case raw "$id")
+  read_spawn_record "$rec"
+
+  out=$(FM_TEST_KIMI_RAW=1 run_spawn \
+    "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
+  rc=$?
+  expect_code 0 "$rc" "raw Kimi adapter-verification launch should succeed: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  [ "$launch" = "kimi --auto" ] || fail "raw Kimi launch command changed: $launch"
+  assert_absent "$HOME_DIR/.kimi-code/fm-turn-end.sh" \
+    "raw Kimi launch installed the managed hook"
+  assert_absent "$HOME_DIR/.kimi-code/fm-turn-end.d" \
+    "raw Kimi launch created the managed registry"
+  assert_not_contains "$(cat "$HOME_DIR/.kimi-code/config.toml")" "FIRSTMATE KIMI TURN-END HOOK" \
+    "raw Kimi launch changed the global hook config"
+  assert_absent "$WT_DIR/.fm-kimi-turnend" \
+    "raw Kimi launch created a managed turn-end pointer"
+  assert_absent "$HOME_DIR/state/$id.kimi-turnend-token" \
+    "raw Kimi launch recorded a managed registry token"
+  assert_grep "kimi_home=$HOME_DIR/.kimi-code" "$HOME_DIR/state/$id.meta" \
+    "raw Kimi metadata did not retain its resolved home"
+  pass "raw Kimi launches skip managed turn-end integration"
 }
 
 test_kimi_falls_back_to_expanded_home_binary() {
@@ -883,6 +926,7 @@ test_kimi_hook_is_silent_and_requires_registered_workspace_token
 test_kimi_spawn_refuses_unsafe_global_config_before_pane_creation
 test_kimi_teardown_removes_pointer_and_registry_token
 test_kimi_custom_home_is_used_end_to_end
+test_kimi_raw_launch_skips_managed_turnend
 test_kimi_falls_back_to_expanded_home_binary
 test_kimi_missing_binary_refuses_before_pane_creation
 test_kimi_secondmate_spawn_is_refused

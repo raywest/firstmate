@@ -119,7 +119,7 @@
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
-# Kimi uses one surgically installed Firstmate region in
+# Kimi template launches use one surgically installed Firstmate region in
 # ${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml,
 # a firstmate-owned global hook and registry, and a gitignored per-task pointer.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
@@ -129,7 +129,7 @@
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
 # Task metadata base contract: write_task_meta replaces window=, worktree=,
 # project=, harness=, kind=, mode=, yolo=, tasktmp=, model=, effort=, and
-# harness_profile=; secondmate adds home= and projects=.
+# harness_profile=; Kimi adds kimi_home=; secondmate adds home= and projects=.
 # docs/configuration.md "Runtime backend" owns backend fields,
 # while fm-pr-check.sh and fm-x-link.sh own their respective appended fields.
 set -eu
@@ -1541,6 +1541,9 @@ write_task_meta() {
     echo "model=${MODEL:-default}"
     echo "effort=${EFFORT:-default}"
     echo "harness_profile=${HARNESS_PROFILE:-default}"
+    case "$HARNESS" in
+      kimi*) echo "kimi_home=$KIMI_CODE_HOME_RESOLVED" ;;
+    esac
     [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
     if [ "$BACKEND" = herdr ]; then
       echo "herdr_session=$HERDR_SES"
@@ -1674,19 +1677,24 @@ EOF
       exclude_path '.fm-grok-turnend'
       ;;
     kimi*)
-      # Kimi's Stop hook is global, but it is inert unless cwd contains this
-      # task's token pointer and the token resolves through Firstmate's private
-      # registry. The installer above owns the format-preserving config edit and
-      # the always-zero, silent hook script.
-      KIMI_AUTH_DIR="$KIMI_CODE_HOME_RESOLVED/fm-turn-end.d"
-      old_umask=$(umask)
-      umask 077
-      auth_file=$(mktemp "$KIMI_AUTH_DIR/fm.XXXXXXXXXXXX")
-      umask "$old_umask"
-      printf '%s\n' "$TURNEND" > "$auth_file"
-      printf '%s\n' "${auth_file##*/}" > "$STATE/$ID.kimi-turnend-token"
-      printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
-      exclude_path '.fm-kimi-turnend'
+      if [ "$LAUNCH_SOURCE" = raw ]; then
+        # Raw supervised adapter-verification launches intentionally lack a turn-end marker and use ordinary stale-pane detection.
+        :
+      else
+        # Kimi's Stop hook is global, but it is inert unless cwd contains this
+        # task's token pointer and the token resolves through Firstmate's private
+        # registry. The installer above owns the format-preserving config edit and
+        # the always-zero, silent hook script.
+        KIMI_AUTH_DIR="$KIMI_CODE_HOME_RESOLVED/fm-turn-end.d"
+        old_umask=$(umask)
+        umask 077
+        auth_file=$(mktemp "$KIMI_AUTH_DIR/fm.XXXXXXXXXXXX")
+        umask "$old_umask"
+        printf '%s\n' "$TURNEND" > "$auth_file"
+        printf '%s\n' "${auth_file##*/}" > "$STATE/$ID.kimi-turnend-token"
+        printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
+        exclude_path '.fm-kimi-turnend'
+      fi
       ;;
   esac
 fi

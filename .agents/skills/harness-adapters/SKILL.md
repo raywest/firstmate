@@ -411,5 +411,6 @@ A model-alias approach (two `config.toml` aliases pointing at the same underlyin
 [`docs/turnend-guard.md`](../../../docs/turnend-guard.md) owns Kimi's verified global hook surface and captain-approved crew wake integration.
 `fm-spawn.sh` installs one marker-delimited Firstmate entry in `${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml`, one silent always-zero hook script, and one private token registry under the same resolved Kimi home.
 Each Kimi crew worktree receives a gitignored `.fm-kimi-turnend` token pointer, and the global hook touches that task's `state/<id>.turn-ended` only when the Stop payload's `cwd`, pointer, and registry entry all agree.
+Raw supervised adapter-verification launches skip that managed turn-end integration and use ordinary stale-pane detection.
 A guarded silent hook cannot be verified from absence of effect, so prove invocation with an unguarded probe before concluding that the hook did not fire.
 The guarded turn-end signal supplements the pane busy signature, whose locale- and emoji-font-sensitive limits still apply while a turn is running.

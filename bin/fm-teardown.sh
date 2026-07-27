@@ -39,11 +39,11 @@
 # Orca tasks use the same safety checks, then close the recorded terminal and
 # remove the recorded worktree through `orca worktree rm`; teardown never guesses
 # an Orca target from ambient CLI state.
-# A Herdr presentation journal never authorizes cleanup. Teardown still closes
-# only the exact task pane from ordinary endpoint metadata and never calls
-# `workspace close`. It retires the non-authoritative journal only when a
-# read-only token correlation agrees with that endpoint and pane closure is
-# confirmed. Otherwise the journal stays quarantined for manual inspection.
+# A Herdr presentation journal never authorizes cleanup alone. Teardown closes
+# only when its v2 session, workspace, tab, and pane binding exactly matches
+# endpoint metadata and the live endpoint under the session lock; it never calls
+# `workspace close`. It retires the journal only after pane closure is confirmed.
+# Otherwise the journal stays quarantined for manual inspection.
 # Projected closes share the presentation-order lock, refuse to close the
 # captain's active tab, and restore the exact response-derived pre-close tab
 # if Herdr's last-pane cleanup focuses an unrelated neighboring workspace.
@@ -201,10 +201,12 @@ remove_grok_turnend_auth() {
 }
 
 remove_kimi_turnend_auth() {
-  local state_dir=$1 id=$2 token hooks_dir
+  local state_dir=$1 id=$2 token hooks_dir kimi_home
   token=$(cat "$state_dir/$id.kimi-turnend-token" 2>/dev/null || true)
   case "$token" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
-  hooks_dir="${KIMI_CODE_HOME:-$HOME/.kimi-code}/fm-turn-end.d"
+  kimi_home=$(fm_meta_get "$state_dir/$id.meta" kimi_home)
+  [ -n "$kimi_home" ] || kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+  hooks_dir="$kimi_home/fm-turn-end.d"
   rm -f "$hooks_dir/$token"
 }
 
@@ -1121,16 +1123,26 @@ fi
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
 HERDR_PRESENTATION_RETIRE_CANDIDATE=0
 HERDR_PRESENTATION_SESSION=
+HERDR_PRESENTATION_WORKSPACE=
+HERDR_PRESENTATION_TAB=
 HERDR_PRESENTATION_PANE=
 HERDR_PRESENTATION_CORRELATION=none
 if [ "$BACKEND" = herdr ] \
    && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
   HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
   HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
+  HERDR_PRESENTATION_TAB=$(meta_value "$META" herdr_tab_id)
   HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
-  if fm_backend_source herdr; then
+  if [ -z "$HERDR_PRESENTATION_SESSION" ] \
+     || [ -z "$HERDR_PRESENTATION_WORKSPACE" ] \
+     || [ -z "$HERDR_PRESENTATION_TAB" ] \
+     || [ -z "$HERDR_PRESENTATION_PANE" ] \
+     || [ "$T" != "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ]; then
+    HERDR_PRESENTATION_CORRELATION=indeterminate
+  elif fm_backend_source herdr; then
     if fm_backend_herdr_projection_endpoint_matches_journal \
-      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
+      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" "$HERDR_PRESENTATION_TAB" \
+      "$HERDR_PRESENTATION_PANE" \
       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
       HERDR_PRESENTATION_CORRELATION=match
     else
@@ -1148,13 +1160,8 @@ if [ "$BACKEND" = herdr ] \
     exit 1
   fi
   if [ "$HERDR_PRESENTATION_CORRELATION" = match ] \
-     && [ -n "$HERDR_PRESENTATION_SESSION" ] \
-     && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
-     && [ -n "$HERDR_PRESENTATION_PANE" ] \
      && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ]; then
     HERDR_PRESENTATION_RETIRE_CANDIDATE=1
-  elif [ "$HERDR_PRESENTATION_CORRELATION" = match ]; then
-    HERDR_PRESENTATION_CORRELATION=authoritative-mismatch
   fi
 fi
 
@@ -1178,8 +1185,27 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
     echo "error: herdr presentation focus lock unavailable; refusing teardown before worktree return can trigger a focus-unsafe pane close" >&2
     exit 1
   fi
+  HERDR_PRESENTATION_LOCK_SESSION=$(meta_value "$META" herdr_session)
+  HERDR_PRESENTATION_LOCK_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
+  HERDR_PRESENTATION_LOCK_TAB=$(meta_value "$META" herdr_tab_id)
+  HERDR_PRESENTATION_LOCK_PANE=$(meta_value "$META" herdr_pane_id)
+  HERDR_PRESENTATION_LOCK_WINDOW=$(meta_value "$META" window)
+  if [ "$HERDR_PRESENTATION_LOCK_SESSION" != "$HERDR_PRESENTATION_SESSION" ] \
+     || [ "$HERDR_PRESENTATION_LOCK_WORKSPACE" != "$HERDR_PRESENTATION_WORKSPACE" ] \
+     || [ "$HERDR_PRESENTATION_LOCK_TAB" != "$HERDR_PRESENTATION_TAB" ] \
+     || [ "$HERDR_PRESENTATION_LOCK_PANE" != "$HERDR_PRESENTATION_PANE" ] \
+     || [ "$HERDR_PRESENTATION_LOCK_WINDOW" != "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
+     || ! fm_backend_herdr_projection_endpoint_matches_journal \
+       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" "$HERDR_PRESENTATION_TAB" \
+       "$HERDR_PRESENTATION_PANE" "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
+    HERDR_PRESENTATION_FOCUS_LOCK_HELD=0
+    fm_lock_release "$HERDR_PRESENTATION_FOCUS_LOCK" || true
+    echo "error: exact herdr presentation binding could not be revalidated under the session lock; refusing focus-unsafe worktree return for $ID" >&2
+    exit 1
+  fi
   if ! fm_backend_herdr_projection_close_pane_focus_preserving \
-    "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE"; then
+    "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" "" \
+    "$HERDR_PRESENTATION_TAB" "$HERDR_PRESENTATION_WORKSPACE"; then
     HERDR_PRESENTATION_FOCUS_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_FOCUS_LOCK" || true
     echo "error: exact herdr task-pane close failed; refusing focus-unsafe worktree return for $ID" >&2

@@ -587,9 +587,9 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
 # anywhere else.
 # If the target belongs to the active tab, exact tab preservation is
 # impossible, so cleanup refuses instead of changing focus.
-fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state]
-  local session=$1 pane_id=$2 required_agent_state=${3:-}
-  local before active_tab info target_pane target_tab close_status state
+fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state] [required-tab] [required-workspace]
+  local session=$1 pane_id=$2 required_agent_state=${3:-} required_tab=${4:-} required_workspace=${5:-}
+  local before active_tab info target_pane target_tab target_workspace close_status state
   FM_BACKEND_HERDR_PROJECTION_CLOSE_AGENT_STATE=""
   [ -n "$pane_id" ] || return 0
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
@@ -603,8 +603,14 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
   }
   target_pane=$(printf '%s' "$info" | jq -r '.result.pane.pane_id // empty' 2>/dev/null)
   target_tab=$(printf '%s' "$info" | jq -r '.result.pane.tab_id // empty' 2>/dev/null)
+  target_workspace=$(printf '%s' "$info" | jq -r '.result.pane.workspace_id // empty' 2>/dev/null)
   if [ "$target_pane" != "$pane_id" ] || [ -z "$target_tab" ]; then
     echo "warning: herdr presentation cleanup received an ambiguous exact-pane response; refusing focus-unsafe pane close" >&2
+    return 1
+  fi
+  if { [ -n "$required_tab" ] && [ "$target_tab" != "$required_tab" ]; } \
+     || { [ -n "$required_workspace" ] && [ "$target_workspace" != "$required_workspace" ]; }; then
+    echo "warning: herdr presentation cleanup target no longer matches its required endpoint; refusing focus-unsafe pane close" >&2
     return 1
   fi
   if [ "$target_tab" = "$active_tab" ]; then
@@ -1628,36 +1634,70 @@ EOF
 }
 
 # fm_backend_herdr_projection_endpoint_matches_journal: read-only correlation
-# for retiring a successful projection journal after normal exact-pane
+# for retiring a successful v2 projection journal after normal exact-pane
 # teardown.
-# Exactly one token-bearing workspace must match the endpoint workspace.
+# The journal, endpoint metadata, token-bearing workspace, task tab, and pane
+# must form one exact binding.
 # This verdict never authorizes a Herdr mutation.
 # Returns 0 for a match, 1 for an authoritative mismatch, and 2 when
 # correlation cannot be determined from trusted inputs.
-fm_backend_herdr_projection_endpoint_matches_journal() {  # <session> <workspace-id> <journal> <task-id>
-  local session=$1 workspace_id=$2 journal=$3 id=$4 token list verdict
-  token=$(fm_backend_herdr_projection_journal_token "$journal" "$id") || return 2
+fm_backend_herdr_projection_endpoint_matches_journal() {  # <session> <workspace-id> <tab-id> <pane-id> <journal> <task-id>
+  local session=$1 workspace_id=$2 tab_id=$3 pane_id=$4 journal=$5 id=$6
+  local token list tabs panes verdict
+  fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 2
+  [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] || return 2
+  [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] \
+    && [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" = "$workspace_id" ] \
+    && [ "$FM_BACKEND_HERDR_JOURNAL_TAB_ID" = "$tab_id" ] \
+    && [ "$FM_BACKEND_HERDR_JOURNAL_PANE_ID" = "$pane_id" ] || return 2
+  token=$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID
   list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 2
-  verdict=$(printf '%s' "$list" | jq -r --arg suffix " · p:$token" --arg workspace "$workspace_id" '
+  verdict=$(printf '%s' "$list" | jq -r \
+    --arg suffix " · p:$token" \
+    --arg workspace "$workspace_id" \
+    --arg workspace_label "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" '
     (.result.workspaces // null) as $spaces
-    | if ($spaces | type) != "array" then
+    | if ($spaces | type) != "array"
+         or (all($spaces[]; type == "object"
+           and (.workspace_id | type) == "string"
+           and (.workspace_id | length) > 0
+           and (.label | type) == "string") | not) then
         error("workspaces is not an array")
       else
-        [$spaces[]
-          | select((.label | type) == "string" and (.label | endswith($suffix)))
-          | if ((.workspace_id | type) == "string" and (.workspace_id | length) > 0)
-            then .workspace_id
-            else error("matching workspace has an invalid id")
-            end
-        ] as $matches
-        | if $matches == [$workspace] then "match" else "mismatch" end
+        [$spaces[] | select(.label | endswith($suffix))] as $token_matches
+        | [$spaces[] | select(.workspace_id == $workspace)] as $workspace_matches
+        | if ($token_matches | length) == 1
+             and $token_matches[0].workspace_id == $workspace
+             and ($workspace_matches | length) == 1
+             and $workspace_matches[0].label == $workspace_label
+          then "match"
+          else "mismatch"
+          end
       end
   ' 2>/dev/null) || return 2
   case "$verdict" in
-    match) return 0 ;;
     mismatch) return 1 ;;
+    match) ;;
     *) return 2 ;;
   esac
+  tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$workspace_id" 2>/dev/null) || return 2
+  printf '%s' "$tabs" | jq -e \
+    --arg tab "$tab_id" \
+    --arg task_label "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" '
+      (.result.tabs | type) == "array"
+      and (.result.tabs | length) == 1
+      and .result.tabs[0].tab_id == $tab
+      and .result.tabs[0].label == $task_label
+    ' >/dev/null 2>&1 || return 2
+  panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$workspace_id" 2>/dev/null) || return 2
+  printf '%s' "$panes" | jq -e \
+    --arg tab "$tab_id" \
+    --arg pane "$pane_id" '
+      (.result.panes | type) == "array"
+      and (.result.panes | length) == 1
+      and .result.panes[0].pane_id == $pane
+      and .result.panes[0].tab_id == $tab
+    ' >/dev/null 2>&1 || return 2
 }
 
 # fm_backend_herdr_parse_target: split "<session>:<pane_id>" (pane_id itself
