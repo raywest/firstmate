@@ -1295,6 +1295,22 @@ case "${1:-} ${2:-}" in
     case "${FM_FAKE_HERDR_WORKSPACE_LIST_MODE:-valid}" in
       failed) exit 1 ;;
       malformed) printf '%s\n' 'not-json'; exit 0 ;;
+      missing)
+        printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true}]}}'
+        exit 0
+        ;;
+      renamed)
+        printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t2","label":"renamed-task","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true}]}}'
+        exit 0
+        ;;
+      duplicated)
+        printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t2","label":"└ task-x1 · p:AbCdEfGhIjKlMnOpQrStUv","focused":false},{"workspace_id":"w4","active_tab_id":"w4:t2","label":"└ task-x1 · p:AbCdEfGhIjKlMnOpQrStUv","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true}]}}'
+        exit 0
+        ;;
+      different)
+        printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t2","label":"different-task","focused":false},{"workspace_id":"w4","active_tab_id":"w4:t2","label":"└ task-x1 · p:AbCdEfGhIjKlMnOpQrStUv","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true}]}}'
+        exit 0
+        ;;
       malformed-after-first)
         count=$(cat "${FM_FAKE_HERDR_WORKSPACE_LIST_COUNT:?}" 2>/dev/null || printf '0')
         count=$((count + 1))
@@ -1467,6 +1483,10 @@ test_herdr_projection_teardown_refuses_indeterminate_correlation() {
   assert_herdr_indeterminate_correlation_refuses herdr-projection-stale-pane valid stale-pane
   assert_herdr_indeterminate_correlation_refuses herdr-projection-list-failed failed
   assert_herdr_indeterminate_correlation_refuses herdr-projection-list-malformed malformed
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-live-workspace-missing missing
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-live-workspace-renamed renamed
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-live-workspace-duplicated duplicated
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-live-workspace-different different
   pass "herdr projection teardown refuses worktree return when correlation is indeterminate"
 }
 

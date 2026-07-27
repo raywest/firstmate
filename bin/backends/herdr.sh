@@ -1639,65 +1639,62 @@ EOF
 # The journal, endpoint metadata, token-bearing workspace, task tab, and pane
 # must form one exact binding.
 # This verdict never authorizes a Herdr mutation.
-# Returns 0 for a match, 1 for an authoritative mismatch, and 2 when
-# correlation cannot be determined from trusted inputs.
+# Returns 0 for an exact match and 2 when that match cannot be proven.
 fm_backend_herdr_projection_endpoint_matches_journal() {  # <session> <workspace-id> <tab-id> <pane-id> <journal> <task-id>
   local session=$1 workspace_id=$2 tab_id=$3 pane_id=$4 journal=$5 id=$6
-  local token list tabs panes verdict
-  fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 2
-  [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] || return 2
-  [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] \
-    && [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" = "$workspace_id" ] \
-    && [ "$FM_BACKEND_HERDR_JOURNAL_TAB_ID" = "$tab_id" ] \
-    && [ "$FM_BACKEND_HERDR_JOURNAL_PANE_ID" = "$pane_id" ] || return 2
-  token=$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID
-  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 2
-  verdict=$(printf '%s' "$list" | jq -r \
-    --arg suffix " · p:$token" \
-    --arg workspace "$workspace_id" \
-    --arg workspace_label "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" '
-    (.result.workspaces // null) as $spaces
-    | if ($spaces | type) != "array"
-         or (all($spaces[]; type == "object"
-           and (.workspace_id | type) == "string"
-           and (.workspace_id | length) > 0
-           and (.label | type) == "string") | not) then
-        error("workspaces is not an array")
-      else
-        [$spaces[] | select(.label | endswith($suffix))] as $token_matches
-        | [$spaces[] | select(.workspace_id == $workspace)] as $workspace_matches
-        | if ($token_matches | length) == 1
-             and $token_matches[0].workspace_id == $workspace
-             and ($workspace_matches | length) == 1
-             and $workspace_matches[0].label == $workspace_label
-          then "match"
-          else "mismatch"
-          end
-      end
-  ' 2>/dev/null) || return 2
-  case "$verdict" in
-    mismatch) return 1 ;;
-    match) ;;
-    *) return 2 ;;
-  esac
-  tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$workspace_id" 2>/dev/null) || return 2
-  printf '%s' "$tabs" | jq -e \
-    --arg tab "$tab_id" \
-    --arg task_label "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" '
-      (.result.tabs | type) == "array"
-      and (.result.tabs | length) == 1
-      and .result.tabs[0].tab_id == $tab
-      and .result.tabs[0].label == $task_label
-    ' >/dev/null 2>&1 || return 2
-  panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$workspace_id" 2>/dev/null) || return 2
-  printf '%s' "$panes" | jq -e \
-    --arg tab "$tab_id" \
-    --arg pane "$pane_id" '
-      (.result.panes | type) == "array"
-      and (.result.panes | length) == 1
-      and .result.panes[0].pane_id == $pane
-      and .result.panes[0].tab_id == $tab
-    ' >/dev/null 2>&1 || return 2
+  local token list tabs panes exact_binding=0
+  # Indeterminate is the default because only a fully proven live binding is safe before worktree return.
+  if fm_backend_herdr_projection_journal_snapshot "$journal" "$id" \
+     && [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] \
+     && [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] \
+     && [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" = "$workspace_id" ] \
+     && [ "$FM_BACKEND_HERDR_JOURNAL_TAB_ID" = "$tab_id" ] \
+     && [ "$FM_BACKEND_HERDR_JOURNAL_PANE_ID" = "$pane_id" ]; then
+    token=$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID
+    if list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) \
+       && printf '%s' "$list" | jq -e \
+         --arg suffix " · p:$token" \
+         --arg workspace "$workspace_id" \
+         --arg workspace_label "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" '
+           (.result.workspaces // null) as $spaces
+           | if ($spaces | type) != "array"
+                or (all($spaces[]; type == "object"
+                  and (.workspace_id | type) == "string"
+                  and (.workspace_id | length) > 0
+                  and (.label | type) == "string") | not) then
+               false
+             else
+               [$spaces[] | select(.label | endswith($suffix))] as $token_matches
+               | [$spaces[] | select(.workspace_id == $workspace)] as $workspace_matches
+               | ($token_matches | length) == 1
+                 and $token_matches[0].workspace_id == $workspace
+                 and ($workspace_matches | length) == 1
+                 and $workspace_matches[0].label == $workspace_label
+             end
+         ' >/dev/null 2>&1 \
+       && tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$workspace_id" 2>/dev/null) \
+       && printf '%s' "$tabs" | jq -e \
+         --arg tab "$tab_id" \
+         --arg task_label "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" '
+           (.result.tabs | type) == "array"
+           and (.result.tabs | length) == 1
+           and .result.tabs[0].tab_id == $tab
+           and .result.tabs[0].label == $task_label
+         ' >/dev/null 2>&1 \
+       && panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$workspace_id" 2>/dev/null) \
+       && printf '%s' "$panes" | jq -e \
+         --arg tab "$tab_id" \
+         --arg pane "$pane_id" '
+           (.result.panes | type) == "array"
+           and (.result.panes | length) == 1
+           and .result.panes[0].pane_id == $pane
+           and .result.panes[0].tab_id == $tab
+         ' >/dev/null 2>&1; then
+      exact_binding=1
+    fi
+  fi
+  [ "$exact_binding" = 1 ] && return 0
+  return 2
 }
 
 # fm_backend_herdr_parse_target: split "<session>:<pane_id>" (pane_id itself

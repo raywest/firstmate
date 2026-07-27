@@ -1126,43 +1126,29 @@ HERDR_PRESENTATION_SESSION=
 HERDR_PRESENTATION_WORKSPACE=
 HERDR_PRESENTATION_TAB=
 HERDR_PRESENTATION_PANE=
-HERDR_PRESENTATION_CORRELATION=none
+HERDR_PRESENTATION_CORRELATION=indeterminate
 if [ "$BACKEND" = herdr ] \
    && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
   HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
   HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
   HERDR_PRESENTATION_TAB=$(meta_value "$META" herdr_tab_id)
   HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
-  if [ -z "$HERDR_PRESENTATION_SESSION" ] \
-     || [ -z "$HERDR_PRESENTATION_WORKSPACE" ] \
-     || [ -z "$HERDR_PRESENTATION_TAB" ] \
-     || [ -z "$HERDR_PRESENTATION_PANE" ] \
-     || [ "$T" != "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ]; then
-    HERDR_PRESENTATION_CORRELATION=indeterminate
-  elif fm_backend_source herdr; then
-    if fm_backend_herdr_projection_endpoint_matches_journal \
-      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" "$HERDR_PRESENTATION_TAB" \
-      "$HERDR_PRESENTATION_PANE" \
-      "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
-      HERDR_PRESENTATION_CORRELATION=match
-    else
-      herdr_correlation_rc=$?
-      case "$herdr_correlation_rc" in
-        1) HERDR_PRESENTATION_CORRELATION=authoritative-mismatch ;;
-        *) HERDR_PRESENTATION_CORRELATION=indeterminate ;;
-      esac
-    fi
-  else
-    HERDR_PRESENTATION_CORRELATION=indeterminate
+  if [ -n "$HERDR_PRESENTATION_SESSION" ] \
+     && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
+     && [ -n "$HERDR_PRESENTATION_TAB" ] \
+     && [ -n "$HERDR_PRESENTATION_PANE" ] \
+     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
+     && fm_backend_source herdr \
+     && fm_backend_herdr_projection_endpoint_matches_journal \
+       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" "$HERDR_PRESENTATION_TAB" \
+       "$HERDR_PRESENTATION_PANE" "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
+    HERDR_PRESENTATION_CORRELATION=match
   fi
-  if [ "$HERDR_PRESENTATION_CORRELATION" = indeterminate ]; then
+  if [ "$HERDR_PRESENTATION_CORRELATION" != match ]; then
     echo "error: herdr presentation correlation is indeterminate; refusing teardown before worktree return can trigger a focus-unsafe pane close" >&2
     exit 1
   fi
-  if [ "$HERDR_PRESENTATION_CORRELATION" = match ] \
-     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ]; then
-    HERDR_PRESENTATION_RETIRE_CANDIDATE=1
-  fi
+  HERDR_PRESENTATION_RETIRE_CANDIDATE=1
 fi
 
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
