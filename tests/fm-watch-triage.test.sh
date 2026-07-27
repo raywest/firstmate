@@ -158,14 +158,25 @@ test_classifier_primitives() {
     && fail "FM_CAPTAIN_RE override bypassed paused: suppression"
   FM_CAPTAIN_RE='custom-verb:' status_is_captain_relevant "custom-verb: x" \
     || fail "nonterminal suppression weakened custom bare-line behavior"
-  printf 'needs-decision: should docs mention [key=prose]?\nneeds-decision [key=q1]: real choice\nresolved: docs still mention [key=q1]\nneeds-decision [key=bad key]: malformed\n' > "$state/keys.status"
+  # Decision key grammar: the token conventionally sits before the colon (the
+  # scaffolded form), but the parser also accepts it after the colon since
+  # older status files and improvised phrasing produce that shape too - both
+  # positions must resolve to the SAME key, including a pair opened in one
+  # position and resolved in the other.
+  printf 'needs-decision [key=q1]: opened before the colon\nresolved: closed after the colon [key=q1]\nneeds-decision: opened after the colon [key=q2]\nresolved [key=q2]: closed before the colon\nneeds-decision: no key on this line\nneeds-decision [key=bad key]: malformed\n' > "$state/keys.status"
   open=$(status_open_decisions "$state/keys.status")
   printf '%s' "$open" | grep -F $'q1\t' >/dev/null \
-    || fail "a key token in resolved note prose closed the keyed decision"
-  printf '%s' "$open" | grep -F $'prose\t' >/dev/null \
-    && fail "a key token in note prose changed the decision key"
+    && fail "an after-colon resolved key token did not close a before-colon-opened decision"
+  printf '%s' "$open" | grep -F $'q2\t' >/dev/null \
+    && fail "a before-colon resolved key token did not close an after-colon-opened decision"
+  printf '%s' "$open" | grep -F $'default\t' >/dev/null \
+    || fail "a keyless needs-decision line did not open under the default key"
   printf '%s' "$open" | grep -F $'bad key\t' >/dev/null \
     && fail "an invalid key slug entered the open-decision set"
+  [ "$(status_line_note 'resolved: closed after the colon [key=q1]')" = "closed after the colon" ] \
+    || fail "status_line_note did not strip an after-colon key token from the recorded summary"
+  [ "$(status_line_note 'resolved [key=q2]: closed before the colon')" = "closed before the colon" ] \
+    || fail "status_line_note altered a before-colon-keyed note unexpectedly"
   cat > "$state/activity.status" <<'EOF'
 working [key=phase7]: Phase 7 started
 working [key=phase6]: Phase 6 started

@@ -152,13 +152,21 @@ status_is_paused_or_captain_held() {  # <status-line>
 # terminal line never clears an open captain decision.
 #
 # Decision key grammar (backward-compatible with the existing "<verb>: <note>"
-# format): an OPTIONAL "[key=<slug>]" token sits between the verb and the colon,
+# format): an OPTIONAL "[key=<slug>]" token, conventionally sitting between the
+# verb and the colon (the form the brief scaffold writes and shows the crew):
 #   needs-decision [key=api-shape]: <summary>
 #   resolved       [key=api-shape]: <how it was decided>
-# A line with no token uses the key "default", preserving the historical
+# but ALSO accepted after the colon, since older status files, hand-written
+# lines, and improvised worker phrasing have produced that shape too:
+#   resolved: <how it was decided> [key=api-shape]
+# _fm_decision_key matches the token anywhere on the line rather than only in
+# the pre-colon prefix, so both positions resolve to the same key. A line with
+# no token uses the key "default", preserving the historical
 # one-open-decision-per-task behavior (a bare "resolved:" closes "default").
 # The three parsers are pure reads of a single line; the verb parser strips any
-# key token before the colon so the leading word is recovered cleanly.
+# key token before the colon so the leading word is recovered cleanly, and the
+# note parser strips a token found after the colon so the recorded summary text
+# stays clean regardless of which position produced it.
 status_line_verb() {  # <status-line> -> leading verb word
   local v=${1%%:*}
   v=${v%%\[key=*}
@@ -166,17 +174,42 @@ status_line_verb() {  # <status-line> -> leading verb word
   v=${v%"${v##*[![:space:]]}"}
   printf '%s' "$v"
 }
-status_line_note() {  # <status-line> -> text after the first colon, trimmed
+status_line_note() {  # <status-line> -> text after the first colon, trimmed,
+                       # with any post-colon [key=...] token stripped out
+  local n stripped=0 before rest
   case "$1" in
-    *:*) local n=${1#*:}; printf '%s' "${n#"${n%%[![:space:]]*}"}" ;;
-    *) printf '%s' "$1" ;;
+    *:*) n=${1#*:} ;;
+    *) n=$1 ;;
   esac
-}
-_fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
-  local prefix=${1%%:*} k
-  case "$prefix" in
+  case "$n" in
     *\[key=*\]*)
-      k=${prefix#*\[key=}
+      # Remove only the "[key=...]" token itself (up through its FIRST closing
+      # bracket), the same non-greedy boundaries _fm_decision_key uses, so
+      # unrelated brackets elsewhere in the note are left untouched.
+      before=${n%%\[key=*}
+      rest=${n#*\[key=}
+      rest=${rest#*\]}
+      n="${before}${rest}"
+      stripped=1
+      ;;
+  esac
+  n=${n#"${n%%[![:space:]]*}"}
+  # Only trim the trailing edge and collapse whitespace when a token was
+  # actually removed (it may have left a ragged edge or double space behind);
+  # a line with no key keeps its note text byte-for-byte as before, trailing
+  # whitespace included.
+  if [ "$stripped" -eq 1 ]; then
+    n=${n%"${n##*[![:space:]]}"}
+    n=$(printf '%s' "$n" | tr -s ' ')
+  fi
+  printf '%s' "$n"
+}
+_fm_decision_key() {  # <status-line> -> key slug, or "default" when no token,
+                      # matched anywhere on the line (before OR after the colon)
+  local line=$1 k
+  case "$line" in
+    *\[key=*\]*)
+      k=${line#*\[key=}
       k=${k%%\]*}
       case "$k" in
         ''|*[!A-Za-z0-9._-]*) return 1 ;;
