@@ -1331,44 +1331,66 @@ case "${1:-} ${2:-}" in
 esac
 SH
   chmod +x "$case_dir/fakebin/herdr"
+  cat > "$case_dir/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = return ]; then
+  [ -e "${FM_FAKE_HERDR_CLOSED:?}" ] || {
+    echo "treehouse return ran before the exact Herdr pane close" >&2
+    exit 1
+  }
+  : > "${FM_FAKE_TREEHOUSE_RETURNED:?}"
+fi
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
 }
 
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close() {
-  local case_dir log closed restored
+  local case_dir log closed restored returned
   case_dir=$(make_case herdr-projection-confirmed-close)
   write_meta "$case_dir" local-only ship
   configure_herdr_projection_teardown_case "$case_dir"
-  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"
+  returned="$case_dir/treehouse-returned"; : > "$log"
 
   FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
+    FM_FAKE_TREEHOUSE_RETURNED="$returned" \
     run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
     || fail "herdr-projection-confirmed-close: forced teardown failed"
   [ ! -e "$case_dir/state/task-x1.herdr-presentation" ] \
     || fail "confirmed exact-pane close did not retire the presentation journal"
+  [ -e "$returned" ] \
+    || fail "confirmed exact-pane close did not proceed to worktree return"
   assert_not_contains "$(cat "$log")" "workspace close" \
     "projected teardown must never call workspace close"
   assert_contains "$(cat "$log")" "tab focus w2:t2" \
     "projected teardown did not restore the exact pre-close active tab"
-  pass "herdr projection teardown retires its journal only after confirming the exact recorded pane is gone"
+  pass "herdr projection teardown confirms the exact pane close before returning the worktree"
 }
 
-test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
-  local case_dir log closed restored
+test_herdr_projection_teardown_refuses_worktree_return_when_close_unconfirmed() {
+  local case_dir log closed restored returned
   case_dir=$(make_case herdr-projection-unconfirmed-close)
   write_meta "$case_dir" local-only ship
   configure_herdr_projection_teardown_case "$case_dir"
-  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"
+  returned="$case_dir/treehouse-returned"; : > "$log"
 
   FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" FM_FAKE_HERDR_CLOSE_FAIL=1 \
+    FM_FAKE_TREEHOUSE_RETURNED="$returned" \
     run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
-    || fail "herdr-projection-unconfirmed-close: teardown should preserve best-effort endpoint semantics"
+    && fail "herdr-projection-unconfirmed-close: teardown should fail closed"
   [ -e "$case_dir/state/task-x1.herdr-presentation" ] \
     || fail "unconfirmed task-pane close incorrectly retired the presentation journal"
-  assert_grep "close could not be confirmed" "$case_dir/stderr" \
-    "unconfirmed projected close did not explain why the journal was retained"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "unconfirmed task-pane close incorrectly retired task metadata"
+  [ ! -e "$returned" ] \
+    || fail "unconfirmed task-pane close allowed a focus-unsafe worktree return"
+  assert_grep "refusing focus-unsafe worktree return" "$case_dir/stderr" \
+    "unconfirmed projected close did not explain the fail-closed teardown"
   assert_not_contains "$(cat "$log")" "workspace close" \
     "unconfirmed projected close must not escalate to workspace cleanup"
-  pass "herdr projection teardown retains the stale journal and attempts no workspace cleanup when exact-pane close is unconfirmed"
+  pass "herdr projection teardown retains task state and refuses worktree return when exact close is unconfirmed"
 }
 
 test_local_only_fork_remote_allows
@@ -1381,7 +1403,7 @@ test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_herdr_teardown_clears_escalation_marker
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
-test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
+test_herdr_projection_teardown_refuses_worktree_return_when_close_unconfirmed
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows
