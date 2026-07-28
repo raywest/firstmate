@@ -33,85 +33,71 @@ harness-native/terminal launch path) and runs continuously.
 | wedge alert on max-defer | durable marker + log + configured OS-level active alert | durable marker + log only; `bin/fm-guard.sh` surfaces the marker on the next turn instead |
 | stopped-crew stale | persistence recheck after `FM_STALE_ESCALATE_SECS` (240s), bounded patience | escalate on first sight, matching the always-on watcher's own present-mode semantics |
 
-## Provably-working stale absorption
+## Single-resolver escalation authority
 
-Captain-approved 2026-07-22 ("if you can validate the worker directly then so
-can the daemon"), after 8 of 10 daemon escalations for one healthy worker in a
-single evening turned out to be false wedge alarms: an idle-LOOKING pane is not
-the same as an idle crew.
-Before `housekeeping`'s stale persistence recheck (`bin/fm-supervise-daemon.sh`)
-treats a still-idle pane as a possible wedge, it consults
-`crew_absorb_class` (`bin/fm-classify-lib.sh`) - the SAME predicate the
-no-verb-signal "crew not provably working" guard already uses - which in turn
-reads `bin/fm-crew-state.sh`'s one authoritative current-state line for two
-sources of positive evidence:
+Captain-directed 2026-07-28, after three review rounds each found suppression
+resting on evidence that was true at some past moment: the daemon consults ONE
+current-state resolver, `crew_escalation_disposition`
+(`bin/fm-classify-lib.sh`, backed by `bin/fm-crew-state.sh`), as the sole
+authority for whether an idle-looking or terminal-looking task escalates.
+The original motivation stands (captain-approved 2026-07-22, "if you can
+validate the worker directly then so can the daemon", after 8 of 10 daemon
+escalations for one healthy worker in a single evening were false wedge
+alarms): an idle-LOOKING pane is not the same as an idle crew.
 
-1. **Run-step**: an actively-running no-mistakes validation attributed to the
-   crew's own branch (`state: working · source: run-step`).
-2. **Background-wait**: the harness's own live background-work footer - e.g.
-   claude's "N shell(s)"/"N monitor" still-running indicator
-   (`bin/fm-crew-state.sh`'s `crew_pane_has_background_work`, a SEPARATE signal
-   from the foreground busy banner `crew_pane_is_busy` already checks) -
-   reported as `state: working · source: pane`.
+The resolver returns exactly one disposition, derived only from evidence read
+at call time:
 
-Either source absorbs the pane instead of escalating it, and clears the
-consecutive wedge-escalation count exactly like a resume or a declared pause
-does today.
-An absorbed pane does not sit on the short `FM_STALE_ESCALATE_SECS` wedge
-cadence for the rest of a long validation run or background task: it moves to
-a `state/.subsuper-absorbed-<task-id>` marker rechecked on the SAME long
-`FM_PAUSE_RESURFACE_SECS` cadence a declared pause uses.
-The marker is bound to the exact task id and exact last status line it
-absorbed; any change invalidates the cached suppression immediately and
-returns the task to ordinary current-evidence classification.
-Past that window: still provably working resets the marker and keeps waiting,
-self-handled; anything else - the crew moved on, the read is unreadable, or the
-evidence is ambiguous - is fail-safe, escalating once and handing the pane back
-to ordinary short-cadence wedge tracking with its count starting fresh.
-An idle pane with neither source still escalates exactly as before this
-change.
+- **working** - `crew_absorb_class` proves an active no-mistakes run-step
+  attributed to the crew's own branch, a busy pane, or the harness's own live
+  background-work footer (`bin/fm-crew-state.sh`'s
+  `crew_pane_has_background_work`).
+- **paused** - the authoritative current state is a declared external-wait
+  pause, or the current line is a verified `captain-held` transfer - the same
+  deliberate-wait treatment the watcher's `status_is_paused_or_captain_held`
+  applies, so filing a captain decision can never flip a parked task back to
+  wedge aging.
+- **merge-wait** - the current line is the captain-relevant `done:` naming the
+  exact `pr=` URL recorded in metadata AND the byte-static merge poll is
+  validated and armed (`crew_is_pr_merge_waiting`, backed by
+  `fm_pr_poll_artifacts_valid` in `bin/fm-pr-lib.sh`).
+  A newer `failed:`/`needs-decision:`/`blocked:`/unrelated `done:` line
+  disqualifies the hold; an unarmed or tampered poll surfaces.
+- **attention** - the current line is captain-relevant and nothing supersedes
+  it; it is surfaced once, deduped by the delivery-side seen marker.
+- **recent** - the current line is a decision-closing `resolved:` event;
+  evidence of a very recent turn, so the task gets the ordinary bounded idle
+  grace instead of a first-sight surface, and still escalates if it stays
+  idle past `FM_STALE_ESCALATE_SECS`.
+- **stopped** - none of the above, including an unreadable or ambiguous
+  resolver read; fail-safe toward escalation.
+
+The daemon records no verdicts.
+Its only per-task state is timers - the idle-grace marker
+(`state/.subsuper-stale-*`), the pause-resurface marker
+(`state/.subsuper-paused-*`), and the verified-recheck appointment
+(`state/.subsuper-recheck-<task-id>`, a bare epoch keyed by exact task id) -
+plus the seen-status delivery dedup.
+Every decision point - wake classification, the idle-grace recheck, the pause
+resurface, appointment expiry, and the heartbeat catch-all scan - asks the
+resolver fresh and routes its whole verdict set, so a suppression can never
+outlive the evidence that justified it, and no per-verb cache-invalidation
+rule exists to get stale.
+Status CHANGES are caught event-driven by the signal path as they land; the
+appointment (rechecked on the same long `FM_PAUSE_RESURFACE_SECS` cadence a
+declared pause uses, and refreshed by each scan's own fresh verdict) only
+bounds how long a silently-lapsed positive verdict can stay quiet.
+A working or merge-wait verdict clears the consecutive wedge-escalation count
+exactly like a resume or a declared pause; a lapsed verdict enters the
+ORDINARY idle grace of the stale recheck - by construction there is no
+immediate-escalation path out of a previously quiet task.
+The deliberate cost of this freshness: each unseen captain-relevant status and
+each due recheck pays one bounded `fm-crew-state.sh` read per pass, the same
+read the always-on watcher already pays on its own triage paths.
+An idle pane with no positive source still escalates exactly as before.
 This document is the one policy owner; `bin/fm-classify-lib.sh` and
-`bin/fm-crew-state.sh` implement the predicate and its two sources.
-
-### Terminal-status absorption (2026-07-27)
-
-The absorption above only ever covered a NON-terminal stale pane (no
-captain-relevant verb in the last status line).
-A captain-relevant TERMINAL line (`done:`, `needs-decision:`, `blocked:`,
-`failed:`) can be just as stale: a crewmate's pre-validation `done:` line
-stays the last line for the entire span of a no-mistakes run it triggers
-right after, and a merge-wait `done:` line stays the last line for as long as
-the captain has not yet merged - in both cases the log has no reason to ever
-append again.
-`bin/fm-supervise-daemon.sh`'s `terminal_status_absorb_reason` applies the
-SAME `crew_absorb_class` check to a captain-relevant/terminal line before
-`classify_signal`, `classify_stale`, or the heartbeat catch-all scan escalate
-it, plus a THIRD positive-evidence source only relevant to a terminal line:
-
-3. **PR merge-wait**: the task's current last status is a captain-relevant
-   `done:` line that contains the exact `pr=` URL recorded in its metadata AND
-   the byte-static merge poll `bin/fm-watch.sh` itself trusts to notify on merge
-   is validated and armed (`fm_pr_poll_artifacts_valid`, `bin/fm-pr-lib.sh`) -
-   `crew_is_pr_merge_waiting`.
-   A newer `failed:`, `needs-decision:`, `blocked:`, or unrelated `done:` line
-   immediately disqualifies this source.
-   An unarmed or tampered poll still surfaces as a possible wedge.
-
-Any of the three sources absorbs a terminal line exactly like a non-terminal
-one - the SAME `state/.subsuper-absorbed-<task-id>` marker and long recheck
-cadence, so a genuinely terminal event (the crew moved on, or the evidence
-lapses) still surfaces once, deduped against the signal path's own seen
-marker.
-Separately, a `resolved:`/`captain-held:` last line - the crew closing a
-decision it was asked about - is itself positive evidence of a very recent
-turn and is exempt from the no-verb "crew not provably working" guard in
-`classify_signal`, and from present mode's first-sight stopped-crew escalation
-in `classify_stale`; the ordinary bounded persistence recheck still catches a
-genuine silent death right after it.
-Live-verified 2026-07-27 in an isolated Herdr lab session against a real
-Claude Code pane (`fm-daemon-validating-noise-n1` report): a genuinely busy
-pane absorbs a stale pre-validation `done:` line, and the SAME pane once idle
-still escalates it.
+`bin/fm-crew-state.sh` implement the resolver and its sources, and
+`bin/fm-supervise-daemon.sh` routes its verdicts.
 
 Urgent items (always flush immediately regardless of style): `check:` output
 (PR merges, X mentions), `failed:`, `needs-decision:`, `blocked:`, `done:`/PR-ready,
@@ -318,10 +304,10 @@ the daemon refuses loudly at startup rather than guessing, exactly as before.
 - **Bounded wedge detection**: never lossy, only ever a delay.
 - **Declared external waits**: rechecked on their own bounded cadence, never
   mislabeled as a wedge.
-- **Provably-working absorption**: an active run-step or a live harness
-  background-work footer (see "Provably-working stale absorption" above) is
-  never mislabeled as a wedge either, and still re-surfaces within one bounded
-  window if the evidence disappears - never never.
+- **Provably-working absorption**: a working or merge-wait resolver verdict
+  (see "Single-resolver escalation authority" above) is never mislabeled as a
+  wedge either, and still re-surfaces within one bounded window if the
+  evidence disappears - never never.
 - **Fail-safe on uncertainty**: an unrecognized wake escalates; a non-wake
   watcher stdout line idles instead of flooding.
 - **Injection safety**: the affirmative-empty composer rule and verified

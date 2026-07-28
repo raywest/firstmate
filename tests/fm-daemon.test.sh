@@ -24,14 +24,20 @@ fi
 
 TMP_ROOT=$(fm_test_tmproot fm-daemon-tests)
 
-seed_absorbed_marker() {  # <state> <task-id> <epoch>
+# Seed the RETIRED bound-absorption cache shape, used only by the migration
+# regression: the daemon must convert it to a plain appointment, never honor it.
+seed_legacy_absorbed_marker() {  # <state> <task-id> <epoch>
   local state=$1 task=$2 stamp=$3 last
   last=$(last_status_line "$state/$task.status")
   printf '%s\n%s\n%s\n' "$stamp" "$task" "$last" > "$state/.subsuper-absorbed-$task"
 }
 
-absorbed_marker_stamp() {  # <state> <task-id>
-  sed -n '1p' "$1/.subsuper-absorbed-$2"
+seed_recheck_marker() {  # <state> <task-id> <epoch>
+  printf '%s\n' "$3" > "$1/.subsuper-recheck-$2"
+}
+
+recheck_marker_stamp() {  # <state> <task-id>
+  sed -n '1p' "$1/.subsuper-recheck-$2"
 }
 
 test_afk_start_leaves_style_flag_absent() {
@@ -450,8 +456,8 @@ test_handle_wake_turn_ended_absorbs_merge_wait() {
   FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review' \
     handle_wake "signal: $state/te-w1.turn-ended" "$state"
-  [ -e "$state/.subsuper-absorbed-te-w1" ] \
-    || fail "turn-ended-only merge-wait signal did not record a long-cadence marker"
+  [ -e "$state/.subsuper-recheck-te-w1" ] \
+    || fail "turn-ended-only merge-wait signal did not record a long-cadence appointment"
   [ ! -e "$state/.subsuper-stale-$key" ] \
     || fail "turn-ended-only merge-wait signal retained short-cadence stale tracking"
   [ ! -e "$state/.subsuper-wedge-escalations-$key" ] \
@@ -502,8 +508,8 @@ test_housekeeping_catchall_absorbs_merge_wait_done() {
   FM_STATE_OVERRIDE="$state" housekeeping "$state"
   [ ! -s "$state/.subsuper-escalations" ] \
     || fail "catch-all scan escalated an armed merge-wait done: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
-  [ -e "$state/.subsuper-absorbed-cw.w1" ] \
-    || fail "catch-all scan did not record an absorbed marker for the merge-wait hold"
+  [ -e "$state/.subsuper-recheck-cw.w1" ] \
+    || fail "catch-all scan did not record a recheck appointment for the merge-wait hold"
   [ ! -e "$state/.subsuper-stale-$key" ] \
     || fail "catch-all absorption retained dotted task short-cadence stale tracking"
   [ ! -e "$state/.subsuper-wedge-escalations-$key" ] \
@@ -511,36 +517,15 @@ test_housekeeping_catchall_absorbs_merge_wait_done() {
   pass "the catch-all scan records dotted task absorption and clears its short-cadence tracking"
 }
 
-test_housekeeping_catchall_skips_tracked_absorption() {
-  local dir state fakebin key reads
-  dir=$(make_supercase catchall-skip-tracked-absorption)
-  state="$dir/state"; fakebin="$dir/fakebin"; reads="$dir/crew-state-reads"
-  fm_write_meta "$state/cs-w1.meta" "window=sess:fm-cs-w1" "kind=ship"
-  printf 'done: implementation complete\n' > "$state/cs-w1.status"
-  key=$(printf '%s' "cs-w1" | tr ':/.' '___')
-  seed_absorbed_marker "$state" cs-w1 "$(date +%s)"
-  rm -f "$state/.subsuper-last-scan"
-  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE_READS="$reads" \
-    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
-    housekeeping "$state"
-  [ ! -s "$reads" ] \
-    || fail "catch-all scan re-read current crew state for an absorption already owned by its long-cadence marker"
-  [ ! -s "$state/.subsuper-escalations" ] \
-    || fail "catch-all scan escalated an unchanged tracked absorption"
-  pass "the catch-all scan leaves tracked absorptions to their long-cadence recheck"
-}
-
-test_housekeeping_catchall_rejects_changed_absorption_binding() {
-  local dir state fakebin url terminal
-  dir=$(make_supercase catchall-reject-changed-absorption)
+# The verified-recheck appointment is a timer, never a suppression: an unseen
+# terminal is judged by a fresh resolver read on every scan, so a status that
+# changed after the appointment was recorded can never stay hidden behind it.
+test_housekeeping_catchall_appointment_never_hides_changed_terminal() {
+  local dir state fakebin terminal
+  dir=$(make_supercase catchall-appointment-changed-terminal)
   state="$dir/state"; fakebin="$dir/fakebin"
-  url=https://github.com/example/repo/pull/58
   fm_write_meta "$state/cache-w1.meta" "window=sess:fm-cache-w1" "kind=ship"
-  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
-    "$PR_CHECK" cache-w1 "$url" >/dev/null
-  printf 'done: PR %s checks green\n' "$url" > "$state/cache-w1.status"
-  seed_absorbed_marker "$state" cache-w1 "$(date +%s)"
+  seed_recheck_marker "$state" cache-w1 "$(date +%s)"
   terminal='failed: post-check validation regressed'
   printf '%s\n' "$terminal" > "$state/cache-w1.status"
   rm -f "$state/.subsuper-last-scan"
@@ -548,15 +533,13 @@ test_housekeeping_catchall_rejects_changed_absorption_binding() {
     FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
     housekeeping "$state"
   grep -Fq "$terminal" "$state/.subsuper-escalations" 2>/dev/null \
-    || fail "a changed terminal status remained hidden behind historical absorption evidence"
-  [ ! -e "$state/.subsuper-absorbed-cache-w1" ] \
-    || fail "a changed terminal status retained its obsolete absorption cache entry"
-  pass "a changed terminal status immediately disqualifies its historical absorption cache"
+    || fail "a changed terminal status stayed hidden behind a pending recheck appointment"
+  pass "a pending recheck appointment never hides a changed terminal status from the scan"
 }
 
-test_housekeeping_absorbed_task_ids_do_not_collide() {
+test_housekeeping_recheck_task_ids_do_not_collide() {
   local dir state fakebin url terminal
-  dir=$(make_supercase catchall-absorption-task-id-collision)
+  dir=$(make_supercase catchall-recheck-task-id-collision)
   state="$dir/state"; fakebin="$dir/fakebin"
   url=https://github.com/example/repo/pull/59
   fm_write_meta "$state/cw.w1.meta" "window=sess:fm-cw.w1" "kind=ship"
@@ -564,20 +547,19 @@ test_housekeeping_absorbed_task_ids_do_not_collide() {
   FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
     "$PR_CHECK" cw.w1 "$url" >/dev/null
   printf 'done: PR %s checks green\n' "$url" > "$state/cw.w1.status"
-  seed_absorbed_marker "$state" cw.w1 "$(date +%s)"
   terminal='failed: distinct underscored task wedged'
   printf '%s\n' "$terminal" > "$state/cw_w1.status"
   rm -f "$state/.subsuper-last-scan"
   FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
     housekeeping "$state"
-  [ -e "$state/.subsuper-absorbed-cw.w1" ] \
-    || fail "the dotted task lost its exact absorption marker"
-  [ ! -e "$state/.subsuper-absorbed-cw_w1" ] \
-    || fail "the underscored task inherited the dotted task's absorption marker"
+  [ -e "$state/.subsuper-recheck-cw.w1" ] \
+    || fail "the dotted merge-wait task did not get its exact-id appointment"
+  [ ! -e "$state/.subsuper-recheck-cw_w1" ] \
+    || fail "the underscored task inherited the dotted task's appointment"
   grep -Fq "$terminal" "$state/.subsuper-escalations" 2>/dev/null \
-    || fail "the dotted task's cache hid a distinct underscored task terminal status"
-  pass "absorption cache ownership is collision-free for dotted and underscored task ids"
+    || fail "the dotted task's quiet verdict hid a distinct underscored task terminal status"
+  pass "recheck appointment ownership is collision-free for dotted and underscored task ids"
 }
 
 test_housekeeping_catchall_unarmed_pr_still_escalates() {
@@ -959,7 +941,7 @@ test_housekeeping_stale_absorbed_by_active_run_step() {
     || fail "an active run-step was wedge-escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "active run-step absorption did not clear the short wedge marker"
   [ ! -e "$state/.subsuper-wedge-escalations-$key" ] || fail "active run-step absorption left the wedge escalation count behind"
-  [ -e "$state/.subsuper-absorbed-$key" ] || fail "active run-step absorption did not record the long-cadence recheck marker"
+  [ -e "$state/.subsuper-recheck-runstep-w1" ] || fail "active run-step absorption did not record the long-cadence recheck appointment"
   pass "an idle pane with an active no-mistakes run-step self-handles instead of wedge-escalating"
 }
 
@@ -981,7 +963,7 @@ test_housekeeping_stale_absorbed_by_background_task_footer() {
   [ ! -s "$state/.subsuper-escalations" ] \
     || fail "a live background-task footer was wedge-escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "background-task absorption did not clear the short wedge marker"
-  [ -e "$state/.subsuper-absorbed-$key" ] || fail "background-task absorption did not record the long-cadence recheck marker"
+  [ -e "$state/.subsuper-recheck-bgfoot-w1" ] || fail "background-task absorption did not record the long-cadence recheck appointment"
   pass "an idle pane with a live harness background-task footer self-handles instead of wedge-escalating"
 }
 
@@ -1001,7 +983,7 @@ test_housekeeping_stale_neither_source_still_escalates() {
   grep -F "escalation 1" "$state/.subsuper-escalations" >/dev/null 2>&1 \
     || fail "a pane provably NOT working (neither source) was not escalated exactly as today: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
   [ -e "$state/.subsuper-stale-$key" ] || fail "neither-source escalation removed the persistence marker instead of resetting it"
-  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "neither-source escalation incorrectly recorded a long-cadence absorption marker"
+  [ ! -e "$state/.subsuper-recheck-neither-w1" ] || fail "neither-source escalation incorrectly recorded a recheck appointment"
   pass "an idle pane with neither authoritative source still escalates exactly as today"
 }
 
@@ -1024,34 +1006,34 @@ SH
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
   grep -F "escalation 1" "$state/.subsuper-escalations" >/dev/null 2>&1 \
     || fail "an unreadable authoritative source did not fail-safe escalate: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
-  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "an unreadable source was incorrectly treated as absorbed"
+  [ ! -e "$state/.subsuper-recheck-unreadable-w1" ] || fail "an unreadable source was incorrectly treated as absorbed"
   pass "an unreadable authoritative source escalates fail-safe, exactly like today's no-verdict case"
 }
 
-test_housekeeping_absorbed_recheck_still_working_resets_window() {
+test_housekeeping_recheck_still_working_resets_window() {
   local dir state fakebin key before after
-  dir=$(make_supercase absorbed-recheck-still-working)
+  dir=$(make_supercase recheck-still-working)
   state="$dir/state"; fakebin="$dir/fakebin"
   fm_write_meta "$state/absorbed-w1.meta" "window=sess:fm-absorbed-w1"
   printf 'working\n' > "$state/absorbed-w1.status"
   key=$(printf '%s' "absorbed-w1" | tr ':/.' '___')
   before=$(( $(date +%s) - 5000 ))
-  seed_absorbed_marker "$state" absorbed-w1 "$before"
+  seed_recheck_marker "$state" absorbed-w1 "$before"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w1" \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
-  [ -e "$state/.subsuper-absorbed-$key" ] || fail "still-working recheck cleared the long-cadence marker instead of resetting it"
-  after=$(absorbed_marker_stamp "$state" absorbed-w1)
-  [ "$after" -gt "$before" ] || fail "still-working recheck did not reset the long-cadence window"
+  [ -e "$state/.subsuper-recheck-absorbed-w1" ] || fail "still-working recheck cleared the appointment instead of resetting it"
+  after=$(recheck_marker_stamp "$state" absorbed-w1)
+  [ "$after" -gt "$before" ] || fail "still-working recheck did not reset the appointment window"
   [ ! -s "$state/.subsuper-escalations" ] || fail "still-working recheck escalated instead of continuing to self-handle"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "still-working recheck created a short wedge marker"
-  pass "a long-cadence absorption recheck that is still provably working resets the window without escalating"
+  pass "an appointment recheck that is still provably working resets the window without escalating"
 }
 
-test_housekeeping_absorbed_recheck_merge_wait_resets_window() {
+test_housekeeping_recheck_merge_wait_resets_window() {
   local dir state fakebin key before after url
-  dir=$(make_supercase absorbed-recheck-mergewait)
+  dir=$(make_supercase recheck-mergewait)
   state="$dir/state"; fakebin="$dir/fakebin"
   url=https://github.com/example/repo/pull/56
   fm_write_meta "$state/absorbed-mw.meta" "window=sess:fm-absorbed-mw" "kind=ship"
@@ -1060,89 +1042,189 @@ test_housekeeping_absorbed_recheck_merge_wait_resets_window() {
   printf 'done: PR %s checks green\n' "$url" > "$state/absorbed-mw.status"
   key=$(printf '%s' "absorbed-mw" | tr ':/.' '___')
   before=$(( $(date +%s) - 5000 ))
-  seed_absorbed_marker "$state" absorbed-mw "$before"
+  seed_recheck_marker "$state" absorbed-mw "$before"
   date +%s > "$state/.subsuper-stale-$key"
   printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-mw" \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review' \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
-  [ -e "$state/.subsuper-absorbed-$key" ] \
-    || fail "current merge-wait recheck cleared its long-cadence marker"
-  after=$(absorbed_marker_stamp "$state" absorbed-mw)
-  [ "$after" -gt "$before" ] || fail "current merge-wait recheck did not reset the long-cadence window"
+  [ -e "$state/.subsuper-recheck-absorbed-mw" ] \
+    || fail "current merge-wait recheck cleared its appointment"
+  after=$(recheck_marker_stamp "$state" absorbed-mw)
+  [ "$after" -gt "$before" ] || fail "current merge-wait recheck did not reset the appointment window"
   [ ! -s "$state/.subsuper-escalations" ] \
     || fail "current merge-wait recheck escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
   [ ! -e "$state/.subsuper-stale-$key" ] \
     || fail "current merge-wait recheck retained short-cadence stale tracking"
   [ ! -e "$state/.subsuper-wedge-escalations-$key" ] \
     || fail "current merge-wait recheck retained the wedge escalation count"
-  pass "a current merge-wait remains silent across long-cadence rechecks"
+  pass "a current merge-wait remains silent across appointment rechecks"
 }
 
-test_housekeeping_absorbed_recheck_no_longer_working_resurfaces() {
+# REGRESSION (redesign acceptance): silently-lapsed positive evidence enters
+# the ORDINARY idle grace, never an immediate possible-wedge escalation. The
+# retired bound-absorption design escalated this case straight from its
+# marker-mismatch decision tree.
+test_housekeeping_recheck_lapsed_evidence_gets_grace() {
   local dir state fakebin key
-  dir=$(make_supercase absorbed-recheck-no-longer-working)
+  dir=$(make_supercase recheck-lapsed-evidence)
   state="$dir/state"; fakebin="$dir/fakebin"
   fm_write_meta "$state/absorbed-w2.meta" "window=sess:fm-absorbed-w2"
   printf 'working\n' > "$state/absorbed-w2.status"
   key=$(printf '%s' "absorbed-w2" | tr ':/.' '___')
-  seed_absorbed_marker "$state" absorbed-w2 "$(( $(date +%s) - 5000 ))"
+  seed_recheck_marker "$state" absorbed-w2 "$(( $(date +%s) - 5000 ))"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w2" \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: unknown · source: none · worktree gone' \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
-  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "no-longer-working recheck did not clear the long-cadence marker"
-  grep -Fq "no longer" "$state/.subsuper-escalations" 2>/dev/null \
-    || fail "no-longer-working recheck did not escalate: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ ! -e "$state/.subsuper-recheck-absorbed-w2" ] || fail "lapsed-evidence recheck did not clear the appointment"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "lapsed evidence was escalated immediately instead of entering the ordinary grace: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
   [ -e "$state/.subsuper-stale-$key" ] \
-    || fail "no-longer-working recheck did not hand the pane back to ordinary short-cadence wedge tracking"
+    || fail "lapsed-evidence recheck did not hand the pane to ordinary idle-grace tracking"
   [ ! -e "$state/.subsuper-wedge-escalations-$key" ] \
-    || fail "no-longer-working recheck should start the wedge count fresh, not carry one over"
-  pass "a long-cadence absorption that is no longer provably working re-surfaces within the bounded window, never never"
+    || fail "lapsed-evidence recheck should start any later wedge count fresh"
+  pass "an appointment whose positive evidence lapsed enters the ordinary idle grace, never an immediate wedge escalation"
 }
 
-test_housekeeping_absorbed_recheck_terminal_status_clears_marker() {
+test_housekeeping_recheck_terminal_status_clears_marker() {
   local dir state fakebin key terminal
-  dir=$(make_supercase absorbed-recheck-terminal)
+  dir=$(make_supercase recheck-terminal)
   state="$dir/state"; fakebin="$dir/fakebin"
   fm_write_meta "$state/absorbed-w3.meta" "window=sess:fm-absorbed-w3"
   terminal='done: validation completed'
   printf '%s\n' "$terminal" > "$state/absorbed-w3.status"
   key=$(printf '%s' "absorbed-w3" | tr ':/. ' '____')
-  seed_absorbed_marker "$state" absorbed-w3 "$(( $(date +%s) - 5000 ))"
-  printf '%s\n' "$terminal" > "$state/.subsuper-seen-status-$key"
+  seed_recheck_marker "$state" absorbed-w3 "$(( $(date +%s) - 5000 ))"
+  printf '%s' "$terminal" > "$state/.subsuper-seen-status-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w3" \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: stopped · source: none · finished quietly' \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
-  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "terminal recheck retained the absorbed marker"
+  [ ! -e "$state/.subsuper-recheck-absorbed-w3" ] || fail "terminal recheck retained the appointment"
   [ ! -s "$state/.subsuper-escalations" ] || fail "terminal recheck re-escalated a reported status: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "terminal recheck created short-cadence wedge tracking"
-  pass "a terminal absorbed recheck clears tracking without re-escalating"
+  pass "an already-surfaced terminal recheck clears tracking without re-escalating"
 }
 
-test_housekeeping_absorbed_recheck_unseen_terminal_escalates() {
+test_housekeeping_recheck_unseen_terminal_escalates() {
   local dir state fakebin key terminal
-  dir=$(make_supercase absorbed-recheck-unseen-terminal)
+  dir=$(make_supercase recheck-unseen-terminal)
   state="$dir/state"; fakebin="$dir/fakebin"
   fm_write_meta "$state/absorbed-w4.meta" "window=sess:fm-absorbed-w4"
   terminal='failed: validation exited 1'
   printf '%s\n' "$terminal" > "$state/absorbed-w4.status"
   key=$(printf '%s' "absorbed-w4" | tr ':/. ' '____')
-  seed_absorbed_marker "$state" absorbed-w4 "$(( $(date +%s) - 5000 ))"
-  printf 'done: an earlier validation\n' > "$state/.subsuper-seen-status-$key"
+  seed_recheck_marker "$state" absorbed-w4 "$(( $(date +%s) - 5000 ))"
+  printf 'done: an earlier validation' > "$state/.subsuper-seen-status-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w4" \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: unknown · source: none · worktree gone' \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
-  [ ! -e "$state/.subsuper-absorbed-$key" ] || fail "unseen terminal recheck retained the absorbed marker"
+  [ ! -e "$state/.subsuper-recheck-absorbed-w4" ] || fail "unseen terminal recheck retained the appointment"
   grep -Fq "$terminal" "$state/.subsuper-escalations" 2>/dev/null \
     || fail "unseen terminal status was not escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
   [ "$(cat "$state/.subsuper-seen-status-$key" 2>/dev/null || true)" = "$terminal" ] \
     || fail "unseen terminal escalation did not update the seen-status marker"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "unseen terminal recheck created short-cadence wedge tracking"
-  pass "an unseen terminal absorbed recheck escalates once without wedge tracking"
+  pass "an unseen terminal appointment recheck escalates once without wedge tracking"
+}
+
+# REGRESSION (finding captain-held-pause-still-wedge-escalates): a captain-held
+# filing that preserves a paused park must stop the short-cadence wedge loop.
+# The resolver reports paused; the daemon must route that verdict into pause
+# tracking instead of accepting only a fresh working verb as progress.
+test_housekeeping_captain_held_pause_stops_wedge_loop() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase captain-held-pause-wedge-loop)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-held-w20"; pane="$dir/pane.txt"
+  fm_write_meta "$state/held-w20.meta" "window=$win" "kind=ship"
+  printf 'paused: holding for the captain decision\ncaptain-held [key=park]: decision filed to the captain backlog\n' > "$state/held-w20.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "held-w20" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: paused · source: status-log · holding for the captain decision' \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a captain-held preserved pause was wedge-escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "a captain-held preserved pause retained short-cadence wedge tracking"
+  [ ! -e "$state/.subsuper-wedge-escalations-$key" ] \
+    || fail "a captain-held preserved pause retained the wedge escalation count"
+  [ -e "$state/.subsuper-paused-$key" ] \
+    || fail "a captain-held preserved pause was not handed to pause tracking"
+  pass "a captain-held preserved pause moves to pause tracking instead of wedge-escalating in a loop"
+}
+
+# The same preserved pause must also survive its own pause-resurface recheck
+# instead of being cleared because the raw last line is not the paused verb.
+test_housekeeping_captain_held_pause_survives_resurface() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase captain-held-pause-resurface)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-held-w21"; pane="$dir/pane.txt"
+  fm_write_meta "$state/held-w21.meta" "window=$win" "kind=ship"
+  printf 'paused: holding for the captain decision\ncaptain-held [key=park]: decision filed\n' > "$state/held-w21.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "held-w21" | tr ':/.' '___')
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: paused · source: status-log · holding for the captain decision' \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  grep -Fq "awaiting external" "$state/.subsuper-escalations" 2>/dev/null \
+    || fail "a captain-held preserved pause did not re-surface as an awaiting-external recheck: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  grep -Fq "possible wedge" "$state/.subsuper-escalations" 2>/dev/null \
+    && fail "a captain-held preserved pause re-surfaced as a possible wedge"
+  [ -e "$state/.subsuper-paused-$key" ] \
+    || fail "the pause-resurface recheck cleared a still-held pause instead of resetting its window"
+  pass "a captain-held preserved pause re-surfaces on the pause cadence and keeps its tracking"
+}
+
+# REGRESSION (finding absorbed-resolution-change-bypasses-grace): a task left
+# quiet on positive evidence whose status then changes to a decision-closing
+# resolved: line must route through the ORDINARY transient-stale grace, never
+# an immediate possible-wedge escalation. Seeds the RETIRED bound-absorption
+# marker shape so the migration path is exercised in the same pass.
+test_housekeeping_resolution_change_routes_through_grace() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase resolution-change-grace)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-resgrace-w1"; pane="$dir/pane.txt"
+  fm_write_meta "$state/resgrace-w1.meta" "window=$win" "kind=ship"
+  printf 'done: implementation complete\n' > "$state/resgrace-w1.status"
+  seed_legacy_absorbed_marker "$state" resgrace-w1 "$(( $(date +%s) - 5000 ))"
+  printf 'needs-decision [key=x9]: pick\nresolved [key=x9]: captain chose option 1\n' > "$state/resgrace-w1.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "resgrace-w1" | tr ':/.' '___')
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · between turns' \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -e "$state/.subsuper-absorbed-resgrace-w1" ] \
+    || fail "the retired bound-absorption marker was honored instead of migrated"
+  grep -Fq "possible wedge" "$state/.subsuper-escalations" 2>/dev/null \
+    && fail "a resolution change fired an immediate possible-wedge escalation instead of the ordinary grace"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a resolution change escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ -e "$state/.subsuper-stale-$key" ] \
+    || fail "a resolution change was not handed to the ordinary transient-stale grace"
+  pass "a resolution change after quiet positive evidence routes through the ordinary grace path"
+}
+
+test_classify_stale_captain_held_classifies_pause() {
+  local dir state out
+  dir=$(make_supercase stale-captain-held-pause)
+  state="$dir/state"
+  printf 'paused: holding for the captain decision\ncaptain-held [key=park]: decision filed\n' > "$state/held-w22.status"
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-held-w22" "$state")
+  case "$out" in pause\|*) ;; *) fail "a captain-held last line did not classify as pause: $out" ;; esac
+  pass "a captain-held last line classifies as a deliberate wait, not a wedge suspect"
 }
 
 test_housekeeping_herdr_persistent_stale_resolves_meta() {
@@ -2654,9 +2736,8 @@ test_handle_wake_turn_ended_absorbs_merge_wait
 test_classify_signal_resolving_line_exempt_from_provably_working_guard
 test_classify_stale_present_mode_resolving_line_defers
 test_housekeeping_catchall_absorbs_merge_wait_done
-test_housekeeping_catchall_skips_tracked_absorption
-test_housekeeping_catchall_rejects_changed_absorption_binding
-test_housekeeping_absorbed_task_ids_do_not_collide
+test_housekeeping_catchall_appointment_never_hides_changed_terminal
+test_housekeeping_recheck_task_ids_do_not_collide
 test_housekeeping_catchall_unarmed_pr_still_escalates
 test_stale_paused_classifies_pause
 test_handle_wake_paused_records_pause_marker
@@ -2675,11 +2756,15 @@ test_housekeeping_stale_absorbed_by_active_run_step
 test_housekeeping_stale_absorbed_by_background_task_footer
 test_housekeeping_stale_neither_source_still_escalates
 test_housekeeping_stale_unreadable_source_escalates_fail_safe
-test_housekeeping_absorbed_recheck_still_working_resets_window
-test_housekeeping_absorbed_recheck_merge_wait_resets_window
-test_housekeeping_absorbed_recheck_no_longer_working_resurfaces
-test_housekeeping_absorbed_recheck_terminal_status_clears_marker
-test_housekeeping_absorbed_recheck_unseen_terminal_escalates
+test_housekeeping_recheck_still_working_resets_window
+test_housekeeping_recheck_merge_wait_resets_window
+test_housekeeping_recheck_lapsed_evidence_gets_grace
+test_housekeeping_recheck_terminal_status_clears_marker
+test_housekeeping_recheck_unseen_terminal_escalates
+test_housekeeping_captain_held_pause_stops_wedge_loop
+test_housekeeping_captain_held_pause_survives_resurface
+test_housekeeping_resolution_change_routes_through_grace
+test_classify_stale_captain_held_classifies_pause
 test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_paused_unpaused_cleared

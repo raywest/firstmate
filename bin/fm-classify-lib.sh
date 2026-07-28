@@ -31,6 +31,14 @@ _FM_CLASSIFY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)"
 # or no-mistakes install; absent, it points at the real sibling script.
 FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
 
+# Merge-poll artifact validation (fm_pr_poll_artifacts_valid) backs the
+# merge-wait arm of crew_escalation_disposition below. Guarded so an embedder
+# that already sourced bin/fm-pr-lib.sh (the watcher, the daemon) is untouched.
+if ! declare -F fm_pr_poll_artifacts_valid >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-pr-lib.sh
+  . "$_FM_CLASSIFY_LIB_DIR/fm-pr-lib.sh"
+fi
+
 # Captain-relevant status verbs. A status line carrying any of these is work
 # firstmate must see. Lines without these verbs are no-verb signals: the watcher
 # absorbs them only with positive provably-working evidence, while the daemon uses
@@ -396,6 +404,77 @@ crew_is_provably_working() {  # <id>
 # escalating a possible wedge.
 crew_is_paused() {  # <id>
   [ "$(crew_absorb_class "$1")" = paused ]
+}
+
+# 0 if task <id>'s CURRENT last status line is its captain-relevant done: line
+# for the exact recorded PR and the byte-static merge poll bin/fm-watch.sh
+# trusts to notify on merge is validated and armed (fm_pr_poll_artifacts_valid,
+# bin/fm-pr-lib.sh, which leaves the recorded URL in FM_PR_META_URL). A newer
+# failed:/needs-decision:/blocked:/unrelated done: line disqualifies the hold
+# because the poll's evidence no longer describes the current status.
+crew_is_pr_merge_waiting() {  # <task-id> <state> <current-last-status>
+  local id=$1 state=$2 last=$3
+  [ "$(status_line_verb "$last")" = 'done' ] || return 1
+  status_is_captain_relevant "$last" || return 1
+  fm_pr_poll_artifacts_valid "$state" "$id" "$_FM_CLASSIFY_LIB_DIR/fm-pr-poll.sh" || return 1
+  case " $last " in
+    *" $FM_PR_META_URL "*) return 0 ;;
+  esac
+  return 1
+}
+
+# The SINGLE current-state authority for the triage daemon's escalate-or-stay-
+# quiet decision (docs/alwayson-triage.md "Single-resolver escalation
+# authority"). Every verdict is derived only from evidence read at call time -
+# an fm-crew-state.sh read plus the current last status line - never from a
+# recorded past verdict, so a suppression can never outlive the evidence that
+# justified it. Prints exactly one token:
+#   working    - crew_absorb_class proves an active run-step, busy pane, or
+#                live harness background task; an idle-LOOKING pane is expected.
+#   paused     - the authoritative current state is a declared external-wait
+#                pause, or the current line is a verified captain-held transfer
+#                (a deliberate captain-owned wait; the same treatment the
+#                watcher's status_is_paused_or_captain_held applies).
+#   merge-wait - the current line is the captain-relevant done: for the exact
+#                recorded PR and its merge poll is armed (crew_is_pr_merge_waiting).
+#   attention  - the current line is captain-relevant and no positive source
+#                supersedes it; the caller surfaces it (any already-surfaced
+#                dedup is the caller's delivery concern, not suppression).
+#   recent     - the current line is a decision-closing resolved: event -
+#                evidence of a very recent turn, so the caller applies its
+#                ordinary bounded idle grace instead of a first-sight surface;
+#                a crew that stays idle past that grace still escalates.
+#   stopped    - none of the above; the crew is not provably working.
+# NOT a pure read: crew_absorb_class may make a bounded no-mistakes call, so
+# callers invoke this on wake classification, bounded rechecks, and the
+# heartbeat scan - never on every housekeeping tick.
+crew_escalation_disposition() {  # <task-id> <state>
+  local id=$1 state=$2 last class
+  last=$(last_status_line "$state/$id.status")
+  class=$(crew_absorb_class "$id")
+  case "$class" in
+    working) printf 'working'; return ;;
+    paused)  printf 'paused'; return ;;
+  esac
+  if [ -n "$last" ] && status_is_captain_relevant "$last"; then
+    if crew_is_pr_merge_waiting "$id" "$state" "$last"; then
+      printf 'merge-wait'
+    else
+      printf 'attention'
+    fi
+    return
+  fi
+  # A declared paused: line normally reports paused through crew_absorb_class's
+  # run-precedence read; when the resolver cannot attribute the crew (a dead
+  # endpoint, missing metadata) the declaration itself still names a deliberate
+  # wait, the same dead-agent treatment the watcher's pause cadence applies.
+  case "$(status_line_verb "${last:-}")" in
+    "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"|"${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}")
+      printf 'paused'; return ;;
+    "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}")
+      printf 'recent'; return ;;
+  esac
+  printf 'stopped'
 }
 
 # 0 (benign/absorb) if EVERY task referenced by a no-verb "signal:" wake is provably
