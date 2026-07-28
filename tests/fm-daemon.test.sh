@@ -12,6 +12,7 @@ set -u
 
 DAEMON="$ROOT/bin/fm-supervise-daemon.sh"
 AFK_START="$ROOT/bin/fm-afk-start.sh"
+PR_CHECK="$ROOT/bin/fm-pr-check.sh"
 # Source the daemon's pure functions once. Its main loop is skipped under sourcing
 # via a BASH_SOURCE guard, so only classify_*/housekeeping/escalate_*/afk_* and the
 # pane/submit helpers become defined.
@@ -292,6 +293,152 @@ test_stale_terminal_escalates() {
   out=$(FM_STATE_OVERRIDE="$state" classify_stale "default:w1:p2" "$state")
   case "$out" in escalate\|*) ;; *) fail "terminal herdr stale did not escalate through metadata: $out" ;; esac
   pass "stale + terminal status escalates immediately"
+}
+
+# --- daemon accuracy fix: positive-evidence absorption for a terminal line --
+# (fm-daemon-validating-noise-n1). Four shapes the always-on triage daemon must
+# never escalate on idleness alone: an active validation run, a done-awaiting-
+# merge hold, any other long-running harness-tracked background command, and a
+# re-surfaced already-resolved decision. Every case below requires an
+# AFFIRMATIVE positive-evidence source (crew_absorb_class's working verdict, an
+# armed PR merge poll, or the status line's own resolving verb); the paired
+# control case in each group proves the SAME shape still escalates fail-safe
+# when that positive evidence is absent.
+
+test_classify_stale_terminal_absorbs_active_validation_run() {
+  local dir state fakebin out
+  dir=$(make_supercase stale-terminal-absorb-run)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/av-w1.meta" "window=sess:fm-av-w1" "kind=ship"
+  printf 'done: implementation complete\n' > "$state/av-w1.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    classify_stale "sess:fm-av-w1" "$state")
+  case "$out" in absorb\|*) ;; *) fail "an active validation run did not absorb a stale pre-validation done:: $out" ;; esac
+  pass "a stale pre-validation done: is absorbed while a no-mistakes run is actively validating"
+}
+
+test_classify_stale_terminal_absorbs_background_task() {
+  local dir state fakebin out
+  dir=$(make_supercase stale-terminal-absorb-bg)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/bg-w1.meta" "window=sess:fm-bg-w1" "kind=ship"
+  printf 'done: implementation complete\n' > "$state/bg-w1.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: pane · harness background task still running' \
+    classify_stale "sess:fm-bg-w1" "$state")
+  case "$out" in absorb\|*) ;; *) fail "a live harness background-task footer did not absorb a stale terminal status: $out" ;; esac
+  pass "a stale terminal status is absorbed while the harness reports a live background task"
+}
+
+test_classify_stale_terminal_still_escalates_when_not_working() {
+  local dir state fakebin out
+  dir=$(make_supercase stale-terminal-no-absorb)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/idle-w1.meta" "window=sess:fm-idle-w1" "kind=ship"
+  printf 'done: implementation complete\n' > "$state/idle-w1.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
+    classify_stale "sess:fm-idle-w1" "$state")
+  case "$out" in escalate\|*) ;; *) fail "a genuinely idle terminal status was wrongly absorbed: $out" ;; esac
+  pass "a terminal status with no positive working/merge-wait evidence still escalates fail-safe"
+}
+
+test_classify_stale_terminal_absorbs_merge_wait() {
+  local dir state fakebin out
+  dir=$(make_supercase stale-terminal-absorb-mergewait)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/mw-w1.meta" "window=sess:fm-mw-w1" "kind=ship"
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
+    "$PR_CHECK" mw-w1 https://github.com/example/repo/pull/42 >/dev/null
+  printf 'done: PR https://github.com/example/repo/pull/42 checks green\n' > "$state/mw-w1.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review' \
+    classify_stale "sess:fm-mw-w1" "$state")
+  case "$out" in absorb\|*) ;; *) fail "an armed PR merge-wait hold did not absorb a stale done: status: $out" ;; esac
+  pass "a stale done-awaiting-merge status is absorbed once its PR is recorded and its merge poll is armed"
+}
+
+test_classify_stale_terminal_unarmed_pr_still_escalates() {
+  local dir state fakebin out
+  dir=$(make_supercase stale-terminal-unarmed-pr)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  fm_write_meta "$state/ua-w1.meta" "window=sess:fm-ua-w1" "kind=ship" "pr=https://github.com/example/repo/pull/9"
+  printf 'done: PR https://github.com/example/repo/pull/9 checks green\n' > "$state/ua-w1.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review' \
+    classify_stale "sess:fm-ua-w1" "$state")
+  case "$out" in escalate\|*) ;; *) fail "a recorded pr= with no armed poll was wrongly absorbed: $out" ;; esac
+  pass "a recorded PR without an armed merge poll still escalates - never trust the done: text alone"
+}
+
+test_classify_signal_terminal_absorbs_active_validation_run() {
+  local dir state fakebin out
+  dir=$(make_supercase signal-terminal-absorb-run)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  printf 'done: implementation complete\n' > "$state/sv-w1.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    classify_signal "$state/sv-w1.status" "$state")
+  case "$out" in absorb\|*) ;; *) fail "a pre-validation done: signal did not absorb during an active run: $out" ;; esac
+  pass "a done: signal is absorbed when the crew has already moved into an active validation run"
+}
+
+test_classify_signal_resolving_line_exempt_from_provably_working_guard() {
+  local dir state fakebin out verb
+  dir=$(make_supercase signal-resolving-exempt)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  for verb in resolved captain-held; do
+    printf 'needs-decision [key=x1]: pick an approach\n%s [key=x1]: closed\n' "$verb" > "$state/rs-w1.status"
+    out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+      FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
+      classify_signal "$state/rs-w1.status" "$state")
+    case "$out" in self\|*) ;; *) fail "a $verb status line was subjected to the swallowed-finish guard: $out" ;; esac
+  done
+  pass "resolved:/captain-held: status lines are self-explanatory and exempt from the no-verb provably-working guard"
+}
+
+test_classify_stale_present_mode_resolving_line_defers() {
+  local dir state fakebin out
+  dir=$(make_supercase stale-present-resolving)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  printf 'needs-decision [key=x2]: pick\nresolved [key=x2]: chose\n' > "$state/pr-w4.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
+    classify_stale "sess:fm-pr-w4" "$state")
+  case "$out" in self\|*) ;; *) fail "present-mode first-sight escalation fired for a resolving status line: $out" ;; esac
+  pass "present mode defers a resolving status line to the ordinary persistence recheck instead of first-sight escalating"
+}
+
+test_housekeeping_catchall_absorbs_merge_wait_done() {
+  local dir state key
+  dir=$(make_supercase catchall-absorb-mergewait)
+  state="$dir/state"
+  fm_write_meta "$state/cw-w1.meta" "window=sess:fm-cw-w1" "kind=ship"
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
+    "$PR_CHECK" cw-w1 https://github.com/example/repo/pull/55 >/dev/null
+  printf 'done: PR https://github.com/example/repo/pull/55 checks green\n' > "$state/cw-w1.status"
+  key=$(printf '%s' "cw-w1" | tr ':/.' '___')
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "catch-all scan escalated an armed merge-wait done: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ -e "$state/.subsuper-absorbed-$key" ] \
+    || fail "catch-all scan did not record an absorbed marker for the merge-wait hold"
+  pass "the catch-all scan absorbs a done: whose PR is already recorded and armed, instead of re-escalating it"
+}
+
+test_housekeeping_catchall_unarmed_pr_still_escalates() {
+  local dir state
+  dir=$(make_supercase catchall-unarmed-pr)
+  state="$dir/state"
+  fm_write_meta "$state/ua-w2.meta" "window=sess:fm-ua-w2" "kind=ship" "pr=https://github.com/example/repo/pull/61"
+  printf 'done: PR https://github.com/example/repo/pull/61 checks green\n' > "$state/ua-w2.status"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" housekeeping "$state"
+  grep -Fq 'ua-w2' "$state/.subsuper-escalations" 2>/dev/null \
+    || fail "catch-all scan did not escalate a done: whose PR poll is not armed: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  pass "the catch-all scan still escalates a recorded PR with no armed merge poll"
 }
 
 # A DECLARED external-wait pause (paused:) is neither a wedge nor a terminal
@@ -2312,6 +2459,16 @@ test_classify_terminal_signal_escalates
 test_classify_check_and_unknown_escalate
 test_stale_transient_self_records_marker
 test_stale_terminal_escalates
+test_classify_stale_terminal_absorbs_active_validation_run
+test_classify_stale_terminal_absorbs_background_task
+test_classify_stale_terminal_still_escalates_when_not_working
+test_classify_stale_terminal_absorbs_merge_wait
+test_classify_stale_terminal_unarmed_pr_still_escalates
+test_classify_signal_terminal_absorbs_active_validation_run
+test_classify_signal_resolving_line_exempt_from_provably_working_guard
+test_classify_stale_present_mode_resolving_line_defers
+test_housekeeping_catchall_absorbs_merge_wait_done
+test_housekeeping_catchall_unarmed_pr_still_escalates
 test_stale_paused_classifies_pause
 test_handle_wake_paused_records_pause_marker
 test_handle_wake_paused_signal_records_pause_marker

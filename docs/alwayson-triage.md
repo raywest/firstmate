@@ -70,6 +70,44 @@ change.
 This document is the one policy owner; `bin/fm-classify-lib.sh` and
 `bin/fm-crew-state.sh` implement the predicate and its two sources.
 
+### Terminal-status absorption (2026-07-27)
+
+The absorption above only ever covered a NON-terminal stale pane (no
+captain-relevant verb in the last status line).
+A captain-relevant TERMINAL line (`done:`, `needs-decision:`, `blocked:`,
+`failed:`) can be just as stale: a crewmate's pre-validation `done:` line
+stays the last line for the entire span of a no-mistakes run it triggers
+right after, and a merge-wait `done:` line stays the last line for as long as
+the captain has not yet merged - in both cases the log has no reason to ever
+append again.
+`bin/fm-supervise-daemon.sh`'s `terminal_status_absorb_reason` applies the
+SAME `crew_absorb_class` check to a captain-relevant/terminal line before
+`classify_signal`, `classify_stale`, or the heartbeat catch-all scan escalate
+it, plus a THIRD positive-evidence source only relevant to a terminal line:
+
+3. **PR merge-wait**: the task's metadata records a `pr=` URL AND the
+   byte-static merge poll `bin/fm-watch.sh` itself trusts to notify on merge
+   is validated and armed (`fm_pr_poll_artifacts_valid`, `bin/fm-pr-lib.sh`) -
+   `crew_is_pr_merge_waiting`.
+   Never inferred from the `done:` text alone: an unarmed or tampered poll
+   still surfaces as a possible wedge.
+
+Any of the three sources absorbs a terminal line exactly like a non-terminal
+one - the SAME `state/.subsuper-absorbed-<key>` marker and long recheck
+cadence, so a genuinely terminal event (the crew moved on, or the evidence
+lapses) still surfaces once, deduped against the signal path's own seen
+marker.
+Separately, a `resolved:`/`captain-held:` last line - the crew closing a
+decision it was asked about - is itself positive evidence of a very recent
+turn and is exempt from the no-verb "crew not provably working" guard in
+`classify_signal`, and from present mode's first-sight stopped-crew escalation
+in `classify_stale`; the ordinary bounded persistence recheck still catches a
+genuine silent death right after it.
+Live-verified 2026-07-27 in an isolated Herdr lab session against a real
+Claude Code pane (`fm-daemon-validating-noise-n1` report): a genuinely busy
+pane absorbs a stale pre-validation `done:` line, and the SAME pane once idle
+still escalates it.
+
 Urgent items (always flush immediately regardless of style): `check:` output
 (PR merges, X mentions), `failed:`, `needs-decision:`, `blocked:`, `done:`/PR-ready,
 and wedge alarms.

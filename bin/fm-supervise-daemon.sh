@@ -188,6 +188,14 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$FM_DAEMON_DIR/fm-classify-lib.sh"
 
+# Merge-poll artifact validation (fm_pr_poll_artifacts_valid), the single owner
+# of "is this task's PR merge poll genuinely armed" - reused below to recognize
+# a done-awaiting-merge hold as positive evidence, never inferred from a done:
+# line's text alone. The always-on watcher already sources this same library
+# alongside fm-classify-lib.sh, so the two coexist as independent siblings.
+# shellcheck source=bin/fm-pr-lib.sh
+. "$FM_DAEMON_DIR/fm-pr-lib.sh"
+
 # Supervisor-pane discovery (FM_SUPERVISOR_TARGET_DEFAULT,
 # FM_SUPERVISOR_BACKEND_DEFAULT, discover_supervisor_target,
 # discover_supervisor_backend). Shared with the script-owned daemon launcher
@@ -368,9 +376,72 @@ _collapse_newlines() {  # <text>
 # field for "self" is informational (logged); for "escalate" it is the pre-read
 # summary firstmate would otherwise have to re-read.
 
+# --- positive-evidence absorption for a captain-relevant/terminal line ------
+# The classifiers below trust a captain-relevant (terminal) last status line at
+# face value once no dedup applies. That is wrong whenever the crew has since
+# moved on to real work the status log has no reason to reflect: a
+# no-mistakes validation started right after a pre-validation done:, any other
+# long-running harness-tracked background command, or a genuine PR
+# done-awaiting-merge hold. terminal_status_absorb_reason is the ONE place
+# that decides whether one of those two POSITIVE sources applies - absence of
+# a signal is never enough to absorb.
+
+# 0 if task <id> is a genuine done-awaiting-merge hold: its metadata records a
+# pr= URL, and the byte-static merge poll fm-watch.sh itself trusts to notify
+# on merge is validated and armed (fm_pr_poll_artifacts_valid, bin/fm-pr-lib.sh)
+# - never inferred from the done: text alone, since an unarmed or tampered
+# poll must still surface as a possible wedge.
+crew_is_pr_merge_waiting() {  # <task-id> <state>
+  local id=$1 state=$2
+  [ -f "$state/$id.meta" ] || return 1
+  grep -q '^pr=' "$state/$id.meta" 2>/dev/null || return 1
+  fm_pr_poll_artifacts_valid "$state" "$id" "$FM_DAEMON_DIR/fm-pr-poll.sh"
+}
+
+# Prints a short reason and returns 0 when task <id> shows EITHER positive
+# source (crew_absorb_class's working verdict, or crew_is_pr_merge_waiting);
+# prints nothing and returns 1 (fail-safe: let the caller escalate) otherwise.
+terminal_status_absorb_reason() {  # <task-id> <state>
+  local id=$1 state=$2
+  if [ "$(crew_absorb_class "$id")" = working ]; then
+    printf 'active work (run-step/background-task)'
+    return 0
+  fi
+  if crew_is_pr_merge_waiting "$id" "$state"; then
+    printf 'PR recorded and merge poll armed'
+    return 0
+  fi
+  return 1
+}
+
+# 0 (absorbable) if EVERY distinct task referenced by a "signal:" wake's file
+# list shows one of terminal_status_absorb_reason's positive sources; 1
+# otherwise, or when no task can be resolved. Mirrors
+# signal_crew_provably_working's (bin/fm-classify-lib.sh) file-to-task mapping
+# and de-dup, extended with the merge-wait source.
+signal_crew_absorbable() {  # <state> <file> ...
+  local state=$1; shift
+  local f base task seen=""
+  for f in "$@"; do
+    base=${f##*/}
+    case "$base" in
+      *.status)     task=${base%.status} ;;
+      *.turn-ended) task=${base%.turn-ended} ;;
+      *)            continue ;;
+    esac
+    [ -n "$task" ] || continue
+    case " $seen " in *" $task "*) continue ;; esac
+    seen="$seen $task"
+    terminal_status_absorb_reason "$task" "$state" >/dev/null || return 1
+  done
+  [ -n "$seen" ] || return 1
+  return 0
+}
+
 classify_signal() {  # <reason-after-colon> <state>
-  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen guard_task guard_last paused=0 unresolved=0 guard_count=0
-  local -a guard_files
+  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen guard_task guard_last paused=0 unresolved=0 guard_count=0 resolving=0
+  local -a guard_files reason_files
+  read -ra reason_files <<<"$reason"
   for f in $reason; do
     [ -e "$f" ] || { unresolved=1; continue; }
     guard_task=$(basename "$f")
@@ -379,6 +450,14 @@ classify_signal() {  # <reason-after-colon> <state>
     guard_last=$(last_status_line "$state/$guard_task.status")
     if status_is_paused "$guard_last"; then
       paused=1
+    elif [ "$(status_line_verb "$guard_last")" = "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}" ] \
+      || [ "$(status_line_verb "$guard_last")" = "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}" ]; then
+      # A resolving/captain-held line is itself positive evidence the crew was
+      # alive moments ago closing a decision (shape 4) - exempt it from the
+      # swallowed-finish demand below exactly like a declared pause; the
+      # ordinary stale/wedge cadence still catches a genuine silent death
+      # right after it.
+      resolving=1
     else
       guard_files+=("$f")
       guard_count=$((guard_count + 1))
@@ -415,7 +494,7 @@ classify_signal() {  # <reason-after-colon> <state>
     # either mode. Cost: the same bounded fm-crew-state.sh read the watcher
     # already pays today, still only on no-verb signals.
     if [ "$guard_count" -eq 0 ]; then
-      if [ "$unresolved" -eq 0 ] && [ "$paused" -eq 1 ]; then
+      if [ "$unresolved" -eq 0 ] && { [ "$paused" -eq 1 ] || [ "$resolving" -eq 1 ]; }; then
         printf 'self|routine signal: %s' "$distilled"
       else
         printf 'escalate|no-verb signal, crew not provably working: %s' "$distilled"
@@ -429,6 +508,11 @@ classify_signal() {  # <reason-after-colon> <state>
     # Every relevant status was already escalated by the catch-all scan;
     # self-handle to avoid a duplicate entry in the digest.
     printf 'self|signal already escalated (catch-all scan): %s' "$distilled"
+  elif signal_crew_absorbable "$state" "${reason_files[@]}"; then
+    # A captain-relevant (terminal) status line, but every relevant task shows
+    # positive evidence it has since moved on to real work - see
+    # terminal_status_absorb_reason.
+    printf 'absorb|%s' "$distilled"
   else
     printf 'escalate|%s' "$distilled"
   fi
@@ -438,7 +522,7 @@ classify_signal() {  # <reason-after-colon> <state>
 # first sight of a non-terminal stale it returns "self" and the caller records a
 # timestamp marker; persistence is escalated by housekeeping's recheck, not here.
 classify_stale() {  # <window> <state>
-  local win=$1 state=$2 task last seen class
+  local win=$1 state=$2 task last seen class reason
   task=$(window_to_task "$win" "$state")
   last=$(last_status_line "$state/$task.status")
   if [ -n "$last" ] && status_is_paused "$last"; then
@@ -471,10 +555,33 @@ classify_stale() {  # <window> <state>
       printf 'self|stale + terminal (already escalated by signal): %s' "$last"
       return
     fi
+    # A terminal-looking last line can be SUPERSEDED by positive evidence the
+    # crew has since moved on to real work the status log has no reason to
+    # reflect (shapes 1-3): an active no-mistakes run-step or harness-tracked
+    # background task, or a genuine PR merge-wait hold with its poll validated
+    # and armed. See terminal_status_absorb_reason; never inferred from
+    # idleness alone.
+    reason=$(terminal_status_absorb_reason "$task" "$state") && {
+      printf 'absorb|terminal status superseded by %s: %s' "$reason" "$last"
+      return
+    }
     printf 'escalate|stale + terminal status: %s' "$last"
     return
   fi
-  # Non-terminal (or no status). AFK MODE: defer to the persistence recheck,
+  # Non-terminal (or no status). A resolving event (resolved:/captain-held:)
+  # is itself positive evidence the crew was alive moments ago closing a
+  # decision (shape 4) - never subject it to present mode's more aggressive
+  # first-sight stopped-crew escalation below; defer to the ordinary bounded
+  # persistence recheck like any other transient stale, so a crew that
+  # genuinely died right after resolving is still caught within
+  # FM_STALE_ESCALATE_SECS, just not as a first-sight surface.
+  case "$(status_line_verb "${last:-}")" in
+    "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}"|"${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}")
+      printf 'self|transient stale (%s, resolving event): %s' "$win" "${last:-no status}"
+      return
+      ;;
+  esac
+  # AFK MODE: defer to the persistence recheck,
   # unchanged - housekeeping (2) ages the marker and escalates past
   # FM_STALE_ESCALATE_SECS. PRESENT MODE (state/.afk absent) is the one
   # deliberate mode-split threshold (always-on triage spec section 8.2): adopt
@@ -1305,11 +1412,21 @@ housekeeping() {  # <state>
   #     scan_captain_relevant_statuses; the daemon layers its digest dedup on top.
   if [ "$(_file_age "$state/.subsuper-last-scan")" -ge "${FM_HEARTBEAT_SCAN_SECS:-$HEARTBEAT_SCAN_SECS_DEFAULT}" ]; then
     _now > "$state/.subsuper-last-scan"
-    local seen
+    local seen reason win
     while IFS="$(printf '\t')" read -r f task last; do
       [ -n "$f" ] || continue
       seen="$state/.subsuper-seen-status-$(_stale_key "$task")"
       [ "$(cat "$seen" 2>/dev/null || true)" = "$last" ] && continue
+      # Same positive-evidence absorption the per-wake classifiers apply
+      # (terminal_status_absorb_reason) - a terminal status the per-wake path
+      # missed can still be superseded by active work or an armed PR
+      # merge-wait hold (shape 4); hand it to the SAME long-cadence absorbed
+      # recheck instead of escalating a false wedge.
+      if reason=$(terminal_status_absorb_reason "$task" "$state"); then
+        win=$(window_for_task "$task" "$state" 2>/dev/null || true)
+        [ -n "$win" ] && absorbed_marker_record "$win" "$state"
+        continue
+      fi
       escalate_add "$state" "$(basename "$f"): $last (catch-all scan)" routine
       mark_status_seen "$state" "$task" "$last"
     done < <(scan_captain_relevant_statuses "$state")
@@ -1444,7 +1561,7 @@ is_wake_reason() {  # <reason>
 # --- dispatch one wake reason to self-handle or escalate --------------------
 # Side effects: logging, marker records, escalation buffer appends.
 handle_wake() {  # <reason> <state>
-  local reason=$1 state=$2 decision action distilled task last
+  local reason=$1 state=$2 decision action distilled task last win f
   local kind="" arg=""
   if should_force_self "$reason"; then
     log "wake force-self (FM_INJECT_SKIP): $reason"
@@ -1482,6 +1599,30 @@ handle_wake() {  # <reason> <state>
         pause_marker_record "$arg" "$state"
       fi
       log "self-handle (paused): $reason -> $distilled"
+      ;;
+    absorb)
+      # A captain-relevant/terminal status line, but terminal_status_absorb_reason
+      # proved the crew has moved on to positively-evidenced real work - hand it
+      # to the SAME long-cadence absorbed recheck housekeeping (2c) already uses
+      # for a no-verb absorbed stale, rather than the short wedge cadence, so a
+      # genuinely terminal status still surfaces once that evidence lapses.
+      if [ "$kind" = "stale" ]; then
+        stale_marker_remove "$arg" "$state"
+        absorbed_marker_record "$arg" "$state"
+      elif [ "$kind" = "signal" ]; then
+        for f in $arg; do
+          [ -e "$f" ] || continue
+          case "$f" in *.status) ;; *) continue ;; esac
+          last=$(last_status_line "$f")
+          [ -n "$last" ] || continue
+          status_is_captain_relevant "$last" || continue
+          task=$(basename "$f"); task="${task%.status}"
+          win=$(window_for_task "$task" "$state" 2>/dev/null || true)
+          [ -n "$win" ] || continue
+          absorbed_marker_record "$win" "$state"
+        done
+      fi
+      log "self-handle (absorbed): $reason -> $distilled"
       ;;
     *)
       # Transient (non-terminal) stale: record/refresh the wedge marker so
