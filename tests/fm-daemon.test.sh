@@ -24,6 +24,16 @@ fi
 
 TMP_ROOT=$(fm_test_tmproot fm-daemon-tests)
 
+seed_absorbed_marker() {  # <state> <task-id> <epoch>
+  local state=$1 task=$2 stamp=$3 last
+  last=$(last_status_line "$state/$task.status")
+  printf '%s\n%s\n%s\n' "$stamp" "$task" "$last" > "$state/.subsuper-absorbed-$task"
+}
+
+absorbed_marker_stamp() {  # <state> <task-id>
+  sed -n '1p' "$1/.subsuper-absorbed-$2"
+}
+
 test_afk_start_leaves_style_flag_absent() {
   local dir state out status
   dir=$(make_supercase afk-start-style-neutral)
@@ -410,6 +420,20 @@ test_classify_signal_terminal_absorbs_active_validation_run() {
   pass "a done: signal is absorbed when the crew has already moved into an active validation run"
 }
 
+test_classify_signal_exempt_batch_member_does_not_veto_absorption() {
+  local dir state fakebin out
+  dir=$(make_supercase signal-terminal-absorb-mixed-batch)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  printf 'done: implementation complete\n' > "$state/batched-active.status"
+  printf 'resolved [key=closed]: captain chose the safe path\n' > "$state/batched-resolved.status"
+  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE_batched_active='state: working · source: run-step · validating (running)' \
+    FM_FAKE_CREW_STATE_batched_resolved='state: stopped · source: none · decision already closed' \
+    classify_signal "$state/batched-active.status $state/batched-resolved.status" "$state")
+  case "$out" in absorb\|*) ;; *) fail "an exempt resolved batch member vetoed another task's current absorption: $out" ;; esac
+  pass "exempt batch members cannot veto another task's positive current absorption"
+}
+
 test_handle_wake_turn_ended_absorbs_merge_wait() {
   local dir state fakebin key url
   dir=$(make_supercase signal-turn-ended-absorb-mergewait)
@@ -426,7 +450,7 @@ test_handle_wake_turn_ended_absorbs_merge_wait() {
   FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review' \
     handle_wake "signal: $state/te-w1.turn-ended" "$state"
-  [ -e "$state/.subsuper-absorbed-$key" ] \
+  [ -e "$state/.subsuper-absorbed-te-w1" ] \
     || fail "turn-ended-only merge-wait signal did not record a long-cadence marker"
   [ ! -e "$state/.subsuper-stale-$key" ] \
     || fail "turn-ended-only merge-wait signal retained short-cadence stale tracking"
@@ -478,7 +502,7 @@ test_housekeeping_catchall_absorbs_merge_wait_done() {
   FM_STATE_OVERRIDE="$state" housekeeping "$state"
   [ ! -s "$state/.subsuper-escalations" ] \
     || fail "catch-all scan escalated an armed merge-wait done: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
-  [ -e "$state/.subsuper-absorbed-$key" ] \
+  [ -e "$state/.subsuper-absorbed-cw.w1" ] \
     || fail "catch-all scan did not record an absorbed marker for the merge-wait hold"
   [ ! -e "$state/.subsuper-stale-$key" ] \
     || fail "catch-all absorption retained dotted task short-cadence stale tracking"
@@ -494,7 +518,7 @@ test_housekeeping_catchall_skips_tracked_absorption() {
   fm_write_meta "$state/cs-w1.meta" "window=sess:fm-cs-w1" "kind=ship"
   printf 'done: implementation complete\n' > "$state/cs-w1.status"
   key=$(printf '%s' "cs-w1" | tr ':/.' '___')
-  date +%s > "$state/.subsuper-absorbed-$key"
+  seed_absorbed_marker "$state" cs-w1 "$(date +%s)"
   rm -f "$state/.subsuper-last-scan"
   FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE_READS="$reads" \
@@ -505,6 +529,55 @@ test_housekeeping_catchall_skips_tracked_absorption() {
   [ ! -s "$state/.subsuper-escalations" ] \
     || fail "catch-all scan escalated an unchanged tracked absorption"
   pass "the catch-all scan leaves tracked absorptions to their long-cadence recheck"
+}
+
+test_housekeeping_catchall_rejects_changed_absorption_binding() {
+  local dir state fakebin url terminal
+  dir=$(make_supercase catchall-reject-changed-absorption)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  url=https://github.com/example/repo/pull/58
+  fm_write_meta "$state/cache-w1.meta" "window=sess:fm-cache-w1" "kind=ship"
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
+    "$PR_CHECK" cache-w1 "$url" >/dev/null
+  printf 'done: PR %s checks green\n' "$url" > "$state/cache-w1.status"
+  seed_absorbed_marker "$state" cache-w1 "$(date +%s)"
+  terminal='failed: post-check validation regressed'
+  printf '%s\n' "$terminal" > "$state/cache-w1.status"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
+    housekeeping "$state"
+  grep -Fq "$terminal" "$state/.subsuper-escalations" 2>/dev/null \
+    || fail "a changed terminal status remained hidden behind historical absorption evidence"
+  [ ! -e "$state/.subsuper-absorbed-cache-w1" ] \
+    || fail "a changed terminal status retained its obsolete absorption cache entry"
+  pass "a changed terminal status immediately disqualifies its historical absorption cache"
+}
+
+test_housekeeping_absorbed_task_ids_do_not_collide() {
+  local dir state fakebin url terminal
+  dir=$(make_supercase catchall-absorption-task-id-collision)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  url=https://github.com/example/repo/pull/59
+  fm_write_meta "$state/cw.w1.meta" "window=sess:fm-cw.w1" "kind=ship"
+  fm_write_meta "$state/cw_w1.meta" "window=sess:fm-cw_w1" "kind=ship"
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
+    "$PR_CHECK" cw.w1 "$url" >/dev/null
+  printf 'done: PR %s checks green\n' "$url" > "$state/cw.w1.status"
+  seed_absorbed_marker "$state" cw.w1 "$(date +%s)"
+  terminal='failed: distinct underscored task wedged'
+  printf '%s\n' "$terminal" > "$state/cw_w1.status"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
+    housekeeping "$state"
+  [ -e "$state/.subsuper-absorbed-cw.w1" ] \
+    || fail "the dotted task lost its exact absorption marker"
+  [ ! -e "$state/.subsuper-absorbed-cw_w1" ] \
+    || fail "the underscored task inherited the dotted task's absorption marker"
+  grep -Fq "$terminal" "$state/.subsuper-escalations" 2>/dev/null \
+    || fail "the dotted task's cache hid a distinct underscored task terminal status"
+  pass "absorption cache ownership is collision-free for dotted and underscored task ids"
 }
 
 test_housekeeping_catchall_unarmed_pr_still_escalates() {
@@ -963,13 +1036,13 @@ test_housekeeping_absorbed_recheck_still_working_resets_window() {
   printf 'working\n' > "$state/absorbed-w1.status"
   key=$(printf '%s' "absorbed-w1" | tr ':/.' '___')
   before=$(( $(date +%s) - 5000 ))
-  echo "$before" > "$state/.subsuper-absorbed-$key"
+  seed_absorbed_marker "$state" absorbed-w1 "$before"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w1" \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
   [ -e "$state/.subsuper-absorbed-$key" ] || fail "still-working recheck cleared the long-cadence marker instead of resetting it"
-  after=$(cat "$state/.subsuper-absorbed-$key" 2>/dev/null || echo 0)
+  after=$(absorbed_marker_stamp "$state" absorbed-w1)
   [ "$after" -gt "$before" ] || fail "still-working recheck did not reset the long-cadence window"
   [ ! -s "$state/.subsuper-escalations" ] || fail "still-working recheck escalated instead of continuing to self-handle"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "still-working recheck created a short wedge marker"
@@ -987,7 +1060,7 @@ test_housekeeping_absorbed_recheck_merge_wait_resets_window() {
   printf 'done: PR %s checks green\n' "$url" > "$state/absorbed-mw.status"
   key=$(printf '%s' "absorbed-mw" | tr ':/.' '___')
   before=$(( $(date +%s) - 5000 ))
-  echo "$before" > "$state/.subsuper-absorbed-$key"
+  seed_absorbed_marker "$state" absorbed-mw "$before"
   date +%s > "$state/.subsuper-stale-$key"
   printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-mw" \
@@ -996,7 +1069,7 @@ test_housekeeping_absorbed_recheck_merge_wait_resets_window() {
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
   [ -e "$state/.subsuper-absorbed-$key" ] \
     || fail "current merge-wait recheck cleared its long-cadence marker"
-  after=$(cat "$state/.subsuper-absorbed-$key" 2>/dev/null || echo 0)
+  after=$(absorbed_marker_stamp "$state" absorbed-mw)
   [ "$after" -gt "$before" ] || fail "current merge-wait recheck did not reset the long-cadence window"
   [ ! -s "$state/.subsuper-escalations" ] \
     || fail "current merge-wait recheck escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
@@ -1014,7 +1087,7 @@ test_housekeeping_absorbed_recheck_no_longer_working_resurfaces() {
   fm_write_meta "$state/absorbed-w2.meta" "window=sess:fm-absorbed-w2"
   printf 'working\n' > "$state/absorbed-w2.status"
   key=$(printf '%s' "absorbed-w2" | tr ':/.' '___')
-  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-absorbed-$key"
+  seed_absorbed_marker "$state" absorbed-w2 "$(( $(date +%s) - 5000 ))"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w2" \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: unknown · source: none · worktree gone' \
@@ -1037,7 +1110,7 @@ test_housekeeping_absorbed_recheck_terminal_status_clears_marker() {
   terminal='done: validation completed'
   printf '%s\n' "$terminal" > "$state/absorbed-w3.status"
   key=$(printf '%s' "absorbed-w3" | tr ':/. ' '____')
-  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-absorbed-$key"
+  seed_absorbed_marker "$state" absorbed-w3 "$(( $(date +%s) - 5000 ))"
   printf '%s\n' "$terminal" > "$state/.subsuper-seen-status-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w3" \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
@@ -1057,7 +1130,7 @@ test_housekeeping_absorbed_recheck_unseen_terminal_escalates() {
   terminal='failed: validation exited 1'
   printf '%s\n' "$terminal" > "$state/absorbed-w4.status"
   key=$(printf '%s' "absorbed-w4" | tr ':/. ' '____')
-  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-absorbed-$key"
+  seed_absorbed_marker "$state" absorbed-w4 "$(( $(date +%s) - 5000 ))"
   printf 'done: an earlier validation\n' > "$state/.subsuper-seen-status-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-w4" \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
@@ -2576,11 +2649,14 @@ test_classify_stale_terminal_absorbs_merge_wait
 test_classify_stale_merge_wait_rejects_newer_statuses
 test_classify_stale_terminal_unarmed_pr_still_escalates
 test_classify_signal_terminal_absorbs_active_validation_run
+test_classify_signal_exempt_batch_member_does_not_veto_absorption
 test_handle_wake_turn_ended_absorbs_merge_wait
 test_classify_signal_resolving_line_exempt_from_provably_working_guard
 test_classify_stale_present_mode_resolving_line_defers
 test_housekeeping_catchall_absorbs_merge_wait_done
 test_housekeeping_catchall_skips_tracked_absorption
+test_housekeeping_catchall_rejects_changed_absorption_binding
+test_housekeeping_absorbed_task_ids_do_not_collide
 test_housekeeping_catchall_unarmed_pr_still_escalates
 test_stale_paused_classifies_pause
 test_handle_wake_paused_records_pause_marker

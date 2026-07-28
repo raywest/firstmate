@@ -45,7 +45,8 @@
 #      running indicator - a crew deliberately parked on a tracked background
 #      shell or monitor tool reads as an idle pane otherwise), then the status
 #      log's last line only when its verb maps to a recognized run-state.
-#      Decision-only events such as `resolved` never become current state or
+#      A trailing `captain-held` decision transfer preserves the preceding
+#      recognized state; decision-only events never become current state or
 #      detail.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
@@ -135,7 +136,21 @@ map_log_state() {  # <line>
   esac
 }
 
-LOG_LINE=$(log_last_line || true)
+log_current_state_line() {
+  local last line state prior=
+  last=$(log_last_line || true)
+  [ "$(status_line_verb "$last")" = "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}" ] || {
+    printf '%s' "$last"
+    return
+  }
+  while IFS= read -r line || [ -n "$line" ]; do
+    state=$(map_log_state "$line")
+    [ "$state" = unknown ] || prior=$line
+  done < "$LOG"
+  printf '%s' "${prior:-$last}"
+}
+
+LOG_LINE=$(log_current_state_line)
 LOG_VERB=$(status_line_verb "$LOG_LINE")
 
 # pane_readable is consulted ONLY in the no-run fallback below. The run-step path

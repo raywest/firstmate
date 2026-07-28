@@ -462,8 +462,7 @@ signal_has_current_captain_status() {  # <state> <file> ...
 
 classify_signal() {  # <reason-after-colon> <state>
   local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen guard_task guard_last paused=0 unresolved=0 guard_count=0 resolving=0
-  local -a guard_files reason_files
-  read -ra reason_files <<<"$reason"
+  local -a guard_files
   for f in $reason; do
     [ -e "$f" ] || { unresolved=1; continue; }
     guard_task=$(basename "$f")
@@ -534,7 +533,7 @@ classify_signal() {  # <reason-after-colon> <state>
     # Every relevant status was already escalated by the catch-all scan;
     # self-handle to avoid a duplicate entry in the digest.
     printf 'self|signal already escalated (catch-all scan): %s' "$distilled"
-  elif signal_crew_absorbable "$state" "${reason_files[@]}"; then
+  elif signal_crew_absorbable "$state" "${guard_files[@]}"; then
     # A captain-relevant (terminal) status line, but every relevant task shows
     # positive evidence it has since moved on to real work - see
     # terminal_status_absorb_reason.
@@ -680,22 +679,46 @@ stale_tracking_remove() {  # <window> <state>
   rm -f "$state/.subsuper-wedge-escalations-$key"
 }
 
-# Positive-evidence absorption marker: state/.subsuper-absorbed-<key> holds the
-# epoch a pane entered long-cadence tracking because active work or a current
-# PR merge-wait was verified. Recording it clears the mutually exclusive short
-# stale and wedge-count state. Create-if-absent, mirroring pause_marker_record.
-absorbed_marker_record() {  # <window> <state> - create if absent
-  local win=$1 state=$2 key marker
-  key=$(_stale_key "$(window_to_task "$win" "$state")")
-  marker="$state/.subsuper-absorbed-$key"
+# Positive-evidence absorption marker: state/.subsuper-absorbed-<task-id> holds
+# the epoch, exact task id, and exact status line whose positive evidence moved
+# a pane to long-cadence tracking. Recording it clears the mutually exclusive
+# short stale and wedge-count state.
+absorbed_marker_path() {  # <state> <task-id>
+  local state=$1 task=$2
+  fm_pr_task_id_valid "$task" || return 1
+  printf '%s/.subsuper-absorbed-%s' "$state" "$task"
+}
+
+absorbed_marker_matches_current() {  # <state> <task-id> <current-last-status>
+  local state=$1 task=$2 last=$3 marker stamp bound_task bound_last
+  marker=$(absorbed_marker_path "$state" "$task") || return 1
+  [ -f "$marker" ] || return 1
+  stamp=$(sed -n '1p' "$marker" 2>/dev/null)
+  bound_task=$(sed -n '2p' "$marker" 2>/dev/null)
+  bound_last=$(sed -n '3p' "$marker" 2>/dev/null)
+  case "$stamp" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$bound_task" = "$task" ] && [ "$bound_last" = "$last" ]
+}
+
+absorbed_marker_record() {  # <window> <state> [reset]
+  local win=$1 state=$2 reset=${3:-} task key marker last stamp
+  task=$(window_to_task "$win" "$state")
+  marker=$(absorbed_marker_path "$state" "$task") || return 1
+  key=$(_stale_key "$task")
+  last=$(last_status_line "$state/$task.status")
+  stamp=$(_now)
+  if [ "$reset" != reset ] && absorbed_marker_matches_current "$state" "$task" "$last"; then
+    stamp=$(sed -n '1p' "$marker")
+  fi
   rm -f "$state/.subsuper-stale-$key" "$state/.subsuper-wedge-escalations-$key"
-  [ -e "$marker" ] || _now > "$marker"
+  printf '%s\n%s\n%s\n' "$stamp" "$task" "$last" > "$marker"
 }
 
 absorbed_marker_remove() {  # <window> <state>
-  local win=$1 state=$2 key
-  key=$(_stale_key "$(window_to_task "$win" "$state")")
-  rm -f "$state/.subsuper-absorbed-$key"
+  local win=$1 state=$2 task marker
+  task=$(window_to_task "$win" "$state")
+  marker=$(absorbed_marker_path "$state" "$task") || return 0
+  rm -f "$marker"
 }
 
 # Pause marker: state/.subsuper-paused-<key> holds the epoch a declared pause was
@@ -721,8 +744,8 @@ clear_pause_tracking() {  # <window> <state>
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   watcher_key=$(_stale_key "$win")
+  absorbed_marker_remove "$win" "$state"
   rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-stale-$key" "$state/.subsuper-wedge-escalations-$key" \
-    "$state/.subsuper-absorbed-$key" \
     "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
     "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key"
 }
@@ -766,7 +789,7 @@ sync_pause_markers_from_signal() {  # <state> <signal files>
     [ -e "$f" ] || continue
     last=$(last_status_line "$f")
     task=$(basename "$f"); task=${task%.status}
-    win=$(window_for_task "$task" "$state" 2>/dev/null || true)
+    win=$(window_for_exact_task "$task" "$state" 2>/dev/null || true)
     [ -n "$win" ] || continue
     reconcile_pause_tracking "$win" "$state" "$last"
   done
@@ -1233,7 +1256,7 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs n wedge_count_file class
+  local state=$1 now due f key task win marker age last max_defer oldest pause_secs n wedge_count_file class stamp bound_last expected
   now=$(_now)
   migrate_watcher_pause_markers "$state"
 
@@ -1388,23 +1411,47 @@ housekeeping() {  # <state>
   # escalate and hand back to ordinary short-cadence tracking.
   for marker in "$state"/.subsuper-absorbed-*; do
     [ -e "$marker" ] || continue
-    key="${marker##*.subsuper-absorbed-}"
-    win=$(window_for_task "$key" "$state" 2>/dev/null || true)
+    stamp=$(sed -n '1p' "$marker" 2>/dev/null)
+    task=$(sed -n '2p' "$marker" 2>/dev/null)
+    bound_last=$(sed -n '3p' "$marker" 2>/dev/null)
+    expected=$(absorbed_marker_path "$state" "$task" 2>/dev/null || true)
+    case "$stamp" in ''|*[!0-9]*) expected= ;; esac
+    if [ "$expected" != "$marker" ]; then
+      rm -f "$marker"
+      continue
+    fi
+    key=$(_stale_key "$task")
+    win=$(window_for_exact_task "$task" "$state" 2>/dev/null || true)
     if [ -z "$win" ]; then
       rm -f "$marker"; continue
     fi
-    task=$(window_to_task "$win" "$state")
     last=$(last_status_line "$state/$task.status")
+    if [ "$bound_last" != "$last" ]; then
+      rm -f "$marker"
+      if [ -n "$last" ] && status_is_paused "$last"; then
+        reconcile_pause_tracking "$win" "$state" "$last"
+      elif terminal_status_absorb_reason "$task" "$state" "$last" >/dev/null; then
+        absorbed_marker_record "$win" "$state"
+      elif [ -n "$last" ] && status_is_captain_relevant "$last"; then
+        if [ "$(cat "$state/.subsuper-seen-status-$key" 2>/dev/null || true)" != "$last" ]; then
+          escalate_add "$state" "absorbed status changed (terminal status not yet surfaced): $last" routine
+          mark_status_seen "$state" "$task" "$last"
+        fi
+      else
+        escalate_add "$state" "absorbed status changed (positive evidence no longer current - possible wedge): $win" routine
+        stale_marker_record "$win" "$state"
+      fi
+      continue
+    fi
     if [ -n "$last" ] && status_is_paused "$last"; then
       rm -f "$marker"
       reconcile_pause_tracking "$win" "$state" "$last"
       continue
     fi
-    age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
+    age=$(( now - stamp ))
     [ "$age" -ge "$pause_secs" ] || continue
     if terminal_status_absorb_reason "$task" "$state" "$last" >/dev/null; then
-      absorbed_marker_record "$win" "$state"
-      _now > "$marker"
+      absorbed_marker_record "$win" "$state" reset
       continue
     fi
     if [ -n "$last" ] && status_is_captain_relevant "$last"; then
@@ -1432,14 +1479,18 @@ housekeeping() {  # <state>
       key=$(_stale_key "$task")
       seen="$state/.subsuper-seen-status-$key"
       [ "$(cat "$seen" 2>/dev/null || true)" = "$last" ] && continue
-      [ -e "$state/.subsuper-absorbed-$key" ] && continue
+      if absorbed_marker_matches_current "$state" "$task" "$last"; then
+        continue
+      fi
+      marker=$(absorbed_marker_path "$state" "$task" 2>/dev/null || true)
+      [ -n "$marker" ] && rm -f "$marker"
       # Same positive-evidence absorption the per-wake classifiers apply
       # (terminal_status_absorb_reason) - a terminal status the per-wake path
       # missed can still be superseded by active work or an armed PR
       # merge-wait hold (shape 4); hand it to the SAME long-cadence absorbed
       # recheck instead of escalating a false wedge.
       if reason=$(terminal_status_absorb_reason "$task" "$state" "$last"); then
-        win=$(window_for_task "$key" "$state" 2>/dev/null || true)
+        win=$(window_for_exact_task "$task" "$state" 2>/dev/null || true)
         [ -n "$win" ] && absorbed_marker_record "$win" "$state"
         continue
       fi
@@ -1462,6 +1513,21 @@ window_for_task() {  # <task-key> [state]
   for w in $(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep ':fm-' || true); do
     t=$(window_to_task "$w" "$state")
     [ "$(_stale_key "$t")" = "$key" ] && { printf '%s' "$w"; return 0; }
+  done
+  return 1
+}
+
+window_for_exact_task() {  # <task-id> [state]
+  local task=$1 state=${2:-$(_state_root)} meta w t
+  fm_pr_task_id_valid "$task" || return 1
+  meta="$state/$task.meta"
+  if [ -f "$meta" ]; then
+    w=$(fm_backend_target_of_meta "$meta")
+    [ -n "$w" ] && { printf '%s' "$w"; return 0; }
+  fi
+  for w in $(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep ':fm-' || true); do
+    t=$(window_to_task "$w" "$state")
+    [ "$t" = "$task" ] && { printf '%s' "$w"; return 0; }
   done
   return 1
 }
@@ -1639,7 +1705,7 @@ handle_wake() {  # <reason> <state>
           [ -n "$last" ] || continue
           status_is_captain_relevant "$last" || continue
           terminal_status_absorb_reason "$task" "$state" "$last" >/dev/null || continue
-          win=$(window_for_task "$(_stale_key "$task")" "$state" 2>/dev/null || true)
+          win=$(window_for_exact_task "$task" "$state" 2>/dev/null || true)
           [ -n "$win" ] || continue
           absorbed_marker_record "$win" "$state"
         done

@@ -59,8 +59,11 @@ consecutive wedge-escalation count exactly like a resume or a declared pause
 does today.
 An absorbed pane does not sit on the short `FM_STALE_ESCALATE_SECS` wedge
 cadence for the rest of a long validation run or background task: it moves to
-a `state/.subsuper-absorbed-<key>` marker rechecked on the SAME long
+a `state/.subsuper-absorbed-<task-id>` marker rechecked on the SAME long
 `FM_PAUSE_RESURFACE_SECS` cadence a declared pause uses.
+The marker is bound to the exact task id and exact last status line it
+absorbed; any change invalidates the cached suppression immediately and
+returns the task to ordinary current-evidence classification.
 Past that window: still provably working resets the marker and keeps waiting,
 self-handled; anything else - the crew moved on, the read is unreadable, or the
 evidence is ambiguous - is fail-safe, escalating once and handing the pane back
@@ -95,7 +98,7 @@ it, plus a THIRD positive-evidence source only relevant to a terminal line:
    An unarmed or tampered poll still surfaces as a possible wedge.
 
 Any of the three sources absorbs a terminal line exactly like a non-terminal
-one - the SAME `state/.subsuper-absorbed-<key>` marker and long recheck
+one - the SAME `state/.subsuper-absorbed-<task-id>` marker and long recheck
 cadence, so a genuinely terminal event (the crew moved on, or the evidence
 lapses) still surfaces once, deduped against the signal path's own seen
 marker.

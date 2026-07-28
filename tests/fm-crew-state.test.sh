@@ -979,6 +979,24 @@ test_no_run_idle_pane_paused() {
   pass "no run + idle pane on a paused: status reports state: paused with its reason"
 }
 
+test_no_run_idle_pane_captain_held_preserves_pause() {
+  reset_fakes
+  local d; d=$(new_case paused-captain-held)
+  make_repo_on_branch "$d/wt" fm/feat-pause-held
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-pause-held.meta" "window=fm:fm-feat-pause-held" "worktree=$d/wt" "kind=ship"
+  printf 'paused: holding while the captain decides\n' > "$d/state/feat-pause-held.status"
+  printf 'captain-held [key=route]: decision filed for the captain\n' >> "$d/state/feat-pause-held.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  local out; out=$(run_crew_state "$d" feat-pause-held)
+  assert_contains "$out" "state: paused" "captain-held transfer preserves the preceding paused state"
+  assert_contains "$out" "source: status-log" "preserved pause remains status-log sourced"
+  assert_contains "$out" "holding while the captain decides" "preserved pause keeps its state detail"
+  assert_not_contains "$out" "decision filed for the captain" "captain-held decision prose is not state detail"
+  pass "a trailing captain-held filing preserves the worker's paused state"
+}
+
 test_no_run_idle_pane_custom_paused_verb() {
   reset_fakes
   local d; d=$(new_case custom-paused)
@@ -1333,6 +1351,7 @@ test_no_run_herdr_idle_agent_status_and_idle_pane_stays_idle
 test_no_run_idle_pane_uses_log
 test_no_run_idle_pane_uses_keyed_log
 test_no_run_idle_pane_paused
+test_no_run_idle_pane_captain_held_preserves_pause
 test_no_run_idle_pane_custom_paused_verb
 test_no_run_idle_secondmate_resolved_event_not_state
 test_dead_window_ignores_stale_status_log
