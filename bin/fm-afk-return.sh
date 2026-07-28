@@ -10,8 +10,9 @@
 # `blocked:` is the crewmate protocol's firstmate-actionable verb. A live task's
 # open blocked event must be remediated and closed with `resolved [key=...]`, or
 # explicitly reclassified in the status stream with a durable reason, before an
-# ordinary captain request may proceed. `needs-decision:` is captain-owned and
-# is deliberately not part of this gate; normal reporting surfaces it.
+# ordinary captain request may proceed. `needs-decision:` belongs to the
+# configured approval authority and is deliberately not part of this blocker
+# gate; normal reporting routes it through the AGENTS.md section 7 contract.
 #
 # On the supported always-on combination (claude or codex on tmux or herdr),
 # return only clears the away/present delivery-style flag

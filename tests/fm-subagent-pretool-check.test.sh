@@ -269,7 +269,7 @@ test_claude_hook_registration_preserves_bash_seatbelts() {
   ' "$SETTINGS" >/dev/null || fail "the existing Bash PreToolUse seatbelts changed"
   jq -e '.hooks.Stop[0].hooks[0].command | contains("fm-turnend-guard.sh")' "$SETTINGS" >/dev/null \
     || fail "the Stop turn-end guard changed"
-  pass "Claude wires the guard while preserving the Bash seatbelts and the Stop guard"
+  pass "Claude wires the delegation guard while preserving the Bash seatbelts and the Stop guard"
 }
 
 test_tracked_settings_do_not_ship_permissions_deny

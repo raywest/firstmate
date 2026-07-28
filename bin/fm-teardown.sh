@@ -39,14 +39,16 @@
 # Orca tasks use the same safety checks, then close the recorded terminal and
 # remove the recorded worktree through `orca worktree rm`; teardown never guesses
 # an Orca target from ambient CLI state.
-# A Herdr presentation journal never authorizes cleanup. Teardown still closes
-# only the exact task pane from ordinary endpoint metadata and never calls
-# `workspace close`. It retires the non-authoritative journal only when a
-# read-only token correlation agrees with that endpoint and pane closure is
-# confirmed. Otherwise the journal stays quarantined for manual inspection.
+# A Herdr presentation journal never authorizes cleanup alone. Teardown closes
+# only when its v2 session, workspace, tab, and pane binding exactly matches
+# endpoint metadata and the live endpoint under the session lock; it never calls
+# `workspace close`. It retires the journal only after pane closure is confirmed.
+# Otherwise the journal stays quarantined for manual inspection.
 # Projected closes share the presentation-order lock, refuse to close the
 # captain's active tab, and restore the exact response-derived pre-close tab
 # if Herdr's last-pane cleanup focuses an unrelated neighboring workspace.
+# The exact projected pane closes before worktree return because returning a
+# restored husk's worktree can itself close the last pane and change focus.
 # Secondmates (kind=secondmate in meta) are retired explicitly. Normal
 # teardown refuses while their home has in-flight crewmate meta files; --force
 # is the approved discard path that prevalidates child removal targets, discards
@@ -204,7 +206,7 @@ remove_kimi_turnend_auth() {
   case "$token" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
   kimi_home=$(fm_meta_get "$state_dir/$id.meta" kimi_home)
   [ -n "$kimi_home" ] || kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
-  hooks_dir="$kimi_home/hooks/fm-turn-end.d"
+  hooks_dir="$kimi_home/fm-turn-end.d"
   rm -f "$hooks_dir/$token"
 }
 
@@ -684,7 +686,7 @@ validate_worktree_teardown_safety() {
     echo "Restore the git index state, or get the captain's explicit OK to discard, then --force." >&2
     return 1
   fi
-  dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-grok-turnend$|\.fm-kimi-turnend$)' | head -1 || true)
+  dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-(grok|kimi)-turnend$)' | head -1 || true)
 
   if ! unpushed_raw=$(git -C "$WT" log --oneline HEAD --not --remotes -- 2>/dev/null); then
     if worktree_safety_blocked_by_lock "commits not on a remote"; then
@@ -1014,12 +1016,14 @@ cleanup_firstmate_home_children() {
     elif [ "$child_backend" = orca ]; then
       if [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
-        rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
+        rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
+          "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
       fi
       fm_backend_remove_worktree "$child_backend" "$child_orca_worktree_id" || return 1
     elif [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
       validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
-      rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
+      rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
+        "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
       if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
         if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree"; then
           :
@@ -1037,7 +1041,9 @@ cleanup_firstmate_home_children() {
     remove_grok_turnend_auth "$sub_state" "$child_id"
     remove_kimi_turnend_auth "$sub_state" "$child_id"
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
-    rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" "$sub_state/$child_id.grok-turnend-token" "$sub_state/$child_id.kimi-turnend-token"
+    rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" \
+      "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" \
+      "$sub_state/$child_id.grok-turnend-token" "$sub_state/$child_id.kimi-turnend-token"
   done
 }
 
@@ -1114,65 +1120,35 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   fi
 fi
 
-# Best-effort: drop the local task branch so the shared repo does not accumulate refs.
-if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
-  if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
-    require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
-    ORCA_PATH_MATCH_VERIFIED=1
-  fi
-  if [ -d "$WT" ]; then
-    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-    if [ "$branch" != "HEAD" ]; then
-      if git -C "$WT" checkout --detach -q 2>/dev/null; then
-        git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
-      fi
-    fi
-    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
-  fi
-  [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
-  fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
-elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
-  branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-  if [ "$branch" != "HEAD" ]; then
-    if git -C "$WT" checkout --detach -q 2>/dev/null; then
-      git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
-    fi
-  fi
-  # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
-  rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
-  # Kills remaining processes in the worktree (including the agent), resets, returns
-  # to pool. treehouse resolves the pool from the working directory, so run it from
-  # the project. teardown_treehouse_return tolerates transient and stale git locks
-  # left by a killed crew process; see the script header for retry and stale-lock proof.
-  post_lock_cleanup_check=
-  if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
-    post_lock_cleanup_check=validate_worktree_teardown_safety
-  fi
-  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
-    echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
-    exit 1
-  }
-fi
-
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
 HERDR_PRESENTATION_RETIRE_CANDIDATE=0
 HERDR_PRESENTATION_SESSION=
+HERDR_PRESENTATION_WORKSPACE=
+HERDR_PRESENTATION_TAB=
 HERDR_PRESENTATION_PANE=
+HERDR_PRESENTATION_CORRELATION=indeterminate
 if [ "$BACKEND" = herdr ] \
    && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
-  fm_backend_source herdr || true
   HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
   HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
+  HERDR_PRESENTATION_TAB=$(meta_value "$META" herdr_tab_id)
   HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
   if [ -n "$HERDR_PRESENTATION_SESSION" ] \
      && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
+     && [ -n "$HERDR_PRESENTATION_TAB" ] \
      && [ -n "$HERDR_PRESENTATION_PANE" ] \
      && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
+     && fm_backend_source herdr \
      && fm_backend_herdr_projection_endpoint_matches_journal \
-       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
-       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
-    HERDR_PRESENTATION_RETIRE_CANDIDATE=1
+       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" "$HERDR_PRESENTATION_TAB" \
+       "$HERDR_PRESENTATION_PANE" "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
+    HERDR_PRESENTATION_CORRELATION=match
   fi
+  if [ "$HERDR_PRESENTATION_CORRELATION" != match ]; then
+    echo "error: herdr presentation correlation is indeterminate; refusing teardown before worktree return can trigger a focus-unsafe pane close" >&2
+    exit 1
+  fi
+  HERDR_PRESENTATION_RETIRE_CANDIDATE=1
 fi
 
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
@@ -1191,24 +1167,93 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
       HERDR_PRESENTATION_FOCUS_LOCK_ATTEMPT=$((HERDR_PRESENTATION_FOCUS_LOCK_ATTEMPT + 1))
     done
   fi
-  if [ "$HERDR_PRESENTATION_FOCUS_LOCK_HELD" = 1 ]; then
-    fm_backend_herdr_projection_close_pane_focus_preserving \
-      "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" 2>/dev/null || true
+  if [ "$HERDR_PRESENTATION_FOCUS_LOCK_HELD" != 1 ]; then
+    echo "error: herdr presentation focus lock unavailable; refusing teardown before worktree return can trigger a focus-unsafe pane close" >&2
+    exit 1
+  fi
+  HERDR_PRESENTATION_LOCK_SESSION=$(meta_value "$META" herdr_session)
+  HERDR_PRESENTATION_LOCK_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
+  HERDR_PRESENTATION_LOCK_TAB=$(meta_value "$META" herdr_tab_id)
+  HERDR_PRESENTATION_LOCK_PANE=$(meta_value "$META" herdr_pane_id)
+  HERDR_PRESENTATION_LOCK_WINDOW=$(meta_value "$META" window)
+  if [ "$HERDR_PRESENTATION_LOCK_SESSION" != "$HERDR_PRESENTATION_SESSION" ] \
+     || [ "$HERDR_PRESENTATION_LOCK_WORKSPACE" != "$HERDR_PRESENTATION_WORKSPACE" ] \
+     || [ "$HERDR_PRESENTATION_LOCK_TAB" != "$HERDR_PRESENTATION_TAB" ] \
+     || [ "$HERDR_PRESENTATION_LOCK_PANE" != "$HERDR_PRESENTATION_PANE" ] \
+     || [ "$HERDR_PRESENTATION_LOCK_WINDOW" != "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
+     || ! fm_backend_herdr_projection_endpoint_matches_journal \
+       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" "$HERDR_PRESENTATION_TAB" \
+       "$HERDR_PRESENTATION_PANE" "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
     HERDR_PRESENTATION_FOCUS_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_FOCUS_LOCK" || true
-  else
-    echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
+    echo "error: exact herdr presentation binding could not be revalidated under the session lock; refusing focus-unsafe worktree return for $ID" >&2
+    exit 1
   fi
-elif [ "$BACKEND" != orca ]; then
+  if ! fm_backend_herdr_projection_close_pane_focus_preserving \
+    "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE" "" \
+    "$HERDR_PRESENTATION_TAB" "$HERDR_PRESENTATION_WORKSPACE"; then
+    HERDR_PRESENTATION_FOCUS_LOCK_HELD=0
+    fm_lock_release "$HERDR_PRESENTATION_FOCUS_LOCK" || true
+    echo "error: exact herdr task-pane close failed; refusing focus-unsafe worktree return for $ID" >&2
+    exit 1
+  fi
+  if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" != dead ]; then
+    HERDR_PRESENTATION_FOCUS_LOCK_HELD=0
+    fm_lock_release "$HERDR_PRESENTATION_FOCUS_LOCK" || true
+    echo "error: exact herdr task-pane close could not be confirmed for $ID; refusing focus-unsafe worktree return" >&2
+    exit 1
+  fi
+  HERDR_PRESENTATION_FOCUS_LOCK_HELD=0
+  fm_lock_release "$HERDR_PRESENTATION_FOCUS_LOCK" || true
+  rm -f "$HERDR_PRESENTATION_JOURNAL"
+fi
+
+# Best-effort: drop the local task branch so the shared repo does not accumulate refs.
+if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
+  if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
+    require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
+    ORCA_PATH_MATCH_VERIFIED=1
+  fi
+  if [ -d "$WT" ]; then
+    branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+    if [ "$branch" != "HEAD" ]; then
+      if git -C "$WT" checkout --detach -q 2>/dev/null; then
+        git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+      fi
+    fi
+    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  fi
+  [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
+  fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
+elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
+  branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+  if [ "$branch" != "HEAD" ]; then
+    if git -C "$WT" checkout --detach -q 2>/dev/null; then
+      git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+    fi
+  fi
+  # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
+  rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+    "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  # Kills remaining processes in the worktree (including the agent), resets, returns
+  # to pool. treehouse resolves the pool from the working directory, so run it from
+  # the project. teardown_treehouse_return tolerates transient and stale git locks
+  # left by a killed crew process; see the script header for retry and stale-lock proof.
+  post_lock_cleanup_check=
+  if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
+    post_lock_cleanup_check=validate_worktree_teardown_safety
+  fi
+  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
+    echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
+    exit 1
+  }
+fi
+
+if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" != 1 ] && [ "$BACKEND" != orca ]; then
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
 fi
-if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
-  if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then
-    rm -f "$HERDR_PRESENTATION_JOURNAL"
-  else
-    echo "warning: exact herdr task-pane close could not be confirmed for $ID; retaining the presentation journal and attempting no workspace cleanup" >&2
-  fi
-elif [ "$BACKEND" = herdr ] \
+if [ "$BACKEND" = herdr ] \
      && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
   echo "warning: herdr presentation journal for $ID remains quarantined; no workspace cleanup was attempted" >&2
 fi
@@ -1224,7 +1269,9 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
-rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" "$STATE/$ID.kimi-turnend-token"
+rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
+  "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
+  "$STATE/$ID.kimi-turnend-token"
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

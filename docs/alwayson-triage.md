@@ -33,7 +33,7 @@ harness-native/terminal launch path) and runs continuously.
 | wedge alert on max-defer | durable marker + log + configured OS-level active alert | durable marker + log only; `bin/fm-guard.sh` surfaces the marker on the next turn instead |
 | stopped-crew stale | persistence recheck after `FM_STALE_ESCALATE_SECS` (240s), bounded patience | escalate on first sight, matching the always-on watcher's own present-mode semantics |
 
-## Provably-working stale absorption (the ONE owner of this policy)
+## Provably-working stale absorption
 
 Captain-approved 2026-07-22 ("if you can validate the worker directly then so
 can the daemon"), after 8 of 10 daemon escalations for one healthy worker in a

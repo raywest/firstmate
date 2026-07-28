@@ -1274,28 +1274,73 @@ configure_herdr_projection_teardown_case() {  # <case-dir>
     'herdr_tab_id=w1:t2' \
     'herdr_pane_id=w1:p2' >> "$case_dir/state/task-x1.meta"
   printf '%s\n' \
-    'version=1' \
+    'version=2' \
     'task_id=task-x1' \
-    "projection_id=$token" > "$case_dir/state/task-x1.herdr-presentation"
+    "projection_id=$token" \
+    "home=$case_dir" \
+    'session=fmtest' \
+    'workspace_id=w1' \
+    'tab_id=w1:t2' \
+    'pane_id=w1:p2' \
+    'parent_workspace_id=w0' \
+    'parent_label=firstmate' \
+    "workspace_label=└ task-x1 · p:$token" \
+    'task_label=fm-task-x1' > "$case_dir/state/task-x1.herdr-presentation"
   cat > "$case_dir/fakebin/herdr" <<'SH'
 #!/usr/bin/env bash
 set -u
 printf '%s\n' "$*" >> "${FM_FAKE_HERDR_LOG:?}"
 case "${1:-} ${2:-}" in
   "workspace list")
+    case "${FM_FAKE_HERDR_WORKSPACE_LIST_MODE:-valid}" in
+      failed) exit 1 ;;
+      malformed) printf '%s\n' 'not-json'; exit 0 ;;
+      missing)
+        printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true}]}}'
+        exit 0
+        ;;
+      renamed)
+        printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t2","label":"renamed-task","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true}]}}'
+        exit 0
+        ;;
+      duplicated)
+        printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t2","label":"└ task-x1 · p:AbCdEfGhIjKlMnOpQrStUv","focused":false},{"workspace_id":"w4","active_tab_id":"w4:t2","label":"└ task-x1 · p:AbCdEfGhIjKlMnOpQrStUv","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true}]}}'
+        exit 0
+        ;;
+      different)
+        printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t2","label":"different-task","focused":false},{"workspace_id":"w4","active_tab_id":"w4:t2","label":"└ task-x1 · p:AbCdEfGhIjKlMnOpQrStUv","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true}]}}'
+        exit 0
+        ;;
+      malformed-after-first)
+        count=$(cat "${FM_FAKE_HERDR_WORKSPACE_LIST_COUNT:?}" 2>/dev/null || printf '0')
+        count=$((count + 1))
+        printf '%s\n' "$count" > "$FM_FAKE_HERDR_WORKSPACE_LIST_COUNT"
+        if [ "$count" -gt 1 ]; then
+          printf '%s\n' 'not-json'
+          exit 0
+        fi
+        ;;
+    esac
     if [ -e "${FM_FAKE_HERDR_RESTORED:?}" ]; then
-      printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","label":"2ndmate-alpha","focused":false}]}}'
+      printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","label":"2ndmate-alpha","focused":false}]}}'
     elif [ -e "${FM_FAKE_HERDR_CLOSED:?}" ]; then
-      printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":false},{"workspace_id":"w3","active_tab_id":"w3:t1","label":"2ndmate-alpha","focused":true}]}}'
+      printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":false},{"workspace_id":"w3","active_tab_id":"w3:t1","label":"2ndmate-alpha","focused":true}]}}'
     else
-      printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t2","label":"firstmate/task-x1 · p:AbCdEfGhIjKlMnOpQrStUv","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","label":"2ndmate-alpha","focused":false}]}}'
+      printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w0","active_tab_id":"w0:t1","label":"firstmate","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t2","label":"└ task-x1 · p:AbCdEfGhIjKlMnOpQrStUv","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t2","label":"2ndmate-bravo","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","label":"2ndmate-alpha","focused":false}]}}'
     fi
     ;;
   "tab list")
     case "$*" in
+      *"--workspace w1"*) printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-task-x1","focused":false}]}}' ;;
       *"--workspace w2"*) printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t2","focused":true}]}}' ;;
       *"--workspace w3"*) printf '%s\n' '{"result":{"tabs":[{"tab_id":"w3:t1","focused":true}]}}' ;;
       *) printf '%s\n' '{"result":{"tabs":[]}}' ;;
+    esac
+    ;;
+  "pane list")
+    case "$*" in
+      *"--workspace w1"*) printf '%s\n' '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"}]}}' ;;
+      *) printf '%s\n' '{"result":{"panes":[]}}' ;;
     esac
     ;;
   "status --json")
@@ -1331,44 +1376,145 @@ case "${1:-} ${2:-}" in
 esac
 SH
   chmod +x "$case_dir/fakebin/herdr"
+  cat > "$case_dir/fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = return ]; then
+  [ -e "${FM_FAKE_HERDR_CLOSED:?}" ] || {
+    echo "treehouse return ran before the exact Herdr pane close" >&2
+    exit 1
+  }
+  : > "${FM_FAKE_TREEHOUSE_RETURNED:?}"
+fi
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
 }
 
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close() {
-  local case_dir log closed restored
+  local case_dir log closed restored returned
   case_dir=$(make_case herdr-projection-confirmed-close)
   write_meta "$case_dir" local-only ship
   configure_herdr_projection_teardown_case "$case_dir"
-  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"
+  returned="$case_dir/treehouse-returned"; : > "$log"
+  assert_grep 'version=2' "$case_dir/state/task-x1.herdr-presentation" \
+    "projected teardown fixture did not use an exact v2 journal binding"
 
   FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
+    FM_FAKE_TREEHOUSE_RETURNED="$returned" \
     run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
     || fail "herdr-projection-confirmed-close: forced teardown failed"
   [ ! -e "$case_dir/state/task-x1.herdr-presentation" ] \
     || fail "confirmed exact-pane close did not retire the presentation journal"
+  [ -e "$returned" ] \
+    || fail "confirmed exact-pane close did not proceed to worktree return"
   assert_not_contains "$(cat "$log")" "workspace close" \
     "projected teardown must never call workspace close"
   assert_contains "$(cat "$log")" "tab focus w2:t2" \
     "projected teardown did not restore the exact pre-close active tab"
-  pass "herdr projection teardown retires its journal only after confirming the exact recorded pane is gone"
+  [ "$(grep -c 'pane list --workspace w1' "$log")" -eq 2 ] \
+    || fail "projected teardown did not revalidate the exact v2 pane under the session lock"
+  pass "herdr projection teardown confirms the exact pane close before returning the worktree"
 }
 
-test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
-  local case_dir log closed restored
+test_herdr_projection_teardown_refuses_worktree_return_when_close_unconfirmed() {
+  local case_dir log closed restored returned
   case_dir=$(make_case herdr-projection-unconfirmed-close)
   write_meta "$case_dir" local-only ship
   configure_herdr_projection_teardown_case "$case_dir"
-  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"; : > "$log"
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"
+  returned="$case_dir/treehouse-returned"; : > "$log"
 
   FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" FM_FAKE_HERDR_CLOSE_FAIL=1 \
+    FM_FAKE_TREEHOUSE_RETURNED="$returned" \
     run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
-    || fail "herdr-projection-unconfirmed-close: teardown should preserve best-effort endpoint semantics"
+    && fail "herdr-projection-unconfirmed-close: teardown should fail closed"
   [ -e "$case_dir/state/task-x1.herdr-presentation" ] \
     || fail "unconfirmed task-pane close incorrectly retired the presentation journal"
-  assert_grep "close could not be confirmed" "$case_dir/stderr" \
-    "unconfirmed projected close did not explain why the journal was retained"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "unconfirmed task-pane close incorrectly retired task metadata"
+  [ ! -e "$returned" ] \
+    || fail "unconfirmed task-pane close allowed a focus-unsafe worktree return"
+  assert_grep "refusing focus-unsafe worktree return" "$case_dir/stderr" \
+    "unconfirmed projected close did not explain the fail-closed teardown"
   assert_not_contains "$(cat "$log")" "workspace close" \
     "unconfirmed projected close must not escalate to workspace cleanup"
-  pass "herdr projection teardown retains the stale journal and attempts no workspace cleanup when exact-pane close is unconfirmed"
+  pass "herdr projection teardown retains task state and refuses worktree return when exact close is unconfirmed"
+}
+
+assert_herdr_indeterminate_correlation_refuses() {  # <name> <workspace-list-mode> [journal-mode]
+  local name=$1 mode=$2 journal_mode=${3:-valid} case_dir log closed restored returned
+  case_dir=$(make_case "$name")
+  write_meta "$case_dir" local-only ship
+  configure_herdr_projection_teardown_case "$case_dir"
+  case "$journal_mode" in
+    malformed) printf '%s\n' 'unexpected=field' >> "$case_dir/state/task-x1.herdr-presentation" ;;
+    stale-pane) sed -i.bak 's/^pane_id=.*/pane_id=w1:p9/' "$case_dir/state/task-x1.herdr-presentation" ;;
+    v1)
+      printf '%s\n' \
+        'version=1' \
+        'task_id=task-x1' \
+        'projection_id=AbCdEfGhIjKlMnOpQrStUv' > "$case_dir/state/task-x1.herdr-presentation"
+      ;;
+  esac
+  rm -f "$case_dir/state/task-x1.herdr-presentation.bak"
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"
+  returned="$case_dir/treehouse-returned"; : > "$log"
+
+  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
+    FM_FAKE_TREEHOUSE_RETURNED="$returned" FM_FAKE_HERDR_WORKSPACE_LIST_MODE="$mode" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    && fail "$name: teardown should fail closed on indeterminate correlation"
+  assert_grep "correlation is indeterminate" "$case_dir/stderr" \
+    "$name: teardown did not report indeterminate Herdr correlation"
+  assert_present "$case_dir/state/task-x1.herdr-presentation" \
+    "$name: indeterminate correlation incorrectly retired the presentation journal"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "$name: indeterminate correlation incorrectly retired task metadata"
+  assert_absent "$returned" \
+    "$name: indeterminate correlation allowed a focus-unsafe worktree return"
+  assert_not_contains "$(cat "$log")" "pane close" \
+    "$name: indeterminate correlation attempted an exact-pane close"
+}
+
+test_herdr_projection_teardown_refuses_indeterminate_correlation() {
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-v1-journal valid v1
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-malformed-journal valid malformed
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-stale-pane valid stale-pane
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-list-failed failed
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-list-malformed malformed
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-live-workspace-missing missing
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-live-workspace-renamed renamed
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-live-workspace-duplicated duplicated
+  assert_herdr_indeterminate_correlation_refuses herdr-projection-live-workspace-different different
+  pass "herdr projection teardown refuses worktree return when correlation is indeterminate"
+}
+
+test_herdr_projection_teardown_revalidates_under_lock() {
+  local case_dir log closed restored returned count
+  case_dir=$(make_case herdr-projection-lock-revalidation)
+  write_meta "$case_dir" local-only ship
+  configure_herdr_projection_teardown_case "$case_dir"
+  log="$case_dir/herdr.log"; closed="$case_dir/closed"; restored="$case_dir/restored"
+  returned="$case_dir/treehouse-returned"; count="$case_dir/workspace-list-count"
+  : > "$log"
+
+  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" FM_FAKE_HERDR_RESTORED="$restored" \
+    FM_FAKE_TREEHOUSE_RETURNED="$returned" FM_FAKE_HERDR_WORKSPACE_LIST_MODE=malformed-after-first \
+    FM_FAKE_HERDR_WORKSPACE_LIST_COUNT="$count" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    && fail "herdr-projection-lock-revalidation: teardown should fail closed"
+  assert_grep "could not be revalidated under the session lock" "$case_dir/stderr" \
+    "lock-time Herdr correlation failure lacked its fail-closed diagnostic"
+  assert_present "$case_dir/state/task-x1.herdr-presentation" \
+    "lock-time correlation failure incorrectly retired the presentation journal"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "lock-time correlation failure incorrectly retired task metadata"
+  assert_absent "$returned" \
+    "lock-time correlation failure allowed a focus-unsafe worktree return"
+  assert_not_contains "$(cat "$log")" "pane close" \
+    "lock-time correlation failure attempted an exact-pane close"
+  pass "herdr projection teardown revalidates exact authority under the session lock"
 }
 
 test_local_only_fork_remote_allows
@@ -1381,7 +1527,9 @@ test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_herdr_teardown_clears_escalation_marker
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
-test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
+test_herdr_projection_teardown_refuses_worktree_return_when_close_unconfirmed
+test_herdr_projection_teardown_refuses_indeterminate_correlation
+test_herdr_projection_teardown_revalidates_under_lock
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows

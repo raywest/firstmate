@@ -1285,23 +1285,26 @@ test_pane_input_pending_blank_is_not_pending() {
   pass "pane_input_pending: blank cursor line is not pending"
 }
 
-test_pane_input_pending_idle_prompt_not_pending() {
-  local dir state fakebin capture
+test_pane_input_pending_requires_proven_empty_prompt() {
+  local dir state fakebin capture prompt
   dir=$(make_supercase pending-prompt)
   state="$dir/state"
   fakebin="$dir/fakebin"
   capture="$dir/pane.txt"
-  # Cursor line (line 3, cursor_y=2) is a bare prompt ($) → idle → not pending.
-  printf 'output\noutput\n$ \n' > "$capture"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=2 \
-    pane_input_pending "fakepane" \
-    && fail "bare prompt falsely detected as pending"
-  # Bare > prompt also idle.
-  printf 'output\noutput\n> \n' > "$capture"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=2 \
-    pane_input_pending "fakepane" \
-    && fail "bare > prompt falsely detected as pending"
-  pass "pane_input_pending: bare prompts are not pending (idle)"
+  for prompt in '$' '>'; do
+    printf 'output\noutput\n%s \n' "$prompt" > "$capture"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=2 \
+      pane_input_pending "fakepane" \
+      || fail "bare shell prompt '$prompt' should defer as unknown"
+  done
+  for prompt in '❯' '›'; do
+    printf 'output\noutput\n%s \n' "$prompt" > "$capture"
+    if PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=2 \
+      pane_input_pending "fakepane"; then
+      fail "proven empty agent prompt '$prompt' should not defer"
+    fi
+  done
+  pass "pane_input_pending: only proven empty agent prompts pass"
 }
 
 # The safety fix at the tmux classifier (task fm-composer-shellglyph-safety): a
@@ -1330,8 +1333,8 @@ test_tmux_composer_state_bordered_and_agent_rows_are_empty() {
   local dir fakebin capture out
   dir=$(make_supercase composer-empty-agent)
   fakebin="$dir/fakebin"; capture="$dir/pane.txt"
-  printf '%s\n' "│ >                     │" > "$capture"
-  out=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=0 \
+  printf '╭────────────────────────╮\n│ >                      │\n╰────────────────────────╯\n' > "$capture"
+  out=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=1 \
     fm_tmux_composer_state "fakepane")
   [ "$out" = empty ] || fail "a bordered '│ > │' composer should read empty, got '$out'"
   printf '%s\n' "❯ " > "$capture"
@@ -1365,8 +1368,8 @@ test_pane_input_pending_honors_idle_override_after_border_strip() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   capture="$dir/pane.txt"
-  printf '│ custom idle> │\n' > "$capture"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=0 \
+  printf '╭────────────────╮\n│ custom idle>   │\n╰────────────────╯\n' > "$capture"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=1 \
     FM_COMPOSER_IDLE_RE='^custom idle>$' pane_input_pending "fakepane" \
     && fail "FM_COMPOSER_IDLE_RE was not applied after border stripping"
   pass "pane_input_pending honors FM_COMPOSER_IDLE_RE after border stripping"
@@ -1484,13 +1487,13 @@ test_pane_input_pending_bordered_idle_not_pending() {
   local dir state fakebin capture line
   dir=$(make_supercase pending-bordered-idle)
   state="$dir/state"; fakebin="$dir/fakebin"; capture="$dir/pane.txt"
-  for line in \
-    "│ >                                            │" \
-    "│ ❯                                            │" \
-    "│ >  │" \
-    "│                                              │"; do
-    printf '%s\n' "$line" > "$capture"
-    if PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=0 \
+  for line in '>' '❯' ''; do
+    case "$line" in
+      '>') printf '╭────────────╮\n│ >          │\n╰────────────╯\n' > "$capture" ;;
+      '❯') printf '╭────────────╮\n│ ❯          │\n╰────────────╯\n' > "$capture" ;;
+      '') printf '╭────────────╮\n│            │\n╰────────────╯\n' > "$capture" ;;
+    esac
+    if PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=1 \
       pane_input_pending "fakepane"; then
       fail "bordered idle composer falsely detected as pending: <$line>"
     fi
@@ -1505,8 +1508,8 @@ test_pane_input_pending_bordered_with_text_is_pending() {
   local dir state fakebin capture
   dir=$(make_supercase pending-bordered-text)
   state="$dir/state"; fakebin="$dir/fakebin"; capture="$dir/pane.txt"
-  printf '%s\n' "│ > fix findings 1 and 3, skip 2               │" > "$capture"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=0 \
+  printf '╭────────────────────────────────────────────────╮\n│ > fix findings 1 and 3, skip 2                 │\n╰────────────────────────────────────────────────╯\n' > "$capture"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_CURSOR_Y=1 \
     pane_input_pending "fakepane" \
     || fail "real text inside a bordered composer was not detected as pending"
   pass "pane_input_pending: text inside a bordered composer is still pending"
@@ -1548,7 +1551,7 @@ test_max_defer_empty_swallow_types_once_and_alarms() {
   dir=$(make_bordered_case maxdefer-stuck)
   state="$dir/state"; fakebin="$dir/fakebin"
   sent="$dir/sent.log"; : > "$sent"
-  printf '│ > │\n' > "$dir/composer"
+  printf '╭─────╮\n│ >   │\n╰─────╯\n' > "$dir/composer"
   touch "$dir/.swallow"
   escalate_add "$state" "needs-decision: pick A"
   echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
@@ -1570,7 +1573,7 @@ test_max_defer_flushes_empty_idle_pane() {
   dir=$(make_bordered_case maxdefer-recover)
   state="$dir/state"; fakebin="$dir/fakebin"
   sent="$dir/sent.log"; : > "$sent"
-  printf '│ > │\n' > "$dir/composer"
+  printf '╭─────╮\n│ >   │\n╰─────╯\n' > "$dir/composer"
   escalate_add "$state" "done: PR https://x/y/pull/1"
   echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
   afk_enter "$state"
@@ -1587,7 +1590,7 @@ test_max_defer_pending_composer_alarms_without_typing() {
   dir=$(make_bordered_case maxdefer-pending-digest)
   state="$dir/state"; fakebin="$dir/fakebin"
   sent="$dir/sent.log"; : > "$sent"
-  printf '│ > human draft │\n' > "$dir/composer"
+  printf '╭─────────────────╮\n│ > human draft   │\n╰─────────────────╯\n' > "$dir/composer"
   escalate_add "$state" "needs-decision: pick B"
   echo $(( $(date +%s) - 600 )) > "$state/.subsuper-escalations.since"
   afk_enter "$state"
@@ -2033,7 +2036,7 @@ test_fm_send_exits_nonzero_on_confirmed_swallow() {
     FM_SEND_SLEEP=0.05 "$ROOT/bin/fm-send.sh" sess:win 'route this work' >/dev/null 2>"$err" \
     || fail "fm-send exited non-zero on a clean submit: $(cat "$err")"
   # Persistent swallow -> exit non-zero with a clear message.
-  printf '│ > │\n' > "$dir/composer"
+  printf '╭─────╮\n│ >   │\n╰─────╯\n' > "$dir/composer"
   touch "$dir/.swallow"
   if PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_COMPOSER="$dir/composer" \
     FM_FAKE_SWALLOW="$dir/.swallow" FM_FAKE_PERSIST_SWALLOW=1 FM_SEND_SLEEP=0.05 \
@@ -2055,6 +2058,21 @@ test_fm_send_exits_nonzero_on_initial_send_failure() {
   fi
   grep -F 'text not sent' "$err" >/dev/null || fail "fm-send did not explain initial send failure: $(cat "$err")"
   pass "fm-send exits non-zero when initial text send fails"
+}
+
+test_fm_send_exits_nonzero_on_unproven_submit() {
+  local dir fakebin err
+  dir=$(make_bordered_case send-unproven)
+  fakebin="$dir/fakebin"; err="$dir/send.err"
+  touch "$dir/.swallow"
+  if PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_COMPOSER="$dir/composer" \
+    FM_FAKE_SWALLOW="$dir/.swallow" FM_FAKE_PERSIST_SWALLOW=1 FM_SEND_SLEEP=0.05 \
+    "$ROOT/bin/fm-send.sh" sess:win '修复' >/dev/null 2>"$err"; then
+    fail "fm-send exited zero when submit proof remained pending-unproven"
+  fi
+  grep -F 'verdict=pending-unproven' "$err" >/dev/null \
+    || fail "fm-send did not preserve the unproven-submit verdict: $(cat "$err")"
+  pass "fm-send exits non-zero unless delivery is proven empty"
 }
 
 # --- herdr backend-awareness (fm-turnend-guard-h6-adjacent transport fix) ----
@@ -2154,6 +2172,11 @@ test_pane_input_pending_herdr_dispatch() {
       fail "pane_input_pending should report not-pending for an empty herdr composer"
     fi
   ) || fail "herdr pane_input_pending (empty case) subshell failed"
+  (
+    fm_backend_composer_state() { printf 'future-state'; }
+    pane_input_pending "default:w1:p2" herdr \
+      || fail "pane_input_pending should defer on an unrecognized composer state"
+  ) || fail "herdr pane_input_pending (future-state case) subshell failed"
   pass "pane_input_pending: dispatches through fm_backend_composer_state for backend=herdr"
 }
 
@@ -2253,6 +2276,24 @@ test_inject_msg_defers_on_dead_shell_unknown() {
   pass "inject_msg: defers on a dead-shell/unreadable composer (unknown), never typing the escalation into a shell"
 }
 
+test_inject_msg_defers_on_unrecognized_composer_state() {
+  local dir state
+  dir=$(make_supercase inject-future-composer-state)
+  state="$dir/state"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { return 0; }
+    fm_backend_busy_state() { printf 'idle'; }
+    fm_backend_capture() { printf 'idle prompt\n'; }
+    fm_backend_composer_state() { printf 'future-state'; }
+    fm_backend_send_text_submit() { fail "send_text_submit must not run for an unrecognized composer state"; }
+    if FM_SUPERVISOR_BACKEND=herdr FM_SUPERVISOR_TARGET="default:w1:p2" inject_msg "hello" "$state"; then
+      fail "inject_msg should defer on an unrecognized composer state"
+    fi
+  ) || fail "unrecognized composer-state inject_msg subshell failed"
+  pass "inject_msg: unrecognized composer states defer by default"
+}
+
 test_afk_start_leaves_style_flag_absent
 test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
@@ -2322,7 +2363,7 @@ test_should_exit_afk_when_afk_inactive
 test_strip_injection_marker
 test_pane_input_pending_detects_partial_input
 test_pane_input_pending_blank_is_not_pending
-test_pane_input_pending_idle_prompt_not_pending
+test_pane_input_pending_requires_proven_empty_prompt
 test_tmux_composer_state_bare_shell_is_unknown
 test_tmux_composer_state_bordered_and_agent_rows_are_empty
 test_tmux_composer_state_requires_matching_box_borders
@@ -2364,6 +2405,7 @@ test_inject_wedge_alarm_fires_active_alert_on_non_tmux_backend
 test_inject_wedge_alarm_throttles_when_marker_cannot_be_written
 test_fm_send_exits_nonzero_on_confirmed_swallow
 test_fm_send_exits_nonzero_on_initial_send_failure
+test_fm_send_exits_nonzero_on_unproven_submit
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_target_herdr
 test_pane_is_busy_herdr_native_busy_state
@@ -2376,3 +2418,4 @@ test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch
 test_inject_msg_defers_on_dead_shell_unknown
+test_inject_msg_defers_on_unrecognized_composer_state

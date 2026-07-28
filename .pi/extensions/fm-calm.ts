@@ -1,10 +1,11 @@
 // Firstmate's home-persistent Pi transcript presentation toggle.
 //
-// Compatibility boundary: Pi 0.81.1 exposes built-in ToolDefinitions, per-slot
+// Compatibility boundary: Pi 0.81.1 and 0.82.0 expose built-in ToolDefinitions, per-slot
 // renderers, renderShell: "self", session_start replacement reasons,
 // ExtensionUIContext.setToolsExpanded(), setWorkingVisible(), and
-// setHiddenThinkingLabel(). The focused tests pin those assumptions. Pi still
-// exposes no global renderer for built-in message rows or arbitrary custom tools.
+// setHiddenThinkingLabel(). The focused tests pin those assumptions. Version-bounded
+// presentation adapters cover collapsed assistant thinking and operational user rows;
+// Pi still exposes no global renderer for arbitrary built-in or custom rows.
 // docs/configuration.md owns the home-local Calm preference contract.
 import { randomUUID } from "node:crypto";
 import {
@@ -32,6 +33,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, getKeybindings, type Component } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
+import { installCalmAssistantLayout } from "./lib/fm-calm-assistant-layout.ts";
+import { installCalmOperationalUserLayout } from "./lib/fm-calm-operational-user-layout.ts";
 import {
   calmPresentationHides,
   calmPresentationIsActive,
@@ -72,6 +75,9 @@ const extensionDir = dirname(extensionFile);
 const root = resolve(extensionDir, "../..");
 
 export default function (pi: ExtensionAPI) {
+  installCalmAssistantLayout();
+  installCalmOperationalUserLayout();
+
   let exportRendering = false;
   let removeTerminalInputHandler: (() => void) | undefined;
 

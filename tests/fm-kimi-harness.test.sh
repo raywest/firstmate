@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for the kimi harness adapter: guarded turn-end hook
-# authentication, the idempotent doctor-validated config.toml append, teardown
-# cleanup, brief delivery wiring, and the crewmate/scout-only scope refusals.
+# Behavior tests for the verified Kimi Code CLI crewmate adapter.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -9,394 +7,232 @@ set -u
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
+KIMI_HOOK="$ROOT/bin/fm-kimi-turnend-hook.sh"
 TMP_ROOT=$(fm_test_tmproot fm-kimi-harness)
+PYTHON_BIN=$(command -v python3) || fail "test needs python3"
+PYTHON_BIN_DIR=$(dirname "$PYTHON_BIN")
+JQ_BIN=$(command -v jq) || fail "test needs jq"
+BASE_PATH=${FM_TEST_BASE_PATH:-$PYTHON_BIN_DIR:/usr/bin:/bin:/usr/sbin:/sbin}
 
-# Fake tmux for a kimi spawn: beyond the grok fake, it must serve a numeric
-# cursor_y and a bordered kimi composer row so fm-spawn's deliver_kimi_brief
-# sees a ready composer, and it records paste-buffer/send-keys calls so the
-# test can assert the brief went over as a bracketed paste.
+assert_source_line() {
+  local line=$1
+  grep -Fqx -- "$line" "$SPAWN" || fail "existing launch template changed: $line"
+}
+
+test_existing_launch_templates_are_byte_pinned() {
+  assert_source_line "    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__\"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"' ;;"
+  assert_source_line "        printf '%s' 'codex __MODELFLAG____EFFORTFLAG____HARNESSPROFILEFLAG__--dangerously-bypass-approvals-and-sandbox \"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"'"
+  assert_source_line "        printf '%s' 'codex __MODELFLAG____EFFORTFLAG____HARNESSPROFILEFLAG__--dangerously-bypass-approvals-and-sandbox -c \"notify=[\\\"bash\\\",\\\"-c\\\",\\\"touch __TURNEND__\\\"]\" \"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"'"
+  assert_source_line "    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\\''{\"permission\":{\"*\":\"allow\"}}'\\'' opencode __MODELFLAG__--prompt \"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"' ;;"
+  assert_source_line "        printf '%s' 'pi __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ \"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"'"
+  assert_source_line "        printf '%s' 'pi __MODELFLAG____EFFORTFLAG__-e __PIEXT__ \"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"'"
+  assert_source_line "    grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__\"\$(__OPINPUT__ encode launch-brief < __BRIEF__)\"' ;;"
+  pass "fm-spawn: the five pre-existing adapters' launch templates stay byte-pinned"
+}
+
+test_tracked_files_have_no_user_absolute_paths() {
+  local pattern="/""Users/" matches
+  matches=$(git -C "$ROOT" grep -n -F "$pattern" -- . || true)
+  [ -z "$matches" ] || fail "tracked files contain user-specific absolute paths: $matches"
+  pass "repository: tracked files contain no user-specific absolute paths"
+}
+
 make_spawn_fakebin() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
-log="${FM_FAKE_TMUX_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$FM_FAKE_TMUX_CALL_LOG"
+state=$(cat "$FM_FAKE_KIMI_STATE" 2>/dev/null || true)
+fake_screen() {
+  case "$state" in
+    ready)
+      printf 'Welcome to Kimi Code!\ncontext: 0%% (0/256k)\n╭────────────────────────────────╮\n│ >                              │\n╰────────────────────────────────╯\n'
+      ;;
+    pointer-typed)
+      printf 'context: 0%% (0/256k)\n╭────────────────────────────────╮\n│ > Read the brief and follow it │\n│                                │\n╰────────────────────────────────╯\n'
+      ;;
+    delivered)
+      printf '✨ Read the brief at %s and follow it exactly.\ncontext: 1%% (2k/256k)\n╭────────────────────────────────╮\n│ >                              │\n╰────────────────────────────────╯\n' "$FM_FAKE_BRIEF_REAL"
+      ;;
+    *)
+      printf 'shell starting\n$ \n'
+      ;;
+  esac
+}
+fake_cursor_y() {
+  case "$state" in
+    pointer-typed) printf '3\n' ;;
+    ready|delivered) printf '3\n' ;;
+    *) printf '1\n' ;;
+  esac
+}
 case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
-  *"#{cursor_y}"*) printf '0\n'; exit 0 ;;
+  *"#{pane_current_path}"*) printf '%s\n' "$FM_FAKE_PANE_PATH"; exit 0 ;;
+  *"#{cursor_y}"*) fake_cursor_y; exit 0 ;;
 esac
-printf 'tmux %s\n' "$*" >> "$log"
 case "${1:-}" in
-  capture-pane)
-    if [ "${FM_FAKE_KIMI_POST_PASTE_CAPTURE_FAIL:-0}" = 1 ] \
-      && [ -n "${FM_FAKE_KIMI_BRIEF_PASTED:-}" ] \
-      && [ -e "$FM_FAKE_KIMI_BRIEF_PASTED" ]; then
-      exit 1
-    fi
-    # A ready, empty kimi composer: dark truecolor border + default-fg `>`.
-    printf ' \033[38;2;90;90;90m\xe2\x94\x82\033[39m > \033[7m \033[0m  \033[38;2;90;90;90m\xe2\x94\x82\033[39m\n'
-    exit 0 ;;
   display-message) printf 'firstmate\n'; exit 0 ;;
-  load-buffer) echo "load-buffer $*" >> "$log"; exit 0 ;;
-  paste-buffer)
-    echo "paste-buffer $*" >> "$log"
-    [ -z "${FM_FAKE_KIMI_BRIEF_PASTED:-}" ] || : > "$FM_FAKE_KIMI_BRIEF_PASTED"
-    exit 0 ;;
-  send-keys) echo "send-keys $*" >> "$log"; exit 0 ;;
   list-windows) exit 0 ;;
-  has-session|new-session|new-window|kill-window|set-window-option) exit 0 ;;
+  has-session|new-session|new-window|kill-window) exit 0 ;;
+  send-keys)
+    prev=
+    literal=
+    for arg in "$@"; do
+      if [ "$prev" = -l ]; then literal=$arg; break; fi
+      prev=$arg
+    done
+    if [ -n "$literal" ]; then
+      case "$literal" in
+        *' --auto')
+          printf '%s\n' "$literal" >> "$FM_FAKE_LAUNCH_LOG"
+          printf 'launched\n' > "$FM_FAKE_KIMI_STATE"
+          ;;
+        *)
+          printf '%s\n' "$literal" >> "$FM_FAKE_POINTER_LOG"
+          printf 'pointer-typed\n' > "$FM_FAKE_KIMI_STATE"
+          ;;
+      esac
+      exit 0
+    fi
+    case " $* " in
+      *' Enter '*)
+        case "$state" in
+          launched)
+            if [ "${FM_FAKE_KIMI_READY:-yes}" = yes ]; then
+              printf 'ready\n' > "$FM_FAKE_KIMI_STATE"
+            fi
+            ;;
+          pointer-typed)
+            if [ "${FM_FAKE_KIMI_DELIVERY:-yes}" = yes ]; then
+              if [ "${FM_FAKE_KIMI_SWALLOW_FIRST:-no}" = yes ] \
+                 && [ ! -f "$FM_FAKE_KIMI_SWALLOWED" ]; then
+                : > "$FM_FAKE_KIMI_SWALLOWED"
+              else
+                printf 'delivered\n' > "$FM_FAKE_KIMI_STATE"
+              fi
+            else
+              printf 'ready\n' > "$FM_FAKE_KIMI_STATE"
+            fi
+            ;;
+        esac
+        ;;
+    esac
+    exit 0
+    ;;
+  capture-pane)
+    start= end= prev=
+    for arg in "$@"; do
+      case "$prev" in
+        -S) start=$arg ;;
+        -E) end=$arg ;;
+      esac
+      case "$arg" in -S|-E) prev=$arg ;; *) prev= ;; esac
+    done
+    case "$start:$end" in
+      *[!0-9:]*|'':*|*:'') fake_screen ;;
+      *) fake_screen | awk -v start="$start" -v end="$end" \
+           'NR - 1 >= start && NR - 1 <= end' ;;
+    esac
+    exit 0
+    ;;
 esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  # Fake kimi CLI: `doctor` honors FM_FAKE_KIMI_DOCTOR_EXIT so the fail-closed
-  # config-restore path can be exercised.
-  cat > "$fakebin/kimi" <<'SH'
-#!/usr/bin/env bash
-case "${1:-}" in
-  doctor) exit "${FM_FAKE_KIMI_DOCTOR_EXIT:-0}" ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/kimi"
   fm_fake_exit0 "$fakebin" treehouse gh-axi gh
+  fm_fake_exit0 "$fakebin" kimi
+  ln -s "$JQ_BIN" "$fakebin/jq"
   printf '%s\n' "$fakebin"
 }
 
 make_spawn_case() {
-  local name=$1 case_dir home proj wt fakebin kimi_home id
+  local name=$1 id=$2 case_dir home proj wt fakebin
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
   proj="$case_dir/project"
   wt="$case_dir/wt"
   fakebin=$(make_spawn_fakebin "$case_dir/fake")
-  kimi_home="$case_dir/kimi"
-  id="kimi-$name-x1"
-  mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config" "$kimi_home"
-  printf 'brief line one\nbrief line two\n' > "$home/data/$id/brief.md"
-  printf 'default_model = "kimi-code/k3"\n' > "$kimi_home/config.toml"
-  fm_git_worktree "$proj" "$wt" "fm/$id"
+  mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config" "$home/.kimi-code"
+  printf '# Kimi test config\ndefault_model = "test"\n' > "$home/.kimi-code/config.toml"
+  printf 'brief for kimi\n' > "$home/data/$id/brief.md"
+  printf 'kimi\n' > "$home/config/crew-harness"
+  fm_git_worktree "$proj" "$wt" "wt-$name"
   touch "$home/state/.last-watcher-beat"
-  printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$kimi_home|$id"
+  : > "$case_dir/launch.log"
+  : > "$case_dir/pointer.log"
+  : > "$case_dir/kimi.state"
+  : > "$case_dir/tmux-calls.log"
+  printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin"
 }
 
-run_kimi_spawn() {
-  local home=$1 proj=$2 wt=$3 fakebin=$4 kimi_home=$5 id=$6
+run_spawn() {
+  local case_dir=$1 home=$2 proj=$3 wt=$4 fakebin=$5 id=$6
   shift 6
-  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+  HOME="$home" FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
-    FM_FAKE_TMUX_LOG="${FM_FAKE_TMUX_LOG:-/dev/null}" \
-    KIMI_CODE_HOME="$kimi_home" PATH="$fakebin:$PATH" \
-    "$SPAWN" "$id" "$proj" kimi "$@" 2>&1
+    FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" \
+    FM_FAKE_POINTER_LOG="$case_dir/pointer.log" \
+    FM_FAKE_KIMI_STATE="$case_dir/kimi.state" \
+    FM_FAKE_KIMI_SWALLOWED="$case_dir/kimi.swallowed" \
+    FM_FAKE_KIMI_SWALLOW_FIRST="${FM_FAKE_KIMI_SWALLOW_FIRST:-no}" \
+    FM_FAKE_TMUX_CALL_LOG="$case_dir/tmux-calls.log" \
+    FM_FAKE_BRIEF_REAL="$(cd "$home/data/$id" && pwd -P)/brief.md" \
+    FM_TEST_KIMI_RAW="${FM_TEST_KIMI_RAW:-0}" \
+    KIMI_CODE_HOME="${KIMI_CODE_HOME:-}" \
+    FM_KIMI_READY_POLLS=2 FM_KIMI_DELIVERY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
+    PATH="$fakebin:$BASE_PATH" bash -c '
+      if [ "${FM_TEST_KIMI_RAW:-0}" = 1 ]; then
+        exec "$1" "$2" "$3" "kimi --auto" "${@:4}"
+      fi
+      exec "$1" "$2" "$3" --harness kimi "${@:4}"
+    ' _ "$SPAWN" "$id" "$proj" "$@" 2>&1
 }
 
-run_raw_kimi_spawn() {
-  local home=$1 proj=$2 wt=$3 fakebin=$4 kimi_home=$5 id=$6
-  shift 6
-  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
-    FM_FAKE_TMUX_LOG="${FM_FAKE_TMUX_LOG:-/dev/null}" \
-    KIMI_CODE_HOME="$kimi_home" PATH="$fakebin:$PATH" \
-    "$SPAWN" "$id" "$proj" "$@" 2>&1
+read_spawn_record() {
+  IFS='|' read -r CASE_DIR HOME_DIR PROJ_DIR WT_DIR FAKEBIN_DIR <<EOF
+$1
+EOF
 }
 
-test_kimi_preflight_refuses_before_task_resources() {
-  local rec case_dir home proj wt fakebin kimi_home id out status log
-  rec=$(make_spawn_case preflight-cli)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  log="$case_dir/tmux.log"
-  : > "$log"
-  rm -f "$fakebin/kimi"
-  out=$(PATH="$fakebin:/usr/bin:/bin:/usr/sbin:/sbin" FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
-  status=$?
-  [ "$status" -ne 0 ] || fail "a kimi spawn without the CLI must be refused"
-  assert_contains "$out" "kimi is not on PATH" "missing kimi CLI refusal message missing"
-  assert_absent "$home/state/$id.meta" "missing kimi CLI wrote task metadata"
-  assert_no_grep 'new-window' "$log" "missing kimi CLI created a tmux task window"
-
-  rec=$(make_spawn_case preflight-config)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  log="$case_dir/tmux.log"
-  : > "$log"
-  rm -f "$kimi_home/config.toml"
-  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
-  status=$?
-  [ "$status" -ne 0 ] || fail "a kimi spawn without config.toml must be refused"
-  assert_contains "$out" "kimi is not initialized" "missing kimi config refusal message missing"
-  assert_absent "$home/state/$id.meta" "missing kimi config wrote task metadata"
-  assert_no_grep 'new-window' "$log" "missing kimi config created a tmux task window"
-  pass "kimi preflight refuses missing CLI and config before task resources"
-}
-
-test_kimi_creates_missing_state_before_metadata() {
-  local rec case_dir home proj wt fakebin kimi_home id out status
-  rec=$(make_spawn_case missing-state)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  rm -rf "$home/state"
-  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
-  status=$?
-  expect_code 0 "$status" "kimi spawn should create a missing state directory: $out"
-  assert_present "$home/state/$id.meta" "kimi spawn did not persist metadata in a new state directory"
-  pass "kimi creates the state directory before writing metadata"
-}
-
-test_kimi_hook_requires_registered_token() {
-  local rec case_dir home proj wt fakebin kimi_home id out status hook token target evil evil_target
-  rec=$(make_spawn_case hook-auth)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
-  status=$?
-  expect_code 0 "$status" "kimi spawn should succeed: $out"
+test_kimi_launch_then_send_is_verified() {
+  local id rec out rc launch pointer brief_real meta
+  id=kimi-success-z1
+  rec=$(make_spawn_case success "$id")
+  read_spawn_record "$rec"
+  out=$(FM_FAKE_KIMI_SWALLOW_FIRST=yes run_spawn \
+    "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --model kimi-code/k3 --effort high)
+  rc=$?
+  expect_code 0 "$rc" "verified kimi launch-then-send should succeed"
   assert_contains "$out" "spawned $id harness=kimi" "kimi spawn did not report success"
 
-  hook="$kimi_home/hooks/fm-turn-end.sh"
-  assert_present "$hook" "kimi hook script was not installed"
-  assert_grep 'token=' "$wt/.fm-kimi-turnend" "kimi pointer did not contain a token"
-  target="$home/state/$id.turn-ended"
-  assert_no_grep "$target" "$wt/.fm-kimi-turnend" "kimi pointer exposed the turn-end path"
-  token=$(sed -n 's/^token=//p' "$wt/.fm-kimi-turnend")
-  assert_present "$kimi_home/hooks/fm-turn-end.d/$token" "kimi auth registry entry was not written"
-  assert_grep 'hooks/fm-turn-end.sh' "$kimi_home/config.toml" "config.toml did not get the [[hooks]] Stop append"
-  assert_grep "kimi_home=$kimi_home" "$home/state/$id.meta" "kimi meta did not record its resolved home"
+  launch=$(cat "$CASE_DIR/launch.log")
+  [ "$launch" = "KIMI_CODE_HOME='$HOME_DIR/.kimi-code' '$FAKEBIN_DIR/kimi' --model 'kimi-code/k3' --auto" ] \
+    || fail "kimi launch did not use the absolute binary, model, and --auto only: $launch"
+  assert_not_contains "$launch" "--effort" "kimi launch emitted a nonexistent effort flag"
+  assert_not_contains "$launch" "turn-ended" "kimi launch embedded a turn-end path"
+  assert_not_contains "$launch" "__TURNEND__" "kimi launch retained a turn-end placeholder"
 
-  # An unregistered workspace pointing a payload cwd at an arbitrary target must be a no-op.
-  evil="$case_dir/evil"
-  evil_target="$case_dir/evil-target.turn-ended"
-  mkdir -p "$evil"
-  printf '%s\n' "$evil_target" > "$evil/.fm-kimi-turnend"
-  printf '{"hook_event_name":"Stop","cwd":"%s"}' "$evil" | KIMI_CODE_HOME="$kimi_home" bash "$hook"
-  assert_absent "$evil_target" "old-style kimi pointer touched an arbitrary target"
-
-  # A token below the first line must not authenticate.
-  {
-    printf '%s\n' 'ignored'
-    printf 'token=%s\n' "$token"
-  } > "$wt/.fm-kimi-turnend"
-  printf '{"hook_event_name":"Stop","cwd":"%s"}' "$wt" | KIMI_CODE_HOME="$kimi_home" bash "$hook"
-  assert_absent "$target" "kimi pointer accepted token outside the first line"
-
-  # The registered pointer fires via the payload cwd.
-  printf 'token=%s\n' "$token" > "$wt/.fm-kimi-turnend"
-  printf '{"hook_event_name":"Stop","cwd":"%s"}' "$wt" | KIMI_CODE_HOME="$kimi_home" bash "$hook"
-  assert_present "$target" "registered kimi pointer did not touch the task turn-end file"
-
-  # It also fires from a bare cwd when the payload carries none (the fallback).
-  rm -f "$target"
-  (cd "$wt" && printf '' | KIMI_CODE_HOME="$kimi_home" bash "$hook")
-  assert_present "$target" "kimi hook did not fall back to its own cwd without a payload"
-  pass "kimi global hook requires a firstmate registry token"
+  brief_real="$(cd "$HOME_DIR/data/$id" && pwd -P)/brief.md"
+  pointer=$(cat "$CASE_DIR/pointer.log")
+  [ "$pointer" = "Read the brief at $brief_real and follow it exactly." ] \
+    || fail "kimi pointer was not the exact absolute-path-only instruction: $pointer"
+  meta="$HOME_DIR/state/$id.meta"
+  assert_grep 'model=kimi-code/k3' "$meta" "kimi meta lost the requested model"
+  assert_grep 'effort=high' "$meta" "kimi meta did not retain the unsupported effort axis"
+  assert_grep "kimi_home=$HOME_DIR/.kimi-code" "$meta" "kimi meta did not retain its resolved home"
+  assert_grep 'BEGIN FIRSTMATE KIMI TURN-END HOOK' "$HOME_DIR/.kimi-code/config.toml" \
+    "kimi spawn did not install its guarded global hook region"
+  assert_grep 'token=' "$WT_DIR/.fm-kimi-turnend" "kimi spawn did not write its token pointer"
+  assert_present "$HOME_DIR/state/$id.kimi-turnend-token" "kimi spawn did not record its token"
+  pass "fm-spawn: kimi launches, delivers its brief, and registers a guarded turn-end token"
 }
 
-test_kimi_config_append_is_idempotent_and_brief_is_pasted() {
-  local rec case_dir home proj wt fakebin kimi_home id out status count log
-  rec=$(make_spawn_case idempotent)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  log="$case_dir/tmux.log"
-  : > "$log"
-  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
-  status=$?
-  expect_code 0 "$status" "first kimi spawn should succeed: $out"
-  grep -q 'load-buffer' "$log" || fail "kimi brief was not staged with tmux load-buffer"
-  grep -q 'paste-buffer' "$log" || fail "kimi brief was not delivered with tmux paste-buffer"
-  grep -q 'paste-buffer.*-p' "$log" || fail "kimi brief paste was not bracketed (-p)"
-
-  rm -f "$home/state/$id.meta" "$home/state/$id.kimi-turnend-token"
-  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" 2>&1) || true
-  count=$(grep -c 'hooks/fm-turn-end.sh' "$kimi_home/config.toml")
-  [ "$count" -eq 1 ] || fail "config.toml hook append is not idempotent (found $count entries)"
-  pass "kimi config append is idempotent and the brief goes over as a bracketed paste"
-}
-
-test_kimi_doctor_failure_restores_config_and_aborts() {
-  local rec case_dir home proj wt fakebin kimi_home id out status token
-  rec=$(make_spawn_case doctor-fail)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  out=$(FM_FAKE_KIMI_DOCTOR_EXIT=1 run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
-  status=$?
-  [ "$status" -ne 0 ] || fail "kimi spawn should abort when kimi doctor rejects the config append"
-  assert_contains "$out" "config restored from backup" "doctor failure did not report the restore"
-  assert_no_grep 'hooks/fm-turn-end.sh' "$kimi_home/config.toml" "rejected hook append was left in config.toml"
-  assert_absent "$kimi_home/config.toml.fm-prehook-backup" "config backup file was left behind"
-  assert_present "$home/state/$id.meta" "doctor failure did not preserve task metadata for teardown"
-  token=$(cat "$home/state/$id.kimi-turnend-token")
-  env -u KIMI_CODE_HOME FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
-    PATH="$fakebin:$PATH" "$TEARDOWN" "$id" --force >/dev/null 2>&1 \
-    || fail "kimi doctor failure metadata could not be torn down"
-  assert_absent "$kimi_home/hooks/fm-turn-end.d/$token" "doctor failure token survived metadata-based teardown"
-  pass "kimi doctor failure restores config.toml and leaves recoverable state"
-}
-
-test_kimi_teardown_removes_pointer_and_token() {
-  local rec case_dir home proj wt fakebin kimi_home id out status token
-  rec=$(make_spawn_case teardown)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
-  status=$?
-  expect_code 0 "$status" "kimi spawn should succeed before teardown: $out"
-  token=$(sed -n 's/^token=//p' "$wt/.fm-kimi-turnend")
-
-  env -u KIMI_CODE_HOME FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
-    PATH="$fakebin:$PATH" \
-    "$TEARDOWN" "$id" --force >/dev/null 2>&1 \
-    || fail "kimi teardown failed"
-
-  assert_absent "$wt/.fm-kimi-turnend" "kimi pointer survived teardown"
-  assert_absent "$kimi_home/hooks/fm-turn-end.d/$token" "kimi auth token survived teardown"
-  assert_absent "$home/state/$id.kimi-turnend-token" "kimi state token survived teardown"
-  pass "kimi teardown removes pointer and token state"
-}
-
-test_kimi_unverified_brief_submission_aborts() {
-  local rec case_dir home proj wt fakebin kimi_home id out status pasted
-  rec=$(make_spawn_case brief-unknown)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  pasted="$case_dir/brief-pasted"
-  out=$(FM_FAKE_KIMI_POST_PASTE_CAPTURE_FAIL=1 FM_FAKE_KIMI_BRIEF_PASTED="$pasted" \
-    run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
-  status=$?
-  [ "$status" -ne 0 ] || fail "an unverified kimi brief submission must abort the spawn"
-  assert_contains "$out" "brief submission could not be verified" "kimi did not report an unverified brief"
-  assert_contains "$out" "inspect window" "kimi unverified brief message omitted the window"
-  assert_not_contains "$out" "spawned $id" "kimi reported spawn success after an unverified brief"
-  pass "kimi aborts when the pasted brief cannot be verified"
-}
-
-test_kimi_secondmate_spawn_is_refused() {
-  local rec case_dir home proj wt fakebin kimi_home id out status
-  rec=$(make_spawn_case secondmate)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
-    KIMI_CODE_HOME="$kimi_home" PATH="$fakebin:$PATH" \
-    "$SPAWN" "$id" kimi --secondmate 2>&1)
-  status=$?
-  [ "$status" -ne 0 ] || fail "a kimi --secondmate spawn must be refused"
-  assert_contains "$out" "crewmate/scout duty only" "kimi secondmate refusal message missing"
-  pass "kimi --secondmate spawn is refused loudly"
-}
-
-test_kimi_non_tmux_backend_is_refused() {
-  local rec case_dir home proj wt fakebin kimi_home id out status
-  rec=$(make_spawn_case backend)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
-    KIMI_CODE_HOME="$kimi_home" PATH="$fakebin:$PATH" \
-    "$SPAWN" "$id" "$proj" kimi --backend zellij 2>&1)
-  status=$?
-  [ "$status" -ne 0 ] || fail "a kimi spawn on a non-tmux backend must be refused"
-  assert_contains "$out" "tmux backend only" "kimi non-tmux refusal message missing"
-  pass "kimi spawn on a non-tmux backend is refused loudly"
-}
-
-test_raw_kimi_scope_gates_are_exempt() {
-  local rec case_dir home proj wt fakebin kimi_home id out status
-  rec=$(make_spawn_case raw-scope)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  out=$(run_raw_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" "kimi --yolo")
-  status=$?
-  expect_code 0 "$status" "a raw kimi launch should retain kimi hook and brief behavior: $out"
-  assert_contains "$out" "spawned $id harness=kimi" "raw kimi launch did not report success"
-  assert_grep 'hooks/fm-turn-end.sh' "$kimi_home/config.toml" "raw kimi launch did not install the turn-end hook"
-
-  rec=$(make_spawn_case raw-secondmate)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
-    KIMI_CODE_HOME="$kimi_home" PATH="$fakebin:$PATH" \
-    "$SPAWN" "$id" "kimi --yolo" --secondmate 2>&1)
-  status=$?
-  [ "$status" -ne 0 ] || fail "raw kimi --secondmate should proceed to normal secondmate validation"
-  assert_contains "$out" "no firstmate home supplied or registered" "raw kimi --secondmate did not reach normal validation"
-  assert_not_contains "$out" "crewmate/scout duty only" "raw kimi --secondmate hit the template-only scope gate"
-
-  rec=$(make_spawn_case raw-backend)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  out=$(run_raw_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" "kimi --yolo" --backend zellij)
-  status=$?
-  [ "$status" -ne 0 ] || fail "raw kimi on zellij should reach normal backend handling"
-  assert_not_contains "$out" "tmux backend only" "raw kimi on zellij hit the template-only scope gate"
-  assert_contains "$out" "backend=zellij selected" "raw kimi on zellij did not reach backend handling"
-  pass "raw kimi launches bypass template-only scope gates"
-}
-
-test_kimi_config_lock_waits_and_reclaims_stale_locks() {
-  local rec case_dir home proj wt fakebin kimi_home id lock out_file pid status dead
-  rec=$(make_spawn_case config-lock-held)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  lock="$kimi_home/config.toml.fm-prehook.lock"
-  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" . "$ROOT/bin/fm-wake-lib.sh"
-  fm_lock_try_acquire "$lock" || fail "could not hold the kimi config lock"
-  out_file="$case_dir/locked.out"
-  run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" > "$out_file" &
-  pid=$!
-  sleep 0.2
-  assert_no_grep 'hooks/fm-turn-end.sh' "$kimi_home/config.toml" "kimi wrote config.toml while its lock was held"
-  fm_lock_release "$lock"
-  wait "$pid"
-  status=$?
-  expect_code 0 "$status" "kimi spawn should continue after the config lock releases: $(cat "$out_file")"
-  assert_absent "$lock" "kimi config lock was left after a successful append"
-
-  rec=$(make_spawn_case config-lock-stale)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  lock="$kimi_home/config.toml.fm-prehook.lock"
-  dead=999999
-  while kill -0 "$dead" 2>/dev/null; do
-    dead=$((dead + 1))
-  done
-  mkdir "$lock"
-  printf '%s\n' "$dead" > "$lock/pid"
-  touch -t 200001010000 "$lock"
-  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
-  status=$?
-  expect_code 0 "$status" "kimi spawn should reclaim a stale config lock: $out"
-  assert_absent "$lock" "kimi stale config lock was not reclaimed and released"
-  pass "kimi config append waits for live locks and reclaims stale locks"
-}
-
-write_kimi_model_config() {  # <config-path> <support-efforts-csv-or-empty>
+write_kimi_model_config() {  # <config-path> <support-efforts-csv-or-empty> [inline-comment]
   local config=$1 efforts=$2 comment=${3-} body=''
   if [ -n "$efforts" ]; then
     body=$(printf 'support_efforts = [ %s ]%s\ndefault_effort = "high"\n' "$efforts" "$comment")
@@ -411,144 +247,694 @@ write_kimi_model_config() {  # <config-path> <support-efforts-csv-or-empty>
 }
 
 test_kimi_effort_env_override_when_model_declares_support() {
-  local rec case_dir home proj wt fakebin kimi_home id out status log
-  rec=$(make_spawn_case effort-supported)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  write_kimi_model_config "$kimi_home/config.toml" '"low", "high", "max"'
-  log="$case_dir/tmux.log"
-  : > "$log"
-  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort high)
-  status=$?
-  expect_code 0 "$status" "kimi spawn with a model-supported effort should succeed: $out"
-  assert_grep "KIMI_MODEL_THINKING_EFFORT='high' kimi --yolo" "$log" "kimi launch did not carry the mapped effort env override before the binary name"
-  assert_grep 'effort=high' "$home/state/$id.meta" "kimi meta did not record the requested effort"
+  local id rec out rc launch
+  id=kimi-effort-supported-z1
+  rec=$(make_spawn_case effort-supported "$id")
+  read_spawn_record "$rec"
+  write_kimi_model_config "$HOME_DIR/.kimi-code/config.toml" '"low", "high", "max"'
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --model kimi-code/k3 --effort high)
+  rc=$?
+  expect_code 0 "$rc" "kimi spawn with a model-supported effort should succeed: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  assert_contains "$launch" "KIMI_MODEL_THINKING_EFFORT='high' '$FAKEBIN_DIR/kimi'" \
+    "kimi launch did not carry the mapped effort env override before the binary path"
+  assert_grep 'effort=high' "$HOME_DIR/state/$id.meta" "kimi meta did not record the requested effort"
   pass "kimi spawn emits the effort env override when the resolved model declares support"
 }
 
 test_kimi_effort_maps_medium_and_xhigh_to_high() {
-  local rec case_dir home proj wt fakebin kimi_home id out status log
-  rec=$(make_spawn_case effort-medium)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  write_kimi_model_config "$kimi_home/config.toml" '"low", "high", "max"'
-  log="$case_dir/tmux.log"
-  : > "$log"
-  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort medium)
-  status=$?
-  expect_code 0 "$status" "kimi spawn with effort=medium should succeed: $out"
-  assert_grep "KIMI_MODEL_THINKING_EFFORT='high' kimi --yolo" "$log" "kimi did not cap medium at kimi's high tier"
+  local id rec out rc launch
+  id=kimi-effort-medium-z1
+  rec=$(make_spawn_case effort-medium "$id")
+  read_spawn_record "$rec"
+  write_kimi_model_config "$HOME_DIR/.kimi-code/config.toml" '"low", "high", "max"'
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --model kimi-code/k3 --effort medium)
+  rc=$?
+  expect_code 0 "$rc" "kimi spawn with effort=medium should succeed: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  assert_contains "$launch" "KIMI_MODEL_THINKING_EFFORT='high'" "kimi did not cap medium at kimi's high tier"
 
-  rec=$(make_spawn_case effort-xhigh)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  write_kimi_model_config "$kimi_home/config.toml" '"low", "high", "max"'
-  log="$case_dir/tmux.log"
-  : > "$log"
-  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort xhigh)
-  status=$?
-  expect_code 0 "$status" "kimi spawn with effort=xhigh should succeed: $out"
-  assert_grep "KIMI_MODEL_THINKING_EFFORT='high' kimi --yolo" "$log" "kimi did not cap xhigh at kimi's high tier"
+  id=kimi-effort-xhigh-z1
+  rec=$(make_spawn_case effort-xhigh "$id")
+  read_spawn_record "$rec"
+  write_kimi_model_config "$HOME_DIR/.kimi-code/config.toml" '"low", "high", "max"'
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --model kimi-code/k3 --effort xhigh)
+  rc=$?
+  expect_code 0 "$rc" "kimi spawn with effort=xhigh should succeed: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  assert_contains "$launch" "KIMI_MODEL_THINKING_EFFORT='high'" "kimi did not cap xhigh at kimi's high tier"
   pass "kimi maps medium and xhigh to its own high tier"
 }
 
 test_kimi_effort_max_only_when_requested() {
-  local rec case_dir home proj wt fakebin kimi_home id out status log
-  rec=$(make_spawn_case effort-max)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  write_kimi_model_config "$kimi_home/config.toml" '"low", "high", "max"'
-  log="$case_dir/tmux.log"
-  : > "$log"
-  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort max)
-  status=$?
-  expect_code 0 "$status" "kimi spawn with effort=max should succeed: $out"
-  assert_grep "KIMI_MODEL_THINKING_EFFORT='max' kimi --yolo" "$log" "kimi did not pass through an explicitly requested max"
+  local id rec out rc launch
+  id=kimi-effort-max-z1
+  rec=$(make_spawn_case effort-max "$id")
+  read_spawn_record "$rec"
+  write_kimi_model_config "$HOME_DIR/.kimi-code/config.toml" '"low", "high", "max"'
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --model kimi-code/k3 --effort max)
+  rc=$?
+  expect_code 0 "$rc" "kimi spawn with effort=max should succeed: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  assert_contains "$launch" "KIMI_MODEL_THINKING_EFFORT='max'" "kimi did not pass through an explicitly requested max"
   pass "kimi passes max through only when explicitly requested"
 }
 
 test_kimi_effort_falls_back_when_model_lacks_declared_support() {
-  local rec case_dir home proj wt fakebin kimi_home id out status log
-  rec=$(make_spawn_case effort-unsupported)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  write_kimi_model_config "$kimi_home/config.toml" '"low"'
-  log="$case_dir/tmux.log"
-  : > "$log"
-  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort high)
-  status=$?
-  expect_code 0 "$status" "kimi spawn should still succeed when the mapped effort isn't declared: $out"
-  assert_no_grep 'KIMI_MODEL_THINKING_EFFORT' "$log" "kimi launch emitted an effort override the resolved model does not declare supporting"
-  assert_grep 'effort=high' "$home/state/$id.meta" "kimi meta did not record the requested effort even without a launch override"
+  local id rec out rc launch
+  id=kimi-effort-unsupported-z1
+  rec=$(make_spawn_case effort-unsupported "$id")
+  read_spawn_record "$rec"
+  write_kimi_model_config "$HOME_DIR/.kimi-code/config.toml" '"low"'
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --model kimi-code/k3 --effort high)
+  rc=$?
+  expect_code 0 "$rc" "kimi spawn should still succeed when the mapped effort isn't declared: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  assert_not_contains "$launch" 'KIMI_MODEL_THINKING_EFFORT' \
+    "kimi launch emitted an effort override the resolved model does not declare supporting"
+  assert_grep 'effort=high' "$HOME_DIR/state/$id.meta" "kimi meta did not record the requested effort even without a launch override"
   pass "kimi falls back to record-only when the resolved model does not declare support for the mapped effort"
 }
 
 test_kimi_effort_falls_back_when_inline_comment_names_unsupported_effort() {
-  local rec case_dir home proj wt fakebin kimi_home id out status log
-  rec=$(make_spawn_case effort-commented-unsupported)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  write_kimi_model_config "$kimi_home/config.toml" '"low"' ' # "high" unsupported'
-  log="$case_dir/tmux.log"
-  : > "$log"
-  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort high)
-  status=$?
-  expect_code 0 "$status" "kimi spawn should still succeed when only a comment names the mapped effort: $out"
-  assert_no_grep 'KIMI_MODEL_THINKING_EFFORT' "$log" "kimi launch emitted an effort override named only in an inline TOML comment"
-  assert_grep 'effort=high' "$home/state/$id.meta" "kimi meta did not record the requested effort after the inline-comment fallback"
+  local id rec out rc launch
+  id=kimi-effort-commented-z1
+  rec=$(make_spawn_case effort-commented-unsupported "$id")
+  read_spawn_record "$rec"
+  write_kimi_model_config "$HOME_DIR/.kimi-code/config.toml" '"low"' ' # "high" unsupported'
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --model kimi-code/k3 --effort high)
+  rc=$?
+  expect_code 0 "$rc" "kimi spawn should still succeed when only a comment names the mapped effort: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  assert_not_contains "$launch" 'KIMI_MODEL_THINKING_EFFORT' \
+    "kimi launch emitted an effort override named only in an inline TOML comment"
+  assert_grep 'effort=high' "$HOME_DIR/state/$id.meta" "kimi meta did not record the requested effort after the inline-comment fallback"
   pass "kimi ignores inline comments when checking declared effort support"
 }
 
 test_kimi_effort_falls_back_without_a_models_block() {
-  local rec case_dir home proj wt fakebin kimi_home id out status log
-  rec=$(make_spawn_case effort-no-model-block)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
-EOF
-  log="$case_dir/tmux.log"
-  : > "$log"
-  out=$(FM_FAKE_TMUX_LOG="$log" run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id" --effort high)
-  status=$?
-  expect_code 0 "$status" "kimi spawn should still succeed with no [models.*] block: $out"
-  assert_no_grep 'KIMI_MODEL_THINKING_EFFORT' "$log" "kimi launch emitted an effort override with no model catalog to prove support"
-  assert_grep 'effort=high' "$home/state/$id.meta" "kimi meta did not record the requested effort"
+  local id rec out rc launch
+  id=kimi-effort-no-block-z1
+  rec=$(make_spawn_case effort-no-model-block "$id")
+  read_spawn_record "$rec"
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --model kimi-code/k3 --effort high)
+  rc=$?
+  expect_code 0 "$rc" "kimi spawn should still succeed with no [models.*] block: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  assert_not_contains "$launch" 'KIMI_MODEL_THINKING_EFFORT' \
+    "kimi launch emitted an effort override with no model catalog to prove support"
+  assert_grep 'effort=high' "$HOME_DIR/state/$id.meta" "kimi meta did not record the requested effort"
   pass "kimi falls back to record-only when config.toml has no matching [models.*] block"
 }
 
-test_kimi_hook_survives_shellcheck_shape() {
-  local rec case_dir home proj wt fakebin kimi_home id out status
-  rec=$(make_spawn_case hookshape)
-  IFS='|' read -r case_dir home proj wt fakebin kimi_home id <<EOF
-$rec
+test_kimi_hook_install_is_surgical_idempotent_and_removable() {
+  local home config original once stripped count
+  home="$TMP_ROOT/config-surgery"
+  config="$home/.kimi-code/config.toml"
+  original="$home/original.toml"
+  once="$home/once.toml"
+  stripped="$home/stripped.toml"
+  mkdir -p "$home/.kimi-code"
+  cat > "$config" <<'EOF'
+# Captain's leading comment stays exactly here.
+
+[ui]
+theme = "night" # inline comment
+show_usage = true
+
+# Foreign hook with intentionally unusual key ordering.
+[[hooks]]
+timeout=17
+command = "printf foreign"
+matcher=""
+event = "Stop"
+
+[providers.example]
+model = "some/model"
+# Final comment and blank line follow.
+
 EOF
-  out=$(run_kimi_spawn "$home" "$proj" "$wt" "$fakebin" "$kimi_home" "$id")
-  status=$?
-  expect_code 0 "$status" "kimi spawn should succeed: $out"
-  bash -n "$kimi_home/hooks/fm-turn-end.sh" || fail "generated kimi hook script does not parse"
-  pass "generated kimi hook script parses cleanly"
+  cp "$config" "$original"
+
+  HOME="$home" "$KIMI_HOOK" install || fail "Kimi hook install refused a realistic config"
+  cp "$config" "$once"
+  HOME="$home" "$KIMI_HOOK" install || fail "second Kimi hook install failed"
+  cmp -s "$once" "$config" || fail "second Kimi hook install changed config bytes"
+  count=$(grep -c '^# BEGIN FIRSTMATE KIMI TURN-END HOOK' "$config")
+  [ "$count" -eq 1 ] || fail "idempotent install left $count Firstmate regions"
+
+  HOME="$home" "$KIMI_HOOK" remove || fail "Kimi hook removal failed"
+  cp "$config" "$stripped"
+  cmp -s "$original" "$stripped" \
+    || fail "config with the Firstmate region excised was not byte-identical to the original"
+  assert_absent "$home/.kimi-code/fm-turn-end.sh" "removal left the Firstmate hook script"
+  assert_absent "$home/.kimi-code/fm-turn-end.d" "removal left the Firstmate registry"
+  pass "Kimi hook install is idempotent and removal restores every foreign config byte"
 }
 
-test_kimi_preflight_refuses_before_task_resources
-test_kimi_creates_missing_state_before_metadata
-test_kimi_hook_requires_registered_token
-test_kimi_config_append_is_idempotent_and_brief_is_pasted
-test_kimi_doctor_failure_restores_config_and_aborts
-test_kimi_teardown_removes_pointer_and_token
-test_kimi_unverified_brief_submission_aborts
-test_kimi_secondmate_spawn_is_refused
-test_kimi_non_tmux_backend_is_refused
-test_raw_kimi_scope_gates_are_exempt
-test_kimi_config_lock_waits_and_reclaims_stale_locks
+test_kimi_hook_remove_preserves_owned_newline_boundary() {
+  local appended config expected home original
+  home="$TMP_ROOT/config-owned-newline"
+  config="$home/.kimi-code/config.toml"
+  original="$home/original.toml"
+  expected="$home/expected.toml"
+  appended="$home/appended.toml"
+  mkdir -p "$home/.kimi-code"
+  printf 'default_model = "test"' > "$config"
+  cp "$config" "$original"
+
+  HOME="$home" "$KIMI_HOOK" install || fail "Kimi hook install refused config without a final newline"
+  HOME="$home" "$KIMI_HOOK" remove || fail "Kimi hook removal failed without appended config"
+  cmp -s "$original" "$config" \
+    || fail "pristine removal did not restore the absent final newline byte-identically"
+
+  HOME="$home" "$KIMI_HOOK" install || fail "second Kimi hook install refused config without a final newline"
+  printf '[captain]\nenabled = true\n' > "$appended"
+  cat "$appended" >> "$config"
+  HOME="$home" "$KIMI_HOOK" remove || fail "Kimi hook removal joined config appended after its region"
+  {
+    cat "$original"
+    printf '\n'
+    cat "$appended"
+  } > "$expected"
+  cmp -s "$expected" "$config" \
+    || fail "removal did not preserve appended captain config on its own line"
+  "$PYTHON_BIN" - "$config" <<'PY' || fail "config with appended captain TOML did not parse after removal"
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as stream:
+    tomllib.load(stream)
+PY
+  pass "Kimi hook removal preserves owned newline boundaries and pristine bytes"
+}
+
+test_kimi_hook_fails_closed_on_missing_malformed_or_partial_config() {
+  local missing malformed partial out rc
+  missing="$TMP_ROOT/config-missing"
+  malformed="$TMP_ROOT/config-malformed"
+  partial="$TMP_ROOT/config-partial"
+  mkdir -p "$missing/.kimi-code" "$malformed/.kimi-code" "$partial/.kimi-code"
+
+  rc=0
+  out=$(HOME="$missing" "$KIMI_HOOK" install 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "missing Kimi config was accepted"
+  assert_contains "$out" "Kimi config is missing" "missing config refusal lacked its concrete reason"
+  assert_absent "$missing/.kimi-code/fm-turn-end.sh" "missing config refusal wrote the hook script"
+
+  printf '[broken\n' > "$malformed/.kimi-code/config.toml"
+  cp "$malformed/.kimi-code/config.toml" "$malformed/before"
+  rc=0
+  out=$(HOME="$malformed" "$KIMI_HOOK" install 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "malformed Kimi config was accepted"
+  assert_contains "$out" "malformed TOML" "malformed config refusal lacked its concrete reason"
+  cmp -s "$malformed/before" "$malformed/.kimi-code/config.toml" \
+    || fail "malformed config refusal changed config bytes"
+  assert_absent "$malformed/.kimi-code/fm-turn-end.sh" "malformed config refusal wrote the hook script"
+
+  printf '# BEGIN FIRSTMATE KIMI TURN-END HOOK\n' > "$partial/.kimi-code/config.toml"
+  cp "$partial/.kimi-code/config.toml" "$partial/before"
+  rc=0
+  out=$(HOME="$partial" "$KIMI_HOOK" install 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "partial Firstmate marker was accepted"
+  assert_contains "$out" "partial, duplicated, or altered" "partial marker refusal lacked its concrete reason"
+  cmp -s "$partial/before" "$partial/.kimi-code/config.toml" \
+    || fail "partial marker refusal changed config bytes"
+  pass "Kimi hook install refuses missing, malformed, and surprising config without writing"
+}
+
+test_kimi_hook_install_refuses_without_jq() {
+  local home config before fakebin out rc
+  home="$TMP_ROOT/config-no-jq"
+  config="$home/.kimi-code/config.toml"
+  before="$home/config-before.toml"
+  fakebin=$(fm_fakebin "$home/no-jq")
+  mkdir -p "$home/.kimi-code"
+  printf '# Captain config\nmodel = "test"\n' > "$config"
+  cp "$config" "$before"
+  ln -s "$(command -v bash)" "$fakebin/bash"
+  ln -s "$(command -v python3)" "$fakebin/python3"
+
+  rc=0
+  out=$(HOME="$home" PATH="$fakebin" "$KIMI_HOOK" install 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "Kimi hook install succeeded without jq"
+  assert_contains "$out" "jq is required" "missing-jq refusal did not name jq"
+  cmp -s "$before" "$config" || fail "missing-jq refusal changed config bytes"
+  assert_absent "$home/.kimi-code/fm-turn-end.sh" "missing-jq refusal wrote the hook script"
+  assert_absent "$home/.kimi-code/fm-turn-end.d" "missing-jq refusal wrote the registry"
+  pass "Kimi hook install refuses without jq before any config write"
+}
+
+test_kimi_hook_is_silent_and_requires_registered_workspace_token() {
+  local id rec out rc hook target token no_token snapshot_before snapshot_after fakebin
+  id=kimi-hook-auth-z6
+  rec=$(make_spawn_case hook-auth "$id")
+  read_spawn_record "$rec"
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
+  rc=$?
+  expect_code 0 "$rc" "Kimi spawn should succeed before hook authentication checks"
+  hook="$HOME_DIR/.kimi-code/fm-turn-end.sh"
+  target="$HOME_DIR/state/$id.turn-ended"
+  token=$(sed -n 's/^token=//p' "$WT_DIR/.fm-kimi-turnend")
+  assert_present "$HOME_DIR/.kimi-code/fm-turn-end.d/$token" "Kimi registry token is missing"
+
+  no_token="$CASE_DIR/no-token-workspace"
+  mkdir -p "$no_token"
+  snapshot_before=$(find "$no_token" -mindepth 1 -print)
+  out=$(printf '{"hook_event_name":"Stop","session_id":"ordinary","cwd":"%s","stop_hook_active":false}\n' "$no_token" \
+    | HOME="$HOME_DIR" bash "$hook" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "Kimi hook must never block a tokenless session"
+  [ -z "$out" ] || fail "Kimi hook printed into a tokenless session: $out"
+  snapshot_after=$(find "$no_token" -mindepth 1 -print)
+  [ "$snapshot_before" = "$snapshot_after" ] || fail "Kimi hook wrote inside a tokenless workspace"
+  assert_absent "$target" "tokenless Kimi hook invocation touched a task marker"
+
+  printf 'token=%s\n' "$token" > "$WT_DIR/.fm-kimi-turnend"
+  out=$(printf '{"hook_event_name":"Stop","session_id":"crew","cwd":"%s","stop_hook_active":false}\n' "$WT_DIR" \
+    | HOME="$HOME_DIR" bash "$hook" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "registered Kimi hook invocation did not exit zero"
+  [ -z "$out" ] || fail "registered Kimi hook invocation printed output: $out"
+  assert_present "$target" "registered Kimi hook invocation did not touch the turn-end marker"
+
+  rm "$target"
+  fakebin=$(fm_fakebin "$CASE_DIR/no-jq")
+  ln -s "$(command -v bash)" "$fakebin/bash"
+  out=$(printf '{"hook_event_name":"Stop","session_id":"crew","cwd":"%s","stop_hook_active":false}\n' "$WT_DIR" \
+    | HOME="$HOME_DIR" PATH="$fakebin" "$hook" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "Kimi hook without jq must still exit zero"
+  [ -z "$out" ] || fail "Kimi hook without jq printed output: $out"
+  assert_absent "$target" "Kimi hook without jq touched the turn-end marker"
+  pass "Kimi hook stays silent and inert without a Firstmate registry token"
+}
+
+test_kimi_spawn_refuses_unsafe_global_config_before_pane_creation() {
+  local id rec out rc
+  id=kimi-config-refuse-z7
+  rec=$(make_spawn_case config-refuse "$id")
+  read_spawn_record "$rec"
+  printf '[malformed\n' > "$HOME_DIR/.kimi-code/config.toml"
+  rc=0
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "Kimi spawn accepted malformed global config"
+  assert_contains "$out" "malformed TOML" "Kimi spawn omitted the concrete config refusal"
+  if grep -Eq '(^| )new-(session|window)( |$)' "$CASE_DIR/tmux-calls.log"; then
+    fail "unsafe Kimi config refusal created a tmux container or pane"
+  fi
+  pass "fm-spawn: unsafe Kimi global config refuses before pane creation"
+}
+
+test_kimi_teardown_removes_pointer_and_registry_token() {
+  local id rec out rc token
+  id=kimi-teardown-z8
+  rec=$(make_spawn_case teardown "$id")
+  read_spawn_record "$rec"
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
+  rc=$?
+  expect_code 0 "$rc" "Kimi spawn should succeed before teardown"
+  token=$(sed -n 's/^token=//p' "$WT_DIR/.fm-kimi-turnend")
+  sed -i.bak '/^kimi_home=/d' "$HOME_DIR/state/$id.meta"
+  rm -f "$HOME_DIR/state/$id.meta.bak"
+
+  HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
+    FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+    FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
+    FM_SPAWN_NO_GUARD=1 PATH="$FAKEBIN_DIR:$BASE_PATH" \
+    "$TEARDOWN" "$id" --force >/dev/null 2>&1 || fail "Kimi teardown failed"
+  assert_absent "$WT_DIR/.fm-kimi-turnend" "Kimi token pointer survived teardown"
+  assert_absent "$HOME_DIR/.kimi-code/fm-turn-end.d/$token" "Kimi registry token survived teardown"
+  assert_absent "$HOME_DIR/state/$id.kimi-turnend-token" "Kimi token state survived teardown"
+  pass "fm-teardown: Kimi task pointer and registry token are removed"
+}
+
+test_kimi_custom_home_is_used_end_to_end() {
+  local id rec out rc launch custom_home teardown_home hook target token
+  id=kimi-custom-home-z9
+  rec=$(make_spawn_case custom-home "$id")
+  read_spawn_record "$rec"
+  custom_home="$CASE_DIR/custom-kimi-home"
+  mkdir -p "$custom_home"
+  write_kimi_model_config "$custom_home/config.toml" '"low", "high", "max"'
+
+  out=$(KIMI_CODE_HOME="$custom_home" run_spawn \
+    "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --model kimi-code/k3 --effort high)
+  rc=$?
+  expect_code 0 "$rc" "Kimi custom-home spawn should succeed: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  assert_contains "$launch" "KIMI_CODE_HOME='$custom_home'" \
+    "Kimi launch did not preserve the resolved custom home"
+  assert_contains "$launch" "KIMI_MODEL_THINKING_EFFORT='high'" \
+    "Kimi custom-home model config did not drive effort selection"
+  assert_grep 'BEGIN FIRSTMATE KIMI TURN-END HOOK' "$custom_home/config.toml" \
+    "Kimi custom-home config did not receive the guarded hook region"
+  assert_grep "kimi_home=$custom_home" "$HOME_DIR/state/$id.meta" \
+    "Kimi custom-home spawn did not persist its resolved home"
+  assert_not_contains "$(cat "$HOME_DIR/.kimi-code/config.toml")" "FIRSTMATE KIMI TURN-END HOOK" \
+    "Kimi custom-home spawn changed the default-home config"
+
+  hook="$custom_home/fm-turn-end.sh"
+  target="$HOME_DIR/state/$id.turn-ended"
+  token=$(sed -n 's/^token=//p' "$WT_DIR/.fm-kimi-turnend")
+  assert_present "$custom_home/fm-turn-end.d/$token" \
+    "Kimi custom-home registry token is missing"
+  out=$(printf '{"hook_event_name":"Stop","session_id":"crew","cwd":"%s","stop_hook_active":false}\n' "$WT_DIR" \
+    | HOME="$HOME_DIR" KIMI_CODE_HOME="$custom_home" bash "$hook" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "Kimi custom-home hook invocation did not exit zero"
+  [ -z "$out" ] || fail "Kimi custom-home hook printed output: $out"
+  assert_present "$target" "Kimi custom-home hook did not touch the task marker"
+
+  teardown_home="$CASE_DIR/teardown-kimi-home"
+  mkdir -p "$teardown_home/fm-turn-end.d"
+  printf '%s\n' "$target" > "$teardown_home/fm-turn-end.d/$token"
+  HOME="$HOME_DIR" KIMI_CODE_HOME="$teardown_home" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
+    FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+    FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
+    FM_SPAWN_NO_GUARD=1 PATH="$FAKEBIN_DIR:$BASE_PATH" \
+    "$TEARDOWN" "$id" --force >/dev/null 2>&1 || fail "Kimi custom-home teardown failed"
+  assert_absent "$custom_home/fm-turn-end.d/$token" \
+    "Kimi custom-home registry token survived teardown"
+  assert_present "$teardown_home/fm-turn-end.d/$token" \
+    "Kimi teardown used its ambient environment instead of the recorded home"
+  assert_absent "$WT_DIR/.fm-kimi-turnend" \
+    "Kimi custom-home pointer survived teardown"
+  pass "Kimi custom home drives config, launch, hook registry, and teardown"
+}
+
+test_kimi_raw_launch_skips_managed_turnend() {
+  local id rec out rc launch
+  id=kimi-raw-z0
+  rec=$(make_spawn_case raw "$id")
+  read_spawn_record "$rec"
+
+  out=$(FM_TEST_KIMI_RAW=1 run_spawn \
+    "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
+  rc=$?
+  expect_code 0 "$rc" "raw Kimi adapter-verification launch should succeed: $out"
+  launch=$(cat "$CASE_DIR/launch.log")
+  [ "$launch" = "kimi --auto" ] || fail "raw Kimi launch command changed: $launch"
+  assert_absent "$HOME_DIR/.kimi-code/fm-turn-end.sh" \
+    "raw Kimi launch installed the managed hook"
+  assert_absent "$HOME_DIR/.kimi-code/fm-turn-end.d" \
+    "raw Kimi launch created the managed registry"
+  assert_not_contains "$(cat "$HOME_DIR/.kimi-code/config.toml")" "FIRSTMATE KIMI TURN-END HOOK" \
+    "raw Kimi launch changed the global hook config"
+  assert_absent "$WT_DIR/.fm-kimi-turnend" \
+    "raw Kimi launch created a managed turn-end pointer"
+  assert_absent "$HOME_DIR/state/$id.kimi-turnend-token" \
+    "raw Kimi launch recorded a managed registry token"
+  assert_grep "kimi_home=$HOME_DIR/.kimi-code" "$HOME_DIR/state/$id.meta" \
+    "raw Kimi metadata did not retain its resolved home"
+  pass "raw Kimi launches skip managed turn-end integration"
+}
+
+test_kimi_falls_back_to_expanded_home_binary() {
+  local id rec out rc launch fallback
+  id=kimi-fallback-z4
+  rec=$(make_spawn_case fallback "$id")
+  read_spawn_record "$rec"
+  rm "$FAKEBIN_DIR/kimi"
+  fallback="$HOME_DIR/.kimi-code/bin/kimi"
+  mkdir -p "$(dirname "$fallback")"
+  fm_fake_exit0 "$(dirname "$fallback")" kimi
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
+  rc=$?
+  expect_code 0 "$rc" "Kimi HOME fallback spawn should succeed"
+  launch=$(cat "$CASE_DIR/launch.log")
+  [ "$launch" = "KIMI_CODE_HOME='$HOME_DIR/.kimi-code' '$fallback' --auto" ] \
+    || fail "Kimi fallback did not expand HOME into an absolute executable: $launch"
+  pass "fm-spawn: Kimi fallback expands the active HOME"
+}
+
+test_kimi_missing_binary_refuses_before_pane_creation() {
+  local id rec out rc fallback
+  id=kimi-missing-z5
+  rec=$(make_spawn_case missing "$id")
+  read_spawn_record "$rec"
+  rm "$FAKEBIN_DIR/kimi"
+  fallback="$HOME_DIR/.kimi-code/bin/kimi"
+  rc=0
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "missing Kimi executable should refuse the spawn"
+  assert_contains "$out" "searched PATH for 'kimi'" "missing Kimi diagnostic omitted PATH"
+  assert_contains "$out" "fallback '$fallback'" "missing Kimi diagnostic omitted expanded fallback"
+  if grep -Eq '(^| )new-(session|window)( |$)' "$CASE_DIR/tmux-calls.log"; then
+    fail "missing Kimi executable created a tmux container or pane"
+  fi
+  pass "fm-spawn: missing Kimi executable refuses before pane creation"
+}
+
+test_kimi_secondmate_spawn_is_refused() {
+  local id rec out rc
+  id=kimi-secondmate-z6
+  rec=$(make_spawn_case secondmate "$id")
+  read_spawn_record "$rec"
+  rc=0
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --secondmate) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a kimi --secondmate spawn must be refused"
+  assert_contains "$out" "crewmate/scout duty only" "kimi secondmate refusal message missing"
+  pass "fm-spawn: kimi --secondmate spawn is refused loudly"
+}
+
+test_kimi_non_tmux_backend_is_refused() {
+  local id rec out rc
+  id=kimi-backend-z7
+  rec=$(make_spawn_case backend "$id")
+  read_spawn_record "$rec"
+  rc=0
+  out=$(run_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" \
+    --backend zellij) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a kimi spawn on a non-tmux backend must be refused"
+  assert_contains "$out" "tmux backend only" "kimi non-tmux refusal message missing"
+  pass "fm-spawn: kimi spawn on a non-tmux backend is refused loudly"
+}
+
+test_kimi_unconfirmed_delivery_fails_loudly() {
+  local id rec out rc
+  id=kimi-drop-z2
+  rec=$(make_spawn_case drop "$id")
+  read_spawn_record "$rec"
+  rc=0
+  out=$(FM_FAKE_KIMI_DELIVERY=no run_spawn \
+    "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "an unconfirmed kimi delivery should fail"
+  assert_contains "$out" "kimi brief pointer delivery was not confirmed" \
+    "unconfirmed kimi delivery lacked a loud diagnostic"
+  assert_grep 'failed: kimi brief pointer delivery was not confirmed' "$HOME_DIR/state/$id.status" \
+    "unconfirmed kimi delivery did not leave a supervisor-visible failure"
+  pass "fm-spawn: kimi treats a silent pointer drop as a failed spawn"
+}
+
+test_kimi_readiness_gate_precedes_pointer() {
+  local id rec out rc
+  id=kimi-not-ready-z3
+  rec=$(make_spawn_case not-ready "$id")
+  read_spawn_record "$rec"
+  rc=0
+  out=$(FM_FAKE_KIMI_READY=no run_spawn \
+    "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "kimi spawn without a ready signal should fail"
+  assert_contains "$out" "kimi did not show a verified ready signal" \
+    "kimi readiness failure lacked a loud diagnostic"
+  [ ! -s "$CASE_DIR/pointer.log" ] || fail "kimi pointer was sent before readiness"
+  pass "fm-spawn: kimi never sends the brief pointer before an observable ready signal"
+}
+
+test_kimi_detection_uses_ancestry_after_markers() {
+  local dir fakebin cfg out
+  dir="$TMP_ROOT/detection"
+  fakebin=$(fm_fakebin "$dir")
+  cfg="$dir/config"
+  mkdir -p "$cfg"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field=
+pid=
+prev=
+for arg in "$@"; do
+  [ "$prev" = -o ] && field=$arg
+  [ "$prev" = -p ] && pid=$arg
+  prev=$arg
+done
+case "$field:$pid" in
+  comm=:4242) printf '/opt/kimi/bin/kimi\n' ;;
+  comm=:*) printf '/bin/bash\n' ;;
+  ppid=:4242) printf '1\n' ;;
+  ppid=:*) printf '4242\n' ;;
+  args=:*) printf 'bash\n' ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+
+  out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT \
+    PATH="$fakebin:$BASE_PATH" FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh")
+  [ "$out" = kimi ] || fail "kimi ancestry detection returned '$out'"
+  out=$(CLAUDECODE=1 PATH="$fakebin:$BASE_PATH" FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh")
+  [ "$out" = claude ] || fail "verified env-marker precedence changed, got '$out'"
+  pass "fm-harness: markerless kimi is detected by ancestry after env-marker precedence"
+}
+
+test_kimi_session_lock_identity() {
+  local home fakebin out rc
+  home="$TMP_ROOT/session-lock-home"
+  fakebin=$(fm_fakebin "$TMP_ROOT/session-lock-fake")
+  mkdir -p "$home/state"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"comm="*) printf '%s\n' '/opt/kimi/bin/kimi'; exit 0 ;;
+  *"args="*) printf '%s\n' 'kimi'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+
+  # Kimi is verified for crewmate/scout duty only and has no primary-session
+  # adapter, so it must never be able to acquire the firstmate session lock.
+  out=$(FM_HOME="$home" PATH="$fakebin:$BASE_PATH" "$ROOT/bin/fm-lock.sh" 2>&1)
+  rc=$?
+  expect_code 1 "$rc" "fm-lock must refuse to acquire from Kimi-only ancestry: $out"
+  [ -f "$home/state/.lock" ] && fail "fm-lock wrote a lock file from unverified Kimi ancestry"
+  pass "fm-lock refuses to acquire the session lock from Kimi-only ancestry"
+}
+
+test_kimi_busy_signature_is_scoped_to_spinner_lines() {
+  local capture phase kimi_regex_lines
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-tmux-lib.sh"
+  unset FM_BUSY_REGEX
+  capture="$TMP_ROOT/busy-pane"
+  tmux() {
+    case "${1:-}" in
+      capture-pane) cat "$capture" ;;
+      *) return 0 ;;
+    esac
+  }
+  # These fixtures reproduce the observed spinner shape rather than byte-exact
+  # transcriptions. Leading whitespace is deliberately varied; separator whitespace
+  # follows the captured contract.
+  printf ' 🌑 · Tip: ask Kimi to schedule tasks, e.g. "remind me at 5pm"\n│ > │\n' > "$capture"
+  fm_pane_is_busy fake kimi || fail "the first real Kimi spinner shape was not recognized as busy"
+  printf '   🌗 · Tip: /plugins: manage plugins ...\n│ > │\n' > "$capture"
+  fm_pane_is_busy fake kimi || fail "the tool-execution Kimi spinner shape was not recognized as busy"
+  printf 'ordinary response ending with 🌕\n│ > │\n' > "$capture"
+  if fm_pane_is_busy fake kimi; then
+    fail "a moon outside Kimi's spinner-line shape was misread as busy"
+  fi
+  printf '🌕 Full moon details\n│ > │\n' > "$capture"
+  if fm_pane_is_busy fake kimi; then
+    fail "moon-led Kimi output without the middot separator was misread as busy"
+  fi
+  printf '  🌗 · Tip: /plugins: manage plugins ...\n│ > │\n' > "$capture"
+  if fm_pane_is_busy fake codex; then
+    fail "Kimi's real spinner signature leaked into another harness"
+  fi
+  printf 'tip: ctrl+c: cancel\n│ > │\n' > "$capture"
+  if fm_pane_is_busy fake kimi; then
+    fail "kimi's independently rotating idle tip was misread as busy"
+  fi
+  printf 'Ctrl+c:cancel\n│ > │\n' > "$capture"
+  if fm_pane_is_busy fake kimi; then
+    fail "Grok's exact busy token leaked into Kimi's harness-scoped matcher"
+  fi
+  printf 'auto  K2.7 Coding thinking  /some/path\n│ > │\n' > "$capture"
+  if fm_pane_is_busy fake kimi; then
+    fail "Kimi's idle thinking-effort status label was misread as busy"
+  fi
+  kimi_regex_lines=$(grep 'KIMI_BUSY_REGEX' "$ROOT/bin/fm-tmux-lib.sh" "$ROOT/bin/fm-watch.sh")
+  if printf '%s\n' "$kimi_regex_lines" | grep -qi thinking; then
+    fail "Kimi busy regex still depends on a Thinking or thinking token"
+  fi
+  for phase in 🌑 🌒 🌓 🌔 🌕 🌖 🌗 🌘; do
+    grep -Fq "$phase" "$ROOT/bin/fm-tmux-lib.sh" \
+      || fail "shared Kimi matcher is missing moon phase $phase"
+  done
+  pass "busy detection: real Kimi moon-plus-middot captures require its harness while idle labels stay idle"
+}
+
+test_watcher_scopes_moon_spinner_to_recorded_kimi_task() (
+  local state="$TMP_ROOT/watch-state" busy_capture='  🌑 · Tip: ask Kimi to schedule tasks, e.g. "remind me at 5pm"'
+  mkdir -p "$state"
+  printf 'window=fake\nharness=kimi\n' > "$state/kimi-watch.meta"
+  unset FM_BUSY_REGEX
+  FM_HOME="$TMP_ROOT/watch-home"
+  FM_STATE_OVERRIDE="$state"
+  export FM_HOME FM_STATE_OVERRIDE
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-watch.sh"
+  # shellcheck disable=SC2329 # Runtime override called by the sourced watcher.
+  fm_backend_busy_state() { printf 'unknown'; }
+  window_is_busy fake "$busy_capture" \
+    || fail "fm-watch did not recognize the real Kimi spinner-line shape"
+  printf 'window=fake\nharness=codex\n' > "$state/kimi-watch.meta"
+  if window_is_busy fake "$busy_capture"; then
+    fail "fm-watch applied Kimi's real spinner signature to a recorded Codex task"
+  fi
+  printf 'window=fake\nharness=kimi\n' > "$state/kimi-watch.meta"
+  if window_is_busy fake 'ordinary response ending with 🌕'; then
+    fail "fm-watch treated an ordinary Kimi moon as a spinner line"
+  fi
+  if window_is_busy fake '🌕 Full moon details'; then
+    fail "fm-watch treated moon-led Kimi output without the middot separator as busy"
+  fi
+  if window_is_busy fake 'auto  K2.7 Coding thinking  /some/path'; then
+    fail "fm-watch treated Kimi's idle thinking-effort status label as busy"
+  fi
+  if window_is_busy fake 'Ctrl+c:cancel'; then
+    fail "fm-watch let Grok's exact busy token classify a recorded Kimi task busy"
+  fi
+  pass "fm-watch: Kimi spinner matching is metadata-scoped and ignores Grok's busy token"
+)
+
+test_kimi_bordered_prompt_needs_no_override() {
+  local out
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-composer-lib.sh"
+  out=$(fm_composer_classify_content 1 '>')
+  [ "$out" = empty ] || fail "kimi's bordered bare > composer should read empty, got '$out'"
+  out=$(fm_composer_classify_content 0 '>')
+  [ "$out" = unknown ] || fail "an unbordered dead-shell > must stay unknown, got '$out'"
+  pass "composer classifier: kimi's existing bordered > shape is already safe without an override"
+}
+
+test_tracked_files_have_no_user_absolute_paths
+test_existing_launch_templates_are_byte_pinned
+test_kimi_hook_install_is_surgical_idempotent_and_removable
+test_kimi_hook_remove_preserves_owned_newline_boundary
+test_kimi_hook_fails_closed_on_missing_malformed_or_partial_config
+test_kimi_hook_install_refuses_without_jq
+test_kimi_launch_then_send_is_verified
 test_kimi_effort_env_override_when_model_declares_support
 test_kimi_effort_maps_medium_and_xhigh_to_high
 test_kimi_effort_max_only_when_requested
 test_kimi_effort_falls_back_when_model_lacks_declared_support
 test_kimi_effort_falls_back_when_inline_comment_names_unsupported_effort
 test_kimi_effort_falls_back_without_a_models_block
-test_kimi_hook_survives_shellcheck_shape
+test_kimi_hook_is_silent_and_requires_registered_workspace_token
+test_kimi_spawn_refuses_unsafe_global_config_before_pane_creation
+test_kimi_teardown_removes_pointer_and_registry_token
+test_kimi_custom_home_is_used_end_to_end
+test_kimi_raw_launch_skips_managed_turnend
+test_kimi_falls_back_to_expanded_home_binary
+test_kimi_missing_binary_refuses_before_pane_creation
+test_kimi_secondmate_spawn_is_refused
+test_kimi_non_tmux_backend_is_refused
+test_kimi_unconfirmed_delivery_fails_loudly
+test_kimi_readiness_gate_precedes_pointer
+test_kimi_detection_uses_ancestry_after_markers
+test_kimi_session_lock_identity
+test_kimi_busy_signature_is_scoped_to_spinner_lines
+test_watcher_scopes_moon_spinner_to_recorded_kimi_task
+test_kimi_bordered_prompt_needs_no_override
