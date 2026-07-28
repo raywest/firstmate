@@ -157,3 +157,23 @@ Observed output:
 ```
 
 The safe command-channel contract is covered without a notification by `tests/fm-daemon.test.sh`: the summary reaches both `$1` and stdin, every channel is process-group bounded, and a failed channel falls through.
+
+## Single-resolver escalation authority (live verification)
+
+The `bin/fm-classify-lib.sh` `crew_escalation_disposition` redesign (single current-state resolver, no per-verb absorption cache) was live-verified on 2026-07-28 with Herdr 0.7.4, against commit `0ab9ef3` on `fm/fm-daemon-validating-noise-n1`, inside an isolated Herdr lab session (`bin/fm-herdr-lab.sh`).
+Every check called the real, unmodified `crew_absorb_class`, `crew_escalation_disposition`, `classify_stale`, `classify_signal`, and `housekeeping` functions against real herdr panes: one genuine interactive `claude` process mid a Bash-tool 400,000,000-iteration SHA-256 loop, and three plain idle shells with no agent, each on its own dedicated pane.
+
+A real busy `claude` pane was read as `working · source: pane · harness busy` and absorbed by both `classify_stale` and `classify_signal`, even against a stale captain-relevant `done:` line recorded before the busy work started.
+
+A task ending in `captain-held [key=...]:` after a `needs-decision:`, seeded with a pre-existing 300s-old wedge marker and an escalation count of 2 (to simulate a wedge already in progress), had that tracking cleared and a pause marker recorded on the very next housekeeping tick.
+It stayed quiet on a second immediate tick, and resurfaced exactly once per `FM_PAUSE_RESURFACE_SECS` window using the "awaiting external" wording, never "possible wedge".
+This is the live disproof of `captain-held-pause-still-wedge-escalates`.
+
+A task ending in a decision-closing `resolved:` line, whose pre-existing verified-recheck appointment (`.subsuper-recheck-<task-id>`) lapsed while that status was current, was handed to the ORDINARY transient-stale grace (a plain stale marker, no escalation) rather than escalating immediately.
+A follow-up tick proved that grace is real bounded quiet, not permanent: once that ordinary marker itself aged past `FM_STALE_ESCALATE_SECS`, the crew still wedge-escalated.
+This is the live disproof of `absorbed-resolution-change-bypasses-grace`.
+
+A task with a stale self-reported `working:` status line and no real pane or run-step evidence behind it (`crew_absorb_class` = `none`, source would have had to be `pane` or `run-step`) escalated promptly as a possible wedge once its stale marker aged past `FM_STALE_ESCALATE_SECS`, confirming the redesign did not buy quiet by going blind.
+
+Task chronology, exact commands, and full captured output live in the private task report (`fm-daemon-validating-noise-n1/live-evidence-round5.md`) and this task's PR evidence.
+Deterministic entry points: `tests/fm-daemon.test.sh`, `tests/fm-crew-state.test.sh`.
