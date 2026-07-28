@@ -386,29 +386,31 @@ _collapse_newlines() {  # <text>
 # that decides whether one of those two POSITIVE sources applies - absence of
 # a signal is never enough to absorb.
 
-# 0 if task <id> is a genuine done-awaiting-merge hold: its metadata records a
-# pr= URL, and the byte-static merge poll fm-watch.sh itself trusts to notify
-# on merge is validated and armed (fm_pr_poll_artifacts_valid, bin/fm-pr-lib.sh)
-# - never inferred from the done: text alone, since an unarmed or tampered
-# poll must still surface as a possible wedge.
-crew_is_pr_merge_waiting() {  # <task-id> <state>
-  local id=$1 state=$2
-  [ -f "$state/$id.meta" ] || return 1
-  grep -q '^pr=' "$state/$id.meta" 2>/dev/null || return 1
-  fm_pr_poll_artifacts_valid "$state" "$id" "$FM_DAEMON_DIR/fm-pr-poll.sh"
+# 0 if task <id>'s current status is its captain-relevant done: line for the
+# exact recorded PR and the byte-static merge poll fm-watch.sh trusts to notify
+# on merge is validated and armed (fm_pr_poll_artifacts_valid, bin/fm-pr-lib.sh).
+crew_is_pr_merge_waiting() {  # <task-id> <state> <current-last-status>
+  local id=$1 state=$2 last=$3
+  [ "$(status_line_verb "$last")" = done ] || return 1
+  status_is_captain_relevant "$last" || return 1
+  fm_pr_poll_artifacts_valid "$state" "$id" "$FM_DAEMON_DIR/fm-pr-poll.sh" || return 1
+  case " $last " in
+    *" $FM_PR_META_URL "*) return 0 ;;
+  esac
+  return 1
 }
 
 # Prints a short reason and returns 0 when task <id> shows EITHER positive
 # source (crew_absorb_class's working verdict, or crew_is_pr_merge_waiting);
 # prints nothing and returns 1 (fail-safe: let the caller escalate) otherwise.
-terminal_status_absorb_reason() {  # <task-id> <state>
-  local id=$1 state=$2
+terminal_status_absorb_reason() {  # <task-id> <state> <current-last-status>
+  local id=$1 state=$2 last=$3
   if [ "$(crew_absorb_class "$id")" = working ]; then
     printf 'active work (run-step/background-task)'
     return 0
   fi
-  if crew_is_pr_merge_waiting "$id" "$state"; then
-    printf 'PR recorded and merge poll armed'
+  if crew_is_pr_merge_waiting "$id" "$state" "$last"; then
+    printf 'current PR-ready status and merge poll armed'
     return 0
   fi
   return 1
@@ -421,7 +423,7 @@ terminal_status_absorb_reason() {  # <task-id> <state>
 # and de-dup, extended with the merge-wait source.
 signal_crew_absorbable() {  # <state> <file> ...
   local state=$1; shift
-  local f base task seen=""
+  local f base task last seen=""
   for f in "$@"; do
     base=${f##*/}
     case "$base" in
@@ -432,10 +434,30 @@ signal_crew_absorbable() {  # <state> <file> ...
     [ -n "$task" ] || continue
     case " $seen " in *" $task "*) continue ;; esac
     seen="$seen $task"
-    terminal_status_absorb_reason "$task" "$state" >/dev/null || return 1
+    last=$(last_status_line "$state/$task.status")
+    terminal_status_absorb_reason "$task" "$state" "$last" >/dev/null || return 1
   done
   [ -n "$seen" ] || return 1
   return 0
+}
+
+signal_has_current_captain_status() {  # <state> <file> ...
+  local state=$1; shift
+  local f base task last seen=""
+  for f in "$@"; do
+    base=${f##*/}
+    case "$base" in
+      *.status) task=${base%.status} ;;
+      *.turn-ended) task=${base%.turn-ended} ;;
+      *) continue ;;
+    esac
+    [ -n "$task" ] || continue
+    case " $seen " in *" $task "*) continue ;; esac
+    seen="$seen $task"
+    last=$(last_status_line "$state/$task.status")
+    status_is_captain_relevant "$last" && return 0
+  done
+  return 1
 }
 
 classify_signal() {  # <reason-after-colon> <state>
@@ -499,8 +521,12 @@ classify_signal() {  # <reason-after-colon> <state>
       else
         printf 'escalate|no-verb signal, crew not provably working: %s' "$distilled"
       fi
-    elif signal_crew_provably_working "${guard_files[@]}"; then
-      printf 'self|routine signal: %s' "$distilled"
+    elif signal_crew_absorbable "$state" "${guard_files[@]}"; then
+      if signal_has_current_captain_status "$state" "${guard_files[@]}"; then
+        printf 'absorb|routine signal: %s' "$distilled"
+      else
+        printf 'self|routine signal: %s' "$distilled"
+      fi
     else
       printf 'escalate|no-verb signal, crew not provably working: %s' "$distilled"
     fi
@@ -561,7 +587,7 @@ classify_stale() {  # <window> <state>
     # background task, or a genuine PR merge-wait hold with its poll validated
     # and armed. See terminal_status_absorb_reason; never inferred from
     # idleness alone.
-    reason=$(terminal_status_absorb_reason "$task" "$state") && {
+    reason=$(terminal_status_absorb_reason "$task" "$state" "$last") && {
       printf 'absorb|terminal status superseded by %s: %s' "$reason" "$last"
       return
     }
@@ -654,21 +680,15 @@ stale_tracking_remove() {  # <window> <state>
   rm -f "$state/.subsuper-wedge-escalations-$key"
 }
 
-# Absorbed-as-provably-working marker: state/.subsuper-absorbed-<key> holds the
-# epoch a stale pane was first absorbed because crew_absorb_class
-# (bin/fm-classify-lib.sh) read it as working - an actively-running no-mistakes
-# run-step, or the harness's own live background-work footer
-# (bin/fm-crew-state.sh's crew_pane_has_background_work) - rather than a
-# genuinely idle pane. Housekeeping (2c) ages it against the SAME
-# PAUSE_RESURFACE_SECS cadence as a declared pause (not the short wedge
-# cadence): a multi-hour validation run or a long background task should not
-# pay a bounded no-mistakes/pane read every FM_STALE_ESCALATE_SECS, but a run
-# or background task that dies silently must still surface within one bounded
-# window - never never. Create-if-absent, mirroring pause_marker_record.
+# Positive-evidence absorption marker: state/.subsuper-absorbed-<key> holds the
+# epoch a pane entered long-cadence tracking because active work or a current
+# PR merge-wait was verified. Recording it clears the mutually exclusive short
+# stale and wedge-count state. Create-if-absent, mirroring pause_marker_record.
 absorbed_marker_record() {  # <window> <state> - create if absent
   local win=$1 state=$2 key marker
   key=$(_stale_key "$(window_to_task "$win" "$state")")
   marker="$state/.subsuper-absorbed-$key"
+  rm -f "$state/.subsuper-stale-$key" "$state/.subsuper-wedge-escalations-$key"
   [ -e "$marker" ] || _now > "$marker"
 }
 
@@ -1361,18 +1381,11 @@ housekeeping() {  # <state>
     esac
   done
 
-  # (2c) provably-working persistence recheck. A stale pane (2) absorbed
-  # because crew_absorb_class read it as working re-enters THIS bounded long
-  # cadence (the same pause_secs computed above) instead of the short wedge
-  # cadence, so a multi-hour validation run or background task is not
-  # rechecked - and does not pay a bounded no-mistakes/pane read - every
-  # FM_STALE_ESCALATE_SECS. Past the window: still working -> reset and keep
-  # waiting (self-handled, no escalation, no wedge count, mirroring how a
-  # resume or pause transition clears the count today); a declared pause in
-  # the meantime -> hand off to pause tracking; anything else (the crew moved
-  # on, the pane went unreadable, or the evidence is now ambiguous) -> never
-  # never: escalate exactly like a fresh wedge sighting and hand back to (2)'s
-  # ordinary short-cadence tracking, starting its wedge count fresh.
+  # (2c) positive-evidence persistence recheck. Active work and current PR
+  # merge-wait evidence use this bounded long cadence instead of the short wedge
+  # cadence. Past the window: the same evidence still holds -> reset and keep
+  # waiting; a declared pause -> hand off to pause tracking; anything else ->
+  # escalate and hand back to ordinary short-cadence tracking.
   for marker in "$state"/.subsuper-absorbed-*; do
     [ -e "$marker" ] || continue
     key="${marker##*.subsuper-absorbed-}"
@@ -1389,7 +1402,8 @@ housekeeping() {  # <state>
     fi
     age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
     [ "$age" -ge "$pause_secs" ] || continue
-    if [ "$(crew_absorb_class "$task")" = working ]; then
+    if terminal_status_absorb_reason "$task" "$state" "$last" >/dev/null; then
+      absorbed_marker_record "$win" "$state"
       _now > "$marker"
       continue
     fi
@@ -1415,15 +1429,17 @@ housekeeping() {  # <state>
     local seen reason win
     while IFS="$(printf '\t')" read -r f task last; do
       [ -n "$f" ] || continue
-      seen="$state/.subsuper-seen-status-$(_stale_key "$task")"
+      key=$(_stale_key "$task")
+      seen="$state/.subsuper-seen-status-$key"
       [ "$(cat "$seen" 2>/dev/null || true)" = "$last" ] && continue
+      [ -e "$state/.subsuper-absorbed-$key" ] && continue
       # Same positive-evidence absorption the per-wake classifiers apply
       # (terminal_status_absorb_reason) - a terminal status the per-wake path
       # missed can still be superseded by active work or an armed PR
       # merge-wait hold (shape 4); hand it to the SAME long-cadence absorbed
       # recheck instead of escalating a false wedge.
-      if reason=$(terminal_status_absorb_reason "$task" "$state"); then
-        win=$(window_for_task "$task" "$state" 2>/dev/null || true)
+      if reason=$(terminal_status_absorb_reason "$task" "$state" "$last"); then
+        win=$(window_for_task "$key" "$state" 2>/dev/null || true)
         [ -n "$win" ] && absorbed_marker_record "$win" "$state"
         continue
       fi
@@ -1561,7 +1577,7 @@ is_wake_reason() {  # <reason>
 # --- dispatch one wake reason to self-handle or escalate --------------------
 # Side effects: logging, marker records, escalation buffer appends.
 handle_wake() {  # <reason> <state>
-  local reason=$1 state=$2 decision action distilled task last win f
+  local reason=$1 state=$2 decision action distilled task last win f base seen_tasks=""
   local kind="" arg=""
   if should_force_self "$reason"; then
     log "wake force-self (FM_INJECT_SKIP): $reason"
@@ -1607,17 +1623,23 @@ handle_wake() {  # <reason> <state>
       # for a no-verb absorbed stale, rather than the short wedge cadence, so a
       # genuinely terminal status still surfaces once that evidence lapses.
       if [ "$kind" = "stale" ]; then
-        stale_marker_remove "$arg" "$state"
         absorbed_marker_record "$arg" "$state"
       elif [ "$kind" = "signal" ]; then
         for f in $arg; do
           [ -e "$f" ] || continue
-          case "$f" in *.status) ;; *) continue ;; esac
-          last=$(last_status_line "$f")
+          base=${f##*/}
+          case "$base" in
+            *.status) task=${base%.status} ;;
+            *.turn-ended) task=${base%.turn-ended} ;;
+            *) continue ;;
+          esac
+          case " $seen_tasks " in *" $task "*) continue ;; esac
+          seen_tasks="$seen_tasks $task"
+          last=$(last_status_line "$state/$task.status")
           [ -n "$last" ] || continue
           status_is_captain_relevant "$last" || continue
-          task=$(basename "$f"); task="${task%.status}"
-          win=$(window_for_task "$task" "$state" 2>/dev/null || true)
+          terminal_status_absorb_reason "$task" "$state" "$last" >/dev/null || continue
+          win=$(window_for_task "$(_stale_key "$task")" "$state" 2>/dev/null || true)
           [ -n "$win" ] || continue
           absorbed_marker_record "$win" "$state"
         done

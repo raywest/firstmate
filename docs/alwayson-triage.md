@@ -85,12 +85,14 @@ SAME `crew_absorb_class` check to a captain-relevant/terminal line before
 `classify_signal`, `classify_stale`, or the heartbeat catch-all scan escalate
 it, plus a THIRD positive-evidence source only relevant to a terminal line:
 
-3. **PR merge-wait**: the task's metadata records a `pr=` URL AND the
-   byte-static merge poll `bin/fm-watch.sh` itself trusts to notify on merge
+3. **PR merge-wait**: the task's current last status is a captain-relevant
+   `done:` line that contains the exact `pr=` URL recorded in its metadata AND
+   the byte-static merge poll `bin/fm-watch.sh` itself trusts to notify on merge
    is validated and armed (`fm_pr_poll_artifacts_valid`, `bin/fm-pr-lib.sh`) -
    `crew_is_pr_merge_waiting`.
-   Never inferred from the `done:` text alone: an unarmed or tampered poll
-   still surfaces as a possible wedge.
+   A newer `failed:`, `needs-decision:`, `blocked:`, or unrelated `done:` line
+   immediately disqualifies this source.
+   An unarmed or tampered poll still surfaces as a possible wedge.
 
 Any of the three sources absorbs a terminal line exactly like a non-terminal
 one - the SAME `state/.subsuper-absorbed-<key>` marker and long recheck

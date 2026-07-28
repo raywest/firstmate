@@ -359,6 +359,32 @@ test_classify_stale_terminal_absorbs_merge_wait() {
   pass "a stale done-awaiting-merge status is absorbed once its PR is recorded and its merge poll is armed"
 }
 
+test_classify_stale_merge_wait_rejects_newer_statuses() {
+  local dir state fakebin out status url
+  dir=$(make_supercase stale-terminal-reject-old-mergewait)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  url=https://github.com/example/repo/pull/43
+  fm_write_meta "$state/mw-w2.meta" "window=sess:fm-mw-w2" "kind=ship"
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
+    "$PR_CHECK" mw-w2 "$url" >/dev/null
+  for status in \
+    "failed: validation exited 1" \
+    "needs-decision: choose recovery" \
+    "blocked: credentials required" \
+    "done: unrelated follow-up complete" \
+    "done: PR https://github.com/example/repo/pull/430 checks green"; do
+    printf '%s\n' "$status" > "$state/mw-w2.status"
+    out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+      FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: earlier PR ready' \
+      classify_stale "sess:fm-mw-w2" "$state")
+    case "$out" in
+      escalate\|*) ;;
+      *) fail "an armed poll absorbed a newer status that does not identify its PR ($status): $out" ;;
+    esac
+  done
+  pass "an armed merge poll absorbs only the current done: line that identifies its recorded PR"
+}
+
 test_classify_stale_terminal_unarmed_pr_still_escalates() {
   local dir state fakebin out
   dir=$(make_supercase stale-terminal-unarmed-pr)
@@ -382,6 +408,33 @@ test_classify_signal_terminal_absorbs_active_validation_run() {
     classify_signal "$state/sv-w1.status" "$state")
   case "$out" in absorb\|*) ;; *) fail "a pre-validation done: signal did not absorb during an active run: $out" ;; esac
   pass "a done: signal is absorbed when the crew has already moved into an active validation run"
+}
+
+test_handle_wake_turn_ended_absorbs_merge_wait() {
+  local dir state fakebin key url
+  dir=$(make_supercase signal-turn-ended-absorb-mergewait)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  url=https://github.com/example/repo/pull/44
+  fm_write_meta "$state/te-w1.meta" "window=sess:fm-te-w1" "kind=ship"
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
+    "$PR_CHECK" te-w1 "$url" >/dev/null
+  printf 'done: PR %s checks green\n' "$url" > "$state/te-w1.status"
+  : > "$state/te-w1.turn-ended"
+  key=$(printf '%s' "te-w1" | tr ':/.' '___')
+  date +%s > "$state/.subsuper-stale-$key"
+  printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
+  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review' \
+    handle_wake "signal: $state/te-w1.turn-ended" "$state"
+  [ -e "$state/.subsuper-absorbed-$key" ] \
+    || fail "turn-ended-only merge-wait signal did not record a long-cadence marker"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "turn-ended-only merge-wait signal retained short-cadence stale tracking"
+  [ ! -e "$state/.subsuper-wedge-escalations-$key" ] \
+    || fail "turn-ended-only merge-wait signal retained the wedge escalation count"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "turn-ended-only merge-wait signal escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  pass "a turn-ended-only wake self-handles a current merge-wait and records its long-cadence marker"
 }
 
 test_classify_signal_resolving_line_exempt_from_provably_working_guard() {
@@ -414,18 +467,44 @@ test_housekeeping_catchall_absorbs_merge_wait_done() {
   local dir state key
   dir=$(make_supercase catchall-absorb-mergewait)
   state="$dir/state"
-  fm_write_meta "$state/cw-w1.meta" "window=sess:fm-cw-w1" "kind=ship"
+  fm_write_meta "$state/cw.w1.meta" "window=sess:fm-cw.w1" "kind=ship"
   FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
-    "$PR_CHECK" cw-w1 https://github.com/example/repo/pull/55 >/dev/null
-  printf 'done: PR https://github.com/example/repo/pull/55 checks green\n' > "$state/cw-w1.status"
-  key=$(printf '%s' "cw-w1" | tr ':/.' '___')
+    "$PR_CHECK" cw.w1 https://github.com/example/repo/pull/55 >/dev/null
+  printf 'done: PR https://github.com/example/repo/pull/55 checks green\n' > "$state/cw.w1.status"
+  key=$(printf '%s' "cw.w1" | tr ':/.' '___')
+  date +%s > "$state/.subsuper-stale-$key"
+  printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
   rm -f "$state/.subsuper-last-scan"
   FM_STATE_OVERRIDE="$state" housekeeping "$state"
   [ ! -s "$state/.subsuper-escalations" ] \
     || fail "catch-all scan escalated an armed merge-wait done: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
   [ -e "$state/.subsuper-absorbed-$key" ] \
     || fail "catch-all scan did not record an absorbed marker for the merge-wait hold"
-  pass "the catch-all scan absorbs a done: whose PR is already recorded and armed, instead of re-escalating it"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "catch-all absorption retained dotted task short-cadence stale tracking"
+  [ ! -e "$state/.subsuper-wedge-escalations-$key" ] \
+    || fail "catch-all absorption retained the dotted task wedge escalation count"
+  pass "the catch-all scan records dotted task absorption and clears its short-cadence tracking"
+}
+
+test_housekeeping_catchall_skips_tracked_absorption() {
+  local dir state fakebin key reads
+  dir=$(make_supercase catchall-skip-tracked-absorption)
+  state="$dir/state"; fakebin="$dir/fakebin"; reads="$dir/crew-state-reads"
+  fm_write_meta "$state/cs-w1.meta" "window=sess:fm-cs-w1" "kind=ship"
+  printf 'done: implementation complete\n' > "$state/cs-w1.status"
+  key=$(printf '%s' "cs-w1" | tr ':/.' '___')
+  date +%s > "$state/.subsuper-absorbed-$key"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE_READS="$reads" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    housekeeping "$state"
+  [ ! -s "$reads" ] \
+    || fail "catch-all scan re-read current crew state for an absorption already owned by its long-cadence marker"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "catch-all scan escalated an unchanged tracked absorption"
+  pass "the catch-all scan leaves tracked absorptions to their long-cadence recheck"
 }
 
 test_housekeeping_catchall_unarmed_pr_still_escalates() {
@@ -895,6 +974,37 @@ test_housekeeping_absorbed_recheck_still_working_resets_window() {
   [ ! -s "$state/.subsuper-escalations" ] || fail "still-working recheck escalated instead of continuing to self-handle"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "still-working recheck created a short wedge marker"
   pass "a long-cadence absorption recheck that is still provably working resets the window without escalating"
+}
+
+test_housekeeping_absorbed_recheck_merge_wait_resets_window() {
+  local dir state fakebin key before after url
+  dir=$(make_supercase absorbed-recheck-mergewait)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  url=https://github.com/example/repo/pull/56
+  fm_write_meta "$state/absorbed-mw.meta" "window=sess:fm-absorbed-mw" "kind=ship"
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
+    "$PR_CHECK" absorbed-mw "$url" >/dev/null
+  printf 'done: PR %s checks green\n' "$url" > "$state/absorbed-mw.status"
+  key=$(printf '%s' "absorbed-mw" | tr ':/.' '___')
+  before=$(( $(date +%s) - 5000 ))
+  echo "$before" > "$state/.subsuper-absorbed-$key"
+  date +%s > "$state/.subsuper-stale-$key"
+  printf '2\n' > "$state/.subsuper-wedge-escalations-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-absorbed-mw" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review' \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ -e "$state/.subsuper-absorbed-$key" ] \
+    || fail "current merge-wait recheck cleared its long-cadence marker"
+  after=$(cat "$state/.subsuper-absorbed-$key" 2>/dev/null || echo 0)
+  [ "$after" -gt "$before" ] || fail "current merge-wait recheck did not reset the long-cadence window"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "current merge-wait recheck escalated: $(cat "$state/.subsuper-escalations" 2>/dev/null)"
+  [ ! -e "$state/.subsuper-stale-$key" ] \
+    || fail "current merge-wait recheck retained short-cadence stale tracking"
+  [ ! -e "$state/.subsuper-wedge-escalations-$key" ] \
+    || fail "current merge-wait recheck retained the wedge escalation count"
+  pass "a current merge-wait remains silent across long-cadence rechecks"
 }
 
 test_housekeeping_absorbed_recheck_no_longer_working_resurfaces() {
@@ -2463,11 +2573,14 @@ test_classify_stale_terminal_absorbs_active_validation_run
 test_classify_stale_terminal_absorbs_background_task
 test_classify_stale_terminal_still_escalates_when_not_working
 test_classify_stale_terminal_absorbs_merge_wait
+test_classify_stale_merge_wait_rejects_newer_statuses
 test_classify_stale_terminal_unarmed_pr_still_escalates
 test_classify_signal_terminal_absorbs_active_validation_run
+test_handle_wake_turn_ended_absorbs_merge_wait
 test_classify_signal_resolving_line_exempt_from_provably_working_guard
 test_classify_stale_present_mode_resolving_line_defers
 test_housekeeping_catchall_absorbs_merge_wait_done
+test_housekeeping_catchall_skips_tracked_absorption
 test_housekeeping_catchall_unarmed_pr_still_escalates
 test_stale_paused_classifies_pause
 test_handle_wake_paused_records_pause_marker
@@ -2487,6 +2600,7 @@ test_housekeeping_stale_absorbed_by_background_task_footer
 test_housekeeping_stale_neither_source_still_escalates
 test_housekeeping_stale_unreadable_source_escalates_fail_safe
 test_housekeeping_absorbed_recheck_still_working_resets_window
+test_housekeeping_absorbed_recheck_merge_wait_resets_window
 test_housekeeping_absorbed_recheck_no_longer_working_resurfaces
 test_housekeeping_absorbed_recheck_terminal_status_clears_marker
 test_housekeeping_absorbed_recheck_unseen_terminal_escalates
