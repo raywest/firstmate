@@ -32,6 +32,11 @@ seed_legacy_absorbed_marker() {  # <state> <task-id> <epoch>
   printf '%s\n%s\n%s\n' "$stamp" "$task" "$last" > "$state/.subsuper-absorbed-$task"
 }
 
+seed_legacy_keyed_absorbed_marker() {  # <state> <task-id> <epoch>
+  local state=$1 task=$2 stamp=$3
+  printf '%s\n' "$stamp" > "$state/.subsuper-absorbed-$(_stale_key "$task")"
+}
+
 seed_recheck_marker() {  # <state> <task-id> <epoch>
   printf '%s\n' "$3" > "$1/.subsuper-recheck-$2"
 }
@@ -118,7 +123,7 @@ test_classify_routine_signal_self() {
   out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: working · source: run-step · validating' \
     classify_signal "$state/foo-x1.status" "$state")
-  case "$out" in self\|*) pass "routine signal self-handles" ;; *) fail "routine signal did not self-handle: $out" ;; esac
+  case "$out" in absorb\|*) pass "routine signal self-handles with a bounded recheck" ;; *) fail "routine signal did not schedule a bounded recheck: $out" ;; esac
 }
 
 # The no-verb-signal "crew not provably working" guard (signal_crew_provably_working,
@@ -135,7 +140,7 @@ test_classify_routine_signal_self_via_background_task_footer() {
   out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_FAKE_CREW_STATE='state: working · source: pane · harness background task still running' \
     classify_signal "$state/foo-x2.status" "$state")
-  case "$out" in self\|*) pass "no-verb signal self-handles via a live background-task footer" ;; *) fail "background-task-footer signal did not self-handle: $out" ;; esac
+  case "$out" in absorb\|*) pass "no-verb signal self-handles via a live background-task footer with a bounded recheck" ;; *) fail "background-task-footer signal did not schedule a bounded recheck: $out" ;; esac
 }
 
 # --- Phase 1 (always-on triage prep) classifier deltas -----------------------
@@ -440,6 +445,40 @@ test_classify_signal_exempt_batch_member_does_not_veto_absorption() {
   pass "exempt batch members cannot veto another task's positive current absorption"
 }
 
+test_handle_wake_signal_routes_tasks_independently() {
+  local dir state fakebin reads attention working attention_key working_key
+  dir=$(make_supercase signal-routes-tasks-independently)
+  state="$dir/state"; fakebin="$dir/fakebin"; reads="$dir/crew-state-reads"
+  attention='failed: validation exited 1'
+  working='done: implementation complete before validation'
+  printf '%s\n' "$attention" > "$state/signal-attention.status"
+  printf '%s\n' "$working" > "$state/signal-working.status"
+  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE_READS="$reads" \
+    FM_FAKE_CREW_STATE_signal_attention='state: stopped · source: none · quiet pane' \
+    FM_FAKE_CREW_STATE_signal_working='state: working · source: run-step · validating (running)' \
+    handle_wake "signal: $state/signal-attention.status $state/signal-working.status" "$state"
+  grep -Fq "$attention" "$state/.subsuper-escalations" 2>/dev/null \
+    || fail "the attention task was not escalated from the mixed signal"
+  grep -Fq "$working" "$state/.subsuper-escalations" 2>/dev/null \
+    && fail "the working task was included in the mixed signal escalation"
+  [ -e "$state/.subsuper-recheck-signal-working" ] \
+    || fail "the working task did not receive its bounded recheck appointment"
+  [ ! -e "$state/.subsuper-recheck-signal-attention" ] \
+    || fail "the attention task incorrectly received a quiet recheck appointment"
+  attention_key=$(_stale_key signal-attention)
+  working_key=$(_stale_key signal-working)
+  [ "$(cat "$state/.subsuper-seen-status-$attention_key" 2>/dev/null || true)" = "$attention" ] \
+    || fail "the attention task was not marked seen"
+  [ ! -e "$state/.subsuper-seen-status-$working_key" ] \
+    || fail "the working task was marked seen despite being suppressed"
+  [ "$(grep -cx 'signal-attention' "$reads" 2>/dev/null || true)" -eq 1 ] \
+    || fail "the attention task did not receive exactly one fresh resolver read"
+  [ "$(grep -cx 'signal-working' "$reads" 2>/dev/null || true)" -eq 1 ] \
+    || fail "the working task did not receive exactly one fresh resolver read"
+  pass "a mixed signal routes and tracks each task by its own fresh disposition"
+}
+
 test_handle_wake_turn_ended_absorbs_merge_wait() {
   local dir state fakebin key url
   dir=$(make_supercase signal-turn-ended-absorb-mergewait)
@@ -560,6 +599,41 @@ test_housekeeping_recheck_task_ids_do_not_collide() {
   grep -Fq "$terminal" "$state/.subsuper-escalations" 2>/dev/null \
     || fail "the dotted task's quiet verdict hid a distinct underscored task terminal status"
   pass "recheck appointment ownership is collision-free for dotted and underscored task ids"
+}
+
+test_migrate_absorbed_marker_resolves_legacy_task_key() {
+  local dir state stamp
+  dir=$(make_supercase migrate-legacy-absorbed-key)
+  state="$dir/state"
+  stamp=$(( $(date +%s) - 500 ))
+  fm_write_meta "$state/cw.w1.meta" "window=sess:fm-cw.w1" "kind=ship"
+  seed_legacy_keyed_absorbed_marker "$state" cw.w1 "$stamp"
+  migrate_absorbed_markers "$state"
+  [ "$(recheck_marker_stamp "$state" cw.w1)" = "$stamp" ] \
+    || fail "the dotted task did not inherit the legacy marker timestamp"
+  [ ! -e "$state/.subsuper-recheck-cw_w1" ] \
+    || fail "the legacy marker was assigned to the transformed key as an exact task id"
+  [ ! -e "$state/.subsuper-absorbed-cw_w1" ] \
+    || fail "the migrated legacy marker was retained"
+  pass "a legacy transformed marker key resolves through exact task metadata"
+}
+
+test_migrate_absorbed_marker_collision_rechecks_all_candidates() {
+  local dir state stamp
+  dir=$(make_supercase migrate-legacy-absorbed-collision)
+  state="$dir/state"
+  stamp=$(( $(date +%s) - 500 ))
+  fm_write_meta "$state/cw.w1.meta" "window=sess:fm-cw.w1" "kind=ship"
+  fm_write_meta "$state/cw_w1.meta" "window=sess:fm-cw_w1" "kind=ship"
+  seed_legacy_keyed_absorbed_marker "$state" cw.w1 "$stamp"
+  migrate_absorbed_markers "$state"
+  [ "$(recheck_marker_stamp "$state" cw.w1)" = 0 ] \
+    || fail "the dotted collision candidate was not scheduled for an immediate fresh recheck"
+  [ "$(recheck_marker_stamp "$state" cw_w1)" = 0 ] \
+    || fail "the underscored collision candidate was not scheduled for an immediate fresh recheck"
+  [ ! -e "$state/.subsuper-absorbed-cw_w1" ] \
+    || fail "the ambiguous legacy marker was retained after both candidates were scheduled"
+  pass "an ambiguous legacy key schedules every candidate for an immediate fresh recheck"
 }
 
 test_housekeeping_catchall_unarmed_pr_still_escalates() {
@@ -2732,12 +2806,15 @@ test_classify_stale_merge_wait_rejects_newer_statuses
 test_classify_stale_terminal_unarmed_pr_still_escalates
 test_classify_signal_terminal_absorbs_active_validation_run
 test_classify_signal_exempt_batch_member_does_not_veto_absorption
+test_handle_wake_signal_routes_tasks_independently
 test_handle_wake_turn_ended_absorbs_merge_wait
 test_classify_signal_resolving_line_exempt_from_provably_working_guard
 test_classify_stale_present_mode_resolving_line_defers
 test_housekeeping_catchall_absorbs_merge_wait_done
 test_housekeeping_catchall_appointment_never_hides_changed_terminal
 test_housekeeping_recheck_task_ids_do_not_collide
+test_migrate_absorbed_marker_resolves_legacy_task_key
+test_migrate_absorbed_marker_collision_rechecks_all_candidates
 test_housekeeping_catchall_unarmed_pr_still_escalates
 test_stale_paused_classifies_pause
 test_handle_wake_paused_records_pause_marker

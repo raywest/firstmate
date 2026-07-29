@@ -386,8 +386,17 @@ _collapse_newlines() {  # <text>
 # CHANGES are caught event-driven by the signal path; the appointment timer
 # only bounds how long a silently-lapsed positive verdict can stay quiet.
 
+signal_file_task() {  # <status-or-turn-ended-path>
+  local base=${1##*/}
+  case "$base" in
+    *.status)     printf '%s' "${base%.status}" ;;
+    *.turn-ended) printf '%s' "${base%.turn-ended}" ;;
+    *)            return 1 ;;
+  esac
+}
+
 classify_signal() {  # <reason-after-colon> <state>
-  local reason=$1 state=$2 f base task last seen_tasks="" distilled="" d
+  local reason=$1 state=$2 f task last seen_tasks="" distilled="" d
   local unresolved=0 surfaced=0 suppressed=0 quiet=0 stopped=0 seen_rel=0
   for f in $reason; do
     [ -e "$f" ] || { unresolved=1; continue; }
@@ -395,12 +404,7 @@ classify_signal() {  # <reason-after-colon> <state>
     if [ -n "$last" ] && [ "${f%.status}" != "$f" ]; then
       distilled="${distilled}$(basename "$f"): ${last} | "
     fi
-    base=${f##*/}
-    case "$base" in
-      *.status)     task=${base%.status} ;;
-      *.turn-ended) task=${base%.turn-ended} ;;
-      *)            continue ;;
-    esac
+    task=$(signal_file_task "$f") || continue
     [ -n "$task" ] || continue
     case " $seen_tasks " in *" $task "*) continue ;; esac
     seen_tasks="$seen_tasks $task"
@@ -444,7 +448,8 @@ classify_signal() {  # <reason-after-colon> <state>
     # is never silently swallowed.
     d=$(crew_escalation_disposition "$task" "$state")
     case "$d" in
-      working|paused|merge-wait|recent) quiet=$((quiet + 1)) ;;
+      working|merge-wait) suppressed=$((suppressed + 1)) ;;
+      paused|recent) quiet=$((quiet + 1)) ;;
       *) stopped=$((stopped + 1)) ;;
     esac
   done
@@ -617,23 +622,40 @@ recheck_marker_remove() {  # <state> <task-id>
   rm -f "$marker"
 }
 
-# One-way migration from the retired bound-absorption cache: a leftover
-# state/.subsuper-absorbed-<task-id> marker becomes a plain appointment with
-# its original epoch, so a task absorbed by an older daemon is re-verified
-# within the same window instead of lingering unwatched or being re-noticed
-# only by the next scan.
+# One-way migration from the retired absorption markers. Bound markers carry
+# their exact task id on line two; older markers use the lossy _stale_key form
+# in their filename. Each becomes an exact-id appointment and retains its
+# original epoch when its ownership is unambiguous.
 migrate_absorbed_markers() {  # <state>
-  local state=$1 marker task stamp dest
+  local state=$1 marker legacy_key stamp bound_task dest meta task matches count
   for marker in "$state"/.subsuper-absorbed-*; do
     [ -e "$marker" ] || continue
-    task=${marker##*.subsuper-absorbed-}
+    legacy_key=${marker##*.subsuper-absorbed-}
     stamp=$(sed -n '1p' "$marker" 2>/dev/null)
-    if dest=$(recheck_marker_path "$state" "$task"); then
-      case "$stamp" in
-        ''|*[!0-9]*) _now > "$dest" ;;
-        *) printf '%s\n' "$stamp" > "$dest" ;;
-      esac
+    bound_task=$(sed -n '2p' "$marker" 2>/dev/null)
+    matches=
+    count=0
+    if fm_pr_task_id_valid "$bound_task" \
+       && [ "$legacy_key" = "$bound_task" ] \
+       && [ -f "$state/$bound_task.meta" ]; then
+      matches=$bound_task
+      count=1
+    else
+      for meta in "$state"/*.meta; do
+        [ -e "$meta" ] || continue
+        task=${meta##*/}; task=${task%.meta}
+        fm_pr_task_id_valid "$task" || continue
+        [ "$(_stale_key "$task")" = "$legacy_key" ] || continue
+        matches="${matches:+$matches }$task"
+        count=$((count + 1))
+      done
     fi
+    case "$stamp" in ''|*[!0-9]*) stamp=$(_now) ;; esac
+    [ "$count" -le 1 ] || stamp=0
+    for task in $matches; do
+      dest=$(recheck_marker_path "$state" "$task") || continue
+      [ -e "$dest" ] || printf '%s\n' "$stamp" > "$dest"
+    done
     rm -f "$marker"
   done
 }
@@ -731,15 +753,17 @@ mark_status_seen() {  # <state> <task> <last-line>
 # seen, so the catch-all scan does not re-escalate the same line within
 # HEARTBEAT_SCAN_SECS. Mirrors classify_signal/classify_stale's relevance test.
 mark_escalated_seen() {  # <kind> <arg> <state>
-  local kind=$1 arg=$2 state=$3 f last task
+  local kind=$1 arg=$2 state=$3 f last task seen_tasks=""
   case "$kind" in
     signal)
       for f in $arg; do
         [ -e "$f" ] || continue
-        last=$(last_status_line "$f")
+        task=$(signal_file_task "$f") || continue
+        case " $seen_tasks " in *" $task "*) continue ;; esac
+        seen_tasks="$seen_tasks $task"
+        last=$(last_status_line "$state/$task.status")
         [ -n "$last" ] || continue
         status_is_captain_relevant "$last" || continue
-        task=$(basename "$f"); task="${task%.status}"
         mark_status_seen "$state" "$task" "$last"
       done ;;
     stale)
@@ -1575,25 +1599,11 @@ is_wake_reason() {  # <reason>
 
 # --- dispatch one wake reason to self-handle or escalate --------------------
 # Side effects: logging, marker records, escalation buffer appends.
-handle_wake() {  # <reason> <state>
-  local reason=$1 state=$2 decision action distilled task last win f base seen_tasks=""
-  local kind="" arg=""
-  if should_force_self "$reason"; then
-    log "wake force-self (FM_INJECT_SKIP): $reason"
-    return
-  fi
-  case "$reason" in
-    signal:*) kind=signal; arg="${reason#signal: }"
-              decision=$(classify_signal "$arg" "$state") ;;
-    stale:*)  kind=stale; arg="${reason#stale: }"
-              decision=$(classify_stale "$arg" "$state") ;;
-    check:*)  decision=$(classify_check "$reason") ;;
-    heartbeat|heartbeat:*) decision=$(classify_heartbeat) ;;
-    *)        decision=$(classify_unknown "$reason") ;;
-  esac
+route_wake_decision() {  # <reason> <kind> <arg> <state> <decision>
+  local reason=$1 kind=$2 arg=$3 state=$4 decision=$5
+  local action distilled task last f seen_tasks=""
   action=${decision%%|*}
   distilled=${decision#*|}
-  [ "$kind" = signal ] && sync_pause_markers_from_signal "$state" "$arg"
   case "$action" in
     escalate)
       log "escalate: $reason -> $distilled"
@@ -1602,7 +1612,10 @@ handle_wake() {  # <reason> <state>
       # housekeeping re-escalates the same pane as a false wedge later.
       [ "$kind" = "stale" ] && stale_marker_remove "$arg" "$state"
       mark_escalated_seen "$kind" "$arg" "$state"
-      [ "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" -le 0 ] && { escalate_flush "$state" || true; }
+      if [ "$kind" != signal ] \
+         && [ "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" -le 0 ]; then
+        escalate_flush "$state" || true
+      fi
       ;;
     pause)
       # Declared external-wait pause: record a pause marker (long re-surface
@@ -1616,30 +1629,18 @@ handle_wake() {  # <reason> <state>
       log "self-handle (paused): $reason -> $distilled"
       ;;
     absorb)
-      # A captain-relevant/terminal status line, but the resolver proved the
-      # crew has moved on to positively-evidenced real work - record the
-      # bounded verified-recheck appointment (housekeeping (2c)) rather than
-      # short wedge tracking, so a genuinely terminal status still surfaces
-      # once that evidence lapses.
+      # The resolver proved the crew has positively-evidenced real work or an
+      # armed merge wait. Record the bounded verified-recheck appointment
+      # (housekeeping (2c)) rather than short wedge tracking, so a silently
+      # lapsed disposition is still detected.
       if [ "$kind" = "stale" ]; then
         recheck_marker_record "$state" "$(window_to_task "$arg" "$state")"
       elif [ "$kind" = "signal" ]; then
         for f in $arg; do
-          [ -e "$f" ] || continue
-          base=${f##*/}
-          case "$base" in
-            *.status) task=${base%.status} ;;
-            *.turn-ended) task=${base%.turn-ended} ;;
-            *) continue ;;
-          esac
+          task=$(signal_file_task "$f") || continue
           case " $seen_tasks " in *" $task "*) continue ;; esac
           seen_tasks="$seen_tasks $task"
-          last=$(last_status_line "$state/$task.status")
-          [ -n "$last" ] || continue
-          status_is_captain_relevant "$last" || continue
-          case "$(crew_escalation_disposition "$task" "$state")" in
-            working|merge-wait) recheck_marker_record "$state" "$task" ;;
-          esac
+          recheck_marker_record "$state" "$task"
         done
       fi
       log "self-handle (absorbed): $reason -> $distilled"
@@ -1664,6 +1665,51 @@ handle_wake() {  # <reason> <state>
       log "self-handle: $reason -> $distilled"
       ;;
   esac
+}
+
+handle_signal_wake() {  # <signal-files> <state>
+  local arg=$1 state=$2 f task seen_tasks="" task_arg other other_task decision
+  sync_pause_markers_from_signal "$state" "$arg"
+  for f in $arg; do
+    if ! task=$(signal_file_task "$f"); then
+      decision=$(classify_signal "$f" "$state")
+      route_wake_decision "signal: $f" signal "$f" "$state" "$decision"
+      continue
+    fi
+    case " $seen_tasks " in *" $task "*) continue ;; esac
+    seen_tasks="$seen_tasks $task"
+    task_arg=
+    for other in $arg; do
+      other_task=$(signal_file_task "$other") || continue
+      [ "$other_task" = "$task" ] || continue
+      task_arg="${task_arg:+$task_arg }$other"
+    done
+    decision=$(classify_signal "$task_arg" "$state")
+    route_wake_decision "signal: $task_arg" signal "$task_arg" "$state" "$decision"
+  done
+  if [ "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" -le 0 ]; then
+    escalate_flush "$state" || true
+  fi
+}
+
+handle_wake() {  # <reason> <state>
+  local reason=$1 state=$2 decision
+  local kind="" arg=""
+  if should_force_self "$reason"; then
+    log "wake force-self (FM_INJECT_SKIP): $reason"
+    return
+  fi
+  case "$reason" in
+    signal:*) kind=signal; arg="${reason#signal: }"
+              handle_signal_wake "$arg" "$state"
+              return ;;
+    stale:*)  kind=stale; arg="${reason#stale: }"
+              decision=$(classify_stale "$arg" "$state") ;;
+    check:*)  decision=$(classify_check "$reason") ;;
+    heartbeat|heartbeat:*) decision=$(classify_heartbeat) ;;
+    *)        decision=$(classify_unknown "$reason") ;;
+  esac
+  route_wake_decision "$reason" "$kind" "$arg" "$state" "$decision"
 }
 
 # --- log --------------------------------------------------------------------
