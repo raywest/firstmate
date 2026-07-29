@@ -31,7 +31,6 @@ harness-native/terminal launch path) and runs continuously.
 | batching | `FM_ESCALATE_BATCH_SECS` (default 90s), one window regardless of urgency | two-tier: an urgent item flushes immediately; a routine-only buffer waits out `FM_ESCALATE_BATCH_SECS_PRESENT` (default 30s) |
 | max-defer | `FM_MAX_DEFER_SECS` (default 300s) | `FM_MAX_DEFER_SECS_PRESENT` (default 900s) - a present captain legitimately holds the composer for minutes |
 | wedge alert on max-defer | durable marker + log + configured OS-level active alert | durable marker + log only; `bin/fm-guard.sh` surfaces the marker on the next turn instead |
-| stopped-crew stale | persistence recheck after `FM_STALE_ESCALATE_SECS` (240s), bounded patience | escalate on first sight, matching the always-on watcher's own present-mode semantics |
 
 ## Provably-working stale absorption
 
@@ -41,10 +40,9 @@ single evening turned out to be false wedge alarms: an idle-LOOKING pane is not
 the same as an idle crew.
 Before `housekeeping`'s stale persistence recheck (`bin/fm-supervise-daemon.sh`)
 treats a still-idle pane as a possible wedge, it consults
-`crew_absorb_class` (`bin/fm-classify-lib.sh`) - the SAME predicate the
-no-verb-signal "crew not provably working" guard already uses - which in turn
-reads `bin/fm-crew-state.sh`'s one authoritative current-state line for two
-sources of positive evidence:
+`crew_absorb_class` (`bin/fm-classify-lib.sh`), which in turn reads
+`bin/fm-crew-state.sh`'s one authoritative current-state line for two sources
+of positive evidence:
 
 1. **Run-step**: an actively-running no-mistakes validation attributed to the
    crew's own branch (`state: working · source: run-step`).

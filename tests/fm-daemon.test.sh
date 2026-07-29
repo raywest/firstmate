@@ -91,143 +91,52 @@ test_daemon_state_root_uses_fm_home() {
 }
 
 test_classify_routine_signal_self() {
-  local dir state fakebin out
+  local dir state out
   dir=$(make_supercase classify-routine)
-  state="$dir/state"; fakebin="$dir/fakebin"
+  state="$dir/state"
   printf 'working: step 1\nworking: step 2\n' > "$state/foo-x1.status"
-  # A no-verb signal now applies the provably-working guard (unified per the
-  # captain's 2026-07-21 sub-choice 3) - stub a provably-working verdict so this
-  # regression case keeps exercising the self-handle path it always has.
-  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: run-step · validating' \
-    classify_signal "$state/foo-x1.status" "$state")
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/foo-x1.status" "$state")
   case "$out" in self\|*) pass "routine signal self-handles" ;; *) fail "routine signal did not self-handle: $out" ;; esac
 }
 
-# The no-verb-signal "crew not provably working" guard (signal_crew_provably_working,
-# bin/fm-classify-lib.sh) shares crew_absorb_class with housekeeping's stale
-# persistence recheck, so a live harness background-task footer (the SECOND
-# authoritative source, alongside an active run-step) absorbs a no-verb signal
-# here too, with no daemon-side code change needed - captain-approved 2026-07-22
-# scope item 4.
-test_classify_routine_signal_self_via_background_task_footer() {
-  local dir state fakebin out
-  dir=$(make_supercase classify-routine-bg-footer)
-  state="$dir/state"; fakebin="$dir/fakebin"
-  printf 'working: step 1\n' > "$state/foo-x2.status"
-  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: pane · harness background task still running' \
-    classify_signal "$state/foo-x2.status" "$state")
-  case "$out" in self\|*) pass "no-verb signal self-handles via a live background-task footer" ;; *) fail "background-task-footer signal did not self-handle: $out" ;; esac
-}
-
-# --- Phase 1 (always-on triage prep) classifier deltas -----------------------
-# Section 8 of the fm-alwayson-triage-s5 report identifies three genuine
-# deltas between the always-on watcher's present-mode triage and the daemon's
-# afk-mode triage that the always-on design must close IN THE DAEMON, via the
-# shared classifier (no second policy copy). All three land here in both
-# delivery styles, and are exercised directly by these unit tests.
-
-# Delta (a): the no-verb-signal provably-working check, UNIFIED across BOTH
-# modes (captain-approved sub-choice 3, 2026-07-21) - a bare turn-end or
-# working: note now escalates in the daemon too when the crew is not provably
-# working, exactly like the always-on watcher's own signal_crew_provably_working
-# guard (fm-classify-lib.sh).
-test_classify_signal_no_verb_not_working_escalates() {
-  local dir state fakebin out
-  dir=$(make_supercase signal-not-working)
-  state="$dir/state"; fakebin="$dir/fakebin"
-  printf 'working: step 1\n' > "$state/pw-a2.status"
-  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
-    classify_signal "$state/pw-a2.status" "$state")
-  case "$out" in escalate\|*) ;; *) fail "no-verb signal with a not-provably-working crew self-handled: $out" ;; esac
-  pass "no-verb signal escalates when the crew is not provably working (swallowed-finish guard, unified per sub-choice 3)"
-}
-
-test_classify_signal_declared_pause_exempt_from_provably_working_guard() {
-  local dir state fakebin out
-  dir=$(make_supercase signal-pause-exempt)
-  state="$dir/state"; fakebin="$dir/fakebin"
+test_classify_signal_declared_pause_self_handles() {
+  local dir state out
+  dir=$(make_supercase signal-pause-self)
+  state="$dir/state"
   printf 'paused: awaiting the upstream release\n' > "$state/pw-a3.status"
-  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: stopped · source: none · idle as expected' \
-    classify_signal "$state/pw-a3.status" "$state")
-  case "$out" in self\|*) ;; *) fail "a declared pause was subjected to the swallowed-finish guard: $out" ;; esac
-  pass "a declared pause self-handles regardless of provably-working (its own long recheck cadence owns it)"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/pw-a3.status" "$state")
+  case "$out" in self\|*) ;; *) fail "a declared pause did not self-handle: $out" ;; esac
+  pass "a declared pause self-handles as a routine signal (not a captain-relevant verb)"
 }
 
-test_classify_signal_mixed_pause_and_stopped_crew_escalates() {
-  local dir state fakebin out
-  dir=$(make_supercase signal-mixed-pause-stopped)
-  state="$dir/state"; fakebin="$dir/fakebin"
-  printf 'paused: awaiting the upstream release\n' > "$state/pw-a4-paused.status"
-  printf 'working: step 1\n' > "$state/pw-a4-stopped.status"
-  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
-    classify_signal "$state/pw-a4-paused.status $state/pw-a4-stopped.status" "$state")
-  case "$out" in escalate\|*) ;; *) fail "a paused status exempted a separate stopped crew from the no-verb guard: $out" ;; esac
-  pass "a declared pause exempts only its own crew from the no-verb guard"
-}
-
-test_classify_signal_vanished_file_escalates() {
+test_classify_signal_vanished_file_self_handles() {
   local dir state out
   dir=$(make_supercase signal-vanished-file)
   state="$dir/state"
   out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/missing.status" "$state")
-  case "$out" in escalate\|*) ;; *) fail "a vanished no-verb signal self-handled: $out" ;; esac
-  pass "a vanished no-verb signal escalates fail-closed"
+  case "$out" in self\|*) ;; *) fail "a vanished no-verb signal did not self-handle: $out" ;; esac
+  pass "a vanished no-verb signal self-handles, matching upstream"
 }
 
-# Delta (b): first-sight stopped-crew escalation. This is the ONE deliberate
-# mode-split threshold (report section 8.2): afk mode keeps waiting out the
-# 240s persistence recheck (housekeeping (2)); present mode (state/.afk
-# absent) adopts the always-on watcher's own first-sight semantics and
-# escalates promptly. Still behind the mode flag: production never runs
-# present mode today, so these directly exercise classify_stale's internal
-# branch rather than a running daemon.
-test_classify_stale_present_mode_first_sight_stopped_crew_escalates() {
-  local dir state fakebin out
-  dir=$(make_supercase stale-present-stopped)
-  state="$dir/state"; fakebin="$dir/fakebin"
+# classify_stale no longer splits on delivery style: present mode (state/.afk
+# absent) and afk mode take the identical path for a non-terminal stale,
+# matching upstream. See test_classify_stale_afk_mode_still_defers_to_recheck
+# below for the afk-mode side of the same regression.
+test_classify_stale_present_mode_defers_to_recheck() {
+  local dir state out
+  dir=$(make_supercase stale-present-defers)
+  state="$dir/state"
   printf 'working: building\n' > "$state/ps-w1.status"
-  # afk deliberately NOT entered: present mode is the branch under test.
-  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: stopped · source: none · finished quietly' \
-    classify_stale "sess:fm-ps-w1" "$state")
-  case "$out" in escalate\|*) ;; *) fail "present-mode first-sight stopped crew did not escalate: $out" ;; esac
-  pass "present mode escalates a first-sight stopped crew promptly instead of waiting out the recheck"
+  # afk deliberately NOT entered: present mode is the path under test.
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-ps-w1" "$state")
+  case "$out" in self\|*) ;; *) fail "present-mode non-terminal stale did not self-handle: $out" ;; esac
+  pass "present mode defers a non-terminal stale to the persistence recheck, same as afk mode"
 }
 
-test_classify_stale_present_mode_provably_working_self() {
-  local dir state fakebin out
-  dir=$(make_supercase stale-present-working)
-  state="$dir/state"; fakebin="$dir/fakebin"
-  printf 'working: building\n' > "$state/ps-w2.status"
-  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: run-step · validating' \
-    classify_stale "sess:fm-ps-w2" "$state")
-  case "$out" in self\|*) ;; *) fail "present-mode provably-working stale did not self-handle: $out" ;; esac
-  pass "present mode self-handles a provably-working stale, same as afk mode"
-}
-
-test_classify_stale_present_mode_paused_crew_pauses() {
-  local dir state fakebin out
-  dir=$(make_supercase stale-present-paused)
-  state="$dir/state"; fakebin="$dir/fakebin"
-  printf 'working: building\n' > "$state/ps-w3.status"
-  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: paused · source: none · declared external wait' \
-    classify_stale "sess:fm-ps-w3" "$state")
-  case "$out" in pause\|*) ;; *) fail "present-mode paused crew was not classified as pause: $out" ;; esac
-  pass "present mode classifies a paused crew's stale pane as pause, not a wedge"
-}
-
-# Regression: afk mode must be byte-identical to pre-phase-1 behavior for a
-# non-terminal stale - delta (b)'s mode-split must not leak into afk mode. No
-# FM_CREW_STATE_BIN stub here: afk_active short-circuits before the daemon
-# ever reads crew state, so the pre-existing (cheap) transient-defer path runs
-# exactly as it always has.
+# Regression: afk mode must still defer a non-terminal stale to the
+# persistence recheck. No FM_CREW_STATE_BIN stub here: afk_active
+# short-circuits before the daemon ever reads crew state, so the
+# pre-existing (cheap) transient-defer path runs exactly as it always has.
 test_classify_stale_afk_mode_still_defers_to_recheck() {
   local dir state out
   dir=$(make_supercase stale-afk-regression)
@@ -2299,14 +2208,9 @@ test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
-test_classify_routine_signal_self_via_background_task_footer
-test_classify_signal_no_verb_not_working_escalates
-test_classify_signal_declared_pause_exempt_from_provably_working_guard
-test_classify_signal_mixed_pause_and_stopped_crew_escalates
-test_classify_signal_vanished_file_escalates
-test_classify_stale_present_mode_first_sight_stopped_crew_escalates
-test_classify_stale_present_mode_provably_working_self
-test_classify_stale_present_mode_paused_crew_pauses
+test_classify_signal_declared_pause_self_handles
+test_classify_signal_vanished_file_self_handles
+test_classify_stale_present_mode_defers_to_recheck
 test_classify_stale_afk_mode_still_defers_to_recheck
 test_classify_terminal_signal_escalates
 test_classify_check_and_unknown_escalate

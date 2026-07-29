@@ -369,30 +369,12 @@ _collapse_newlines() {  # <text>
 # summary firstmate would otherwise have to re-read.
 
 classify_signal() {  # <reason-after-colon> <state>
-  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen guard_task guard_last paused=0 unresolved=0 guard_count=0
-  local -a guard_files
+  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen
   for f in $reason; do
-    [ -e "$f" ] || { unresolved=1; continue; }
-    guard_task=$(basename "$f")
-    guard_task=${guard_task%.status}
-    guard_task=${guard_task%.turn-ended}
-    guard_last=$(last_status_line "$state/$guard_task.status")
-    if status_is_paused "$guard_last"; then
-      paused=1
-    else
-      guard_files+=("$f")
-      guard_count=$((guard_count + 1))
-    fi
+    [ -e "$f" ] || continue
     last=$(last_status_line "$f")
     [ -n "$last" ] || continue
     distilled="${distilled}$(basename "$f"): ${last} | "
-    if status_is_paused "$last"; then
-      # A declared external-wait pause is a deliberate idle state with its own
-      # long recheck cadence (housekeeping (2b)) - it is never subject to the
-      # swallowed-finish guard below, so it does not count toward "rel" and
-      # does not trigger the provably-working check either.
-      continue
-    fi
     status_is_captain_relevant "$last" || continue
     rel=1
     # Dedupe against the catch-all scan: if this status was already escalated
@@ -406,25 +388,7 @@ classify_signal() {  # <reason-after-colon> <state>
   # strip a trailing " | " separator so the distilled line is clean
   distilled="${distilled% | }"
   if [ -z "$rel" ]; then
-    # No captain-relevant verb: a bare turn-end, a working: note, or (handled
-    # above) a declared pause. Apply the SAME provably-working guard the
-    # always-on watcher uses on a no-verb signal (signal_crew_provably_working,
-    # fm-classify-lib.sh) - unified across BOTH afk and present mode per the
-    # captain's 2026-07-21 sub-choice 3, so a crew that quietly finished
-    # without a done:/needs-decision: line is never silently swallowed in
-    # either mode. Cost: the same bounded fm-crew-state.sh read the watcher
-    # already pays today, still only on no-verb signals.
-    if [ "$guard_count" -eq 0 ]; then
-      if [ "$unresolved" -eq 0 ] && [ "$paused" -eq 1 ]; then
-        printf 'self|routine signal: %s' "$distilled"
-      else
-        printf 'escalate|no-verb signal, crew not provably working: %s' "$distilled"
-      fi
-    elif signal_crew_provably_working "${guard_files[@]}"; then
-      printf 'self|routine signal: %s' "$distilled"
-    else
-      printf 'escalate|no-verb signal, crew not provably working: %s' "$distilled"
-    fi
+    printf 'self|routine signal: %s' "$distilled"
   elif [ "$all_seen" = "1" ]; then
     # Every relevant status was already escalated by the catch-all scan;
     # self-handle to avoid a duplicate entry in the digest.
@@ -438,7 +402,7 @@ classify_signal() {  # <reason-after-colon> <state>
 # first sight of a non-terminal stale it returns "self" and the caller records a
 # timestamp marker; persistence is escalated by housekeeping's recheck, not here.
 classify_stale() {  # <window> <state>
-  local win=$1 state=$2 task last seen class
+  local win=$1 state=$2 task last seen
   task=$(window_to_task "$win" "$state")
   last=$(last_status_line "$state/$task.status")
   if [ -n "$last" ] && status_is_paused "$last"; then
@@ -474,32 +438,8 @@ classify_stale() {  # <window> <state>
     printf 'escalate|stale + terminal status: %s' "$last"
     return
   fi
-  # Non-terminal (or no status). AFK MODE: defer to the persistence recheck,
-  # unchanged - housekeeping (2) ages the marker and escalates past
-  # FM_STALE_ESCALATE_SECS. PRESENT MODE (state/.afk absent) is the one
-  # deliberate mode-split threshold (always-on triage spec section 8.2): adopt
-  # the always-on watcher's own first-sight semantics via the same
-  # crew_absorb_class the watcher uses for a stopped crew, and escalate
-  # promptly instead of waiting out the recheck.
-  if ! afk_active "$state"; then
-    class=$(crew_absorb_class "$task")
-    case "$class" in
-      working)
-        printf 'self|transient stale (%s, provably working): %s' "$win" "${last:-no status}"
-        return
-        ;;
-      paused)
-        printf 'pause|paused (awaiting external), rechecked on a long cadence: %s' "${last:-no status}"
-        return
-        ;;
-      *)
-        printf 'escalate|stopped crew (first sight, present mode): %s' "${last:-no status}"
-        return
-        ;;
-    esac
-  fi
-  # Defer to the persistence recheck. The caller records/refreshes the stale
-  # marker so housekeeping can age it.
+  # Non-terminal (or no status): defer to the persistence recheck. The caller
+  # records/refreshes the stale marker so housekeeping can age it.
   printf 'self|transient stale (%s): %s' "$win" "${last:-no status}"
 }
 
