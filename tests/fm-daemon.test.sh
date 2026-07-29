@@ -168,15 +168,18 @@ test_classify_signal_no_verb_not_working_escalates() {
 }
 
 test_classify_signal_declared_pause_exempt_from_provably_working_guard() {
-  local dir state fakebin out
+  local dir state fakebin out reads
   dir=$(make_supercase signal-pause-exempt)
-  state="$dir/state"; fakebin="$dir/fakebin"
+  state="$dir/state"; fakebin="$dir/fakebin"; reads="$dir/crew-state-reads"
   printf 'paused: awaiting the upstream release\n' > "$state/pw-a3.status"
   out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE_READS="$reads" \
     FM_FAKE_CREW_STATE='state: stopped · source: none · idle as expected' \
     classify_signal "$state/pw-a3.status" "$state")
-  case "$out" in self\|*) ;; *) fail "a declared pause was subjected to the swallowed-finish guard: $out" ;; esac
-  pass "a declared pause self-handles regardless of provably-working (its own long recheck cadence owns it)"
+  case "$out" in pause\|*) ;; *) fail "a declared pause was subjected to the swallowed-finish guard: $out" ;; esac
+  [ "$(grep -cx 'pw-a3' "$reads" 2>/dev/null || true)" -eq 1 ] \
+    || fail "the paused task did not receive exactly one fresh resolver read"
+  pass "a declared pause routes from one fresh read to its long recheck cadence"
 }
 
 test_classify_signal_mixed_pause_and_stopped_crew_escalates() {
@@ -479,6 +482,28 @@ test_handle_wake_signal_routes_tasks_independently() {
   pass "a mixed signal routes and tracks each task by its own fresh disposition"
 }
 
+test_handle_wake_seen_terminal_resumed_work_records_recheck() {
+  local dir state fakebin reads terminal key
+  dir=$(make_supercase signal-seen-terminal-resumed-work)
+  state="$dir/state"; fakebin="$dir/fakebin"; reads="$dir/crew-state-reads"
+  terminal='done: implementation complete before validation'
+  printf '%s\n' "$terminal" > "$state/seen-working.status"
+  : > "$state/seen-working.turn-ended"
+  key=$(_stale_key seen-working)
+  printf '%s' "$terminal" > "$state/.subsuper-seen-status-$key"
+  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE_READS="$reads" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)' \
+    handle_wake "signal: $state/seen-working.turn-ended" "$state"
+  [ -e "$state/.subsuper-recheck-seen-working" ] \
+    || fail "a seen terminal task that resumed work did not receive a recheck appointment"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a seen terminal task that resumed work was re-escalated"
+  [ "$(grep -cx 'seen-working' "$reads" 2>/dev/null || true)" -eq 1 ] \
+    || fail "the seen terminal task did not receive exactly one fresh resolver read"
+  pass "a seen terminal signal rechecks current work before delivery dedup"
+}
+
 test_handle_wake_turn_ended_absorbs_merge_wait() {
   local dir state fakebin key url
   dir=$(make_supercase signal-turn-ended-absorb-mergewait)
@@ -507,17 +532,24 @@ test_handle_wake_turn_ended_absorbs_merge_wait() {
 }
 
 test_classify_signal_resolving_line_exempt_from_provably_working_guard() {
-  local dir state fakebin out verb
+  local dir state fakebin out verb expected reads
   dir=$(make_supercase signal-resolving-exempt)
-  state="$dir/state"; fakebin="$dir/fakebin"
+  state="$dir/state"; fakebin="$dir/fakebin"; reads="$dir/crew-state-reads"
   for verb in resolved captain-held; do
     printf 'needs-decision [key=x1]: pick an approach\n%s [key=x1]: closed\n' "$verb" > "$state/rs-w1.status"
     out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+      FM_FAKE_CREW_STATE_READS="$reads" \
       FM_FAKE_CREW_STATE='state: stopped · source: none · quiet pane' \
       classify_signal "$state/rs-w1.status" "$state")
-    case "$out" in self\|*) ;; *) fail "a $verb status line was subjected to the swallowed-finish guard: $out" ;; esac
+    case "$verb" in
+      resolved) expected=self ;;
+      captain-held) expected=pause ;;
+    esac
+    case "$out" in "$expected"\|*) ;; *) fail "a $verb status line did not route from its fresh disposition: $out" ;; esac
   done
-  pass "resolved:/captain-held: status lines are self-explanatory and exempt from the no-verb provably-working guard"
+  [ "$(grep -cx 'rs-w1' "$reads" 2>/dev/null || true)" -eq 2 ] \
+    || fail "resolved and captain-held signals did not each receive one fresh resolver read"
+  pass "resolved and captain-held signals route from fresh current-state reads"
 }
 
 test_classify_stale_present_mode_resolving_line_defers() {
@@ -698,6 +730,28 @@ test_handle_wake_paused_signal_records_pause_marker() {
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "pause signal did not clear the wedge marker"
   [ ! -s "$state/.subsuper-escalations" ] || fail "a declared pause signal escalated instead of self-handling"
   pass "handle_wake records a declared pause from a routine signal for long-cadence rechecks"
+}
+
+test_handle_wake_paused_status_resumed_work_records_recheck() {
+  local dir state fakebin reads key win
+  dir=$(make_supercase handle-paused-status-resumed-work)
+  state="$dir/state"; fakebin="$dir/fakebin"; reads="$dir/crew-state-reads"
+  win="sess:fm-resumed-from-pause"
+  fm_write_meta "$state/resumed-from-pause.meta" "window=$win" "kind=ship"
+  printf 'paused: earlier external wait\n' > "$state/resumed-from-pause.status"
+  key=$(_stale_key resumed-from-pause)
+  date +%s > "$state/.subsuper-paused-$key"
+  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE_READS="$reads" \
+    FM_FAKE_CREW_STATE='state: working · source: run-step · resumed validation' \
+    handle_wake "signal: $state/resumed-from-pause.status" "$state"
+  [ ! -e "$state/.subsuper-paused-$key" ] \
+    || fail "fresh working evidence retained the earlier pause timer"
+  [ -e "$state/.subsuper-recheck-resumed-from-pause" ] \
+    || fail "fresh working evidence did not record a recheck appointment"
+  [ "$(grep -cx 'resumed-from-pause' "$reads" 2>/dev/null || true)" -eq 1 ] \
+    || fail "the resumed task did not receive exactly one fresh resolver read"
+  pass "fresh working evidence supersedes pause timer routing"
 }
 
 test_handle_wake_terminal_signal_clears_pause_tracking() {
@@ -2807,6 +2861,7 @@ test_classify_stale_terminal_unarmed_pr_still_escalates
 test_classify_signal_terminal_absorbs_active_validation_run
 test_classify_signal_exempt_batch_member_does_not_veto_absorption
 test_handle_wake_signal_routes_tasks_independently
+test_handle_wake_seen_terminal_resumed_work_records_recheck
 test_handle_wake_turn_ended_absorbs_merge_wait
 test_classify_signal_resolving_line_exempt_from_provably_working_guard
 test_classify_stale_present_mode_resolving_line_defers
@@ -2819,6 +2874,7 @@ test_housekeeping_catchall_unarmed_pr_still_escalates
 test_stale_paused_classifies_pause
 test_handle_wake_paused_records_pause_marker
 test_handle_wake_paused_signal_records_pause_marker
+test_handle_wake_paused_status_resumed_work_records_recheck
 test_handle_wake_terminal_signal_clears_pause_tracking
 test_housekeeping_migrates_watcher_pause_marker
 test_housekeeping_migrates_watcher_unpaused_marker_to_clear

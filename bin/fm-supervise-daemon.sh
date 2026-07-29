@@ -397,59 +397,34 @@ signal_file_task() {  # <status-or-turn-ended-path>
 
 classify_signal() {  # <reason-after-colon> <state>
   local reason=$1 state=$2 f task last seen_tasks="" distilled="" d
-  local unresolved=0 surfaced=0 suppressed=0 quiet=0 stopped=0 seen_rel=0
+  local unresolved=0 surfaced=0 suppressed=0 paused=0 stopped=0 seen_rel=0
   for f in $reason; do
-    [ -e "$f" ] || { unresolved=1; continue; }
-    last=$(last_status_line "$f")
-    if [ -n "$last" ] && [ "${f%.status}" != "$f" ]; then
-      distilled="${distilled}$(basename "$f"): ${last} | "
+    if ! task=$(signal_file_task "$f"); then
+      [ -e "$f" ] || unresolved=1
+      continue
     fi
-    task=$(signal_file_task "$f") || continue
     [ -n "$task" ] || continue
     case " $seen_tasks " in *" $task "*) continue ;; esac
     seen_tasks="$seen_tasks $task"
-    last=$(last_status_line "$state/$task.status")
-    if status_is_paused_or_captain_held "$last"; then
-      # A declared pause or a verified captain-held transfer is a deliberate
-      # wait with its own long recheck cadence (housekeeping (2b)); the pause
-      # markers are synced by handle_wake, and the resurface recheck re-verifies
-      # against the resolver on its own bounded cadence.
-      quiet=$((quiet + 1))
-      continue
-    fi
-    if [ "$(status_line_verb "$last")" = "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}" ]; then
-      # A decision-closing resolved: line is evidence of a very recent turn -
-      # never a swallowed finish. The ordinary stale/wedge grace still catches
-      # a genuine silent death right after it.
-      quiet=$((quiet + 1))
-      continue
-    fi
-    if [ -n "$last" ] && status_is_captain_relevant "$last"; then
-      if [ "$(cat "$state/.subsuper-seen-status-$(_stale_key "$task")" 2>/dev/null || true)" = "$last" ]; then
-        seen_rel=$((seen_rel + 1))
-        continue
+    if [ -e "$f" ]; then
+      last=$(last_status_line "$f")
+      if [ -n "$last" ] && [ "${f%.status}" != "$f" ]; then
+        distilled="${distilled}$(basename "$f"): ${last} | "
       fi
-      d=$(crew_escalation_disposition "$task" "$state")
-      case "$d" in
-        working|merge-wait)
-          # A terminal-looking line superseded by positive CURRENT evidence
-          # (active work, or an armed merge-wait for this exact PR). handle_wake
-          # records the verified-recheck appointment that bounds this quiet.
-          suppressed=$((suppressed + 1)) ;;
-        *)
-          surfaced=$((surfaced + 1)) ;;
-      esac
-      continue
     fi
-    # No captain-relevant verb: a bare turn-end or a working: note. Apply the
-    # SAME provably-working authority the always-on watcher uses on a no-verb
-    # signal, unified across both delivery styles (captain's 2026-07-21
-    # sub-choice 3), so a crew that quietly finished without a terminal line
-    # is never silently swallowed.
+    last=$(last_status_line "$state/$task.status")
     d=$(crew_escalation_disposition "$task" "$state")
     case "$d" in
       working|merge-wait) suppressed=$((suppressed + 1)) ;;
-      paused|recent) quiet=$((quiet + 1)) ;;
+      paused) paused=$((paused + 1)) ;;
+      attention)
+        if [ "$(cat "$state/.subsuper-seen-status-$(_stale_key "$task")" 2>/dev/null || true)" = "$last" ]; then
+          seen_rel=$((seen_rel + 1))
+        else
+          surfaced=$((surfaced + 1))
+        fi
+        ;;
+      recent) : ;;
       *) stopped=$((stopped + 1)) ;;
     esac
   done
@@ -461,6 +436,8 @@ classify_signal() {  # <reason-after-colon> <state>
     printf 'escalate|no-verb signal, crew not provably working: %s' "$distilled"
   elif [ "$suppressed" -gt 0 ]; then
     printf 'absorb|%s' "$distilled"
+  elif [ "$paused" -gt 0 ]; then
+    printf 'pause|%s' "$distilled"
   elif [ "$seen_rel" -gt 0 ]; then
     printf 'self|signal already escalated (catch-all scan): %s' "$distilled"
   else
@@ -725,18 +702,24 @@ migrate_watcher_pause_markers() {  # <state>
   done
 }
 
-sync_pause_markers_from_signal() {  # <state> <signal files>
-  local state=$1 paths=$2 f last task win
-  local -a files
-  read -r -a files <<<"$paths"
-  for f in "${files[@]}"; do
-    case "$f" in *.status) ;; *) continue ;; esac
-    [ -e "$f" ] || continue
-    last=$(last_status_line "$f")
-    task=$(basename "$f"); task=${task%.status}
+sync_signal_tracking_from_decision() {  # <state> <signal-files> <action>
+  local state=$1 paths=$2 action=$3 f task win key watcher_key seen_tasks=""
+  for f in $paths; do
+    task=$(signal_file_task "$f") || continue
+    case " $seen_tasks " in *" $task "*) continue ;; esac
+    seen_tasks="$seen_tasks $task"
     win=$(window_for_exact_task "$task" "$state" 2>/dev/null || true)
     [ -n "$win" ] || continue
-    reconcile_pause_tracking "$win" "$state" "$last"
+    if [ "$action" = pause ]; then
+      stale_tracking_remove "$win" "$state"
+      pause_marker_record "$win" "$state"
+      continue
+    fi
+    key=$(_stale_key "$task")
+    watcher_key=$(_stale_key "$win")
+    if [ -e "$state/.subsuper-paused-$key" ] || [ -e "$state/.paused-$watcher_key" ]; then
+      clear_pause_tracking "$win" "$state"
+    fi
   done
 }
 
@@ -1668,11 +1651,12 @@ route_wake_decision() {  # <reason> <kind> <arg> <state> <decision>
 }
 
 handle_signal_wake() {  # <signal-files> <state>
-  local arg=$1 state=$2 f task seen_tasks="" task_arg other other_task decision
-  sync_pause_markers_from_signal "$state" "$arg"
+  local arg=$1 state=$2 f task seen_tasks="" task_arg other other_task decision action
   for f in $arg; do
     if ! task=$(signal_file_task "$f"); then
       decision=$(classify_signal "$f" "$state")
+      action=${decision%%|*}
+      sync_signal_tracking_from_decision "$state" "$f" "$action"
       route_wake_decision "signal: $f" signal "$f" "$state" "$decision"
       continue
     fi
@@ -1685,6 +1669,8 @@ handle_signal_wake() {  # <signal-files> <state>
       task_arg="${task_arg:+$task_arg }$other"
     done
     decision=$(classify_signal "$task_arg" "$state")
+    action=${decision%%|*}
+    sync_signal_tracking_from_decision "$state" "$task_arg" "$action"
     route_wake_decision "signal: $task_arg" signal "$task_arg" "$state" "$decision"
   done
   if [ "${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}" -le 0 ]; then
