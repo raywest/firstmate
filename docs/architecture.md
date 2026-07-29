@@ -9,18 +9,18 @@ firstmate's always-loaded operating contract and routing index for conditional p
 ## Event-driven supervision
 
 A zero-token bash watcher (`bin/fm-watch.sh`) sleeps on the fleet, classifies detected wakes in bash, and wakes the first mate only when something is actionable.
-Actionable wakes include captain-relevant status signals, no-verb signals whose crew is not provably working, authenticated check output such as PR merge polling or an X-mode mention, eligible stale-pane rechecks, and heartbeat backstop hits.
+Actionable wakes include captain-relevant status signals, authenticated check output such as PR merge polling or an X-mode mention, eligible stale-pane rechecks, and heartbeat backstop hits; when the standalone watcher owns triage, they also include no-verb signals whose crew is not provably working.
 Repeated stale escalations on the same unchanged pane add an escalation count to the wake reason and, at `FM_WEDGE_DEMAND_INSPECT_COUNT`, a `demand-deep-inspection` marker.
 Those actionable wakes are written to a durable local queue (`state/.wake-queue`) before detector state advances, so a missed process exit can be recovered by draining the queue.
 When a canonical validated PR poll returns exactly `merged`, the watcher appends that durable notification before publishing a private receipt bound to the poll's registration, bytes, file identities, metadata, provider, URL, and task ID.
 The receipt makes retirement safely retryable across restarts: fixed-path recovery revalidates the same evidence, removes the runnable check first, removes its registration and data sidecars, removes the receipt last, and preserves task metadata including `pr=` and `pr_head=`.
 A concurrent replacement remains armed, every non-merged or invalid observation remains unchanged, and retirement never performs task or persistent-secondmate cleanup.
 `bin/fm-pr-lib.sh` owns the receipt format and strict identity mechanics, while `bin/fm-watch.sh` owns queue-before-retirement ordering.
-[`alwayson-triage.md`](alwayson-triage.md#provably-working-stale-absorption) is the single owner of the shared no-verb and stale-pane classification policy, including positive working evidence and bounded pause or absorption rechecks.
+`bin/fm-watch.sh` owns the standalone watcher's provably-working no-verb and first-sight stale guards; [`alwayson-triage.md`](alwayson-triage.md#provably-working-stale-absorption) owns the daemon's bounded pause, persistence, and provably-working absorption rechecks.
 `bin/fm-crew-state.sh`'s header owns the exact current-state source precedence and reconciliation behavior.
-For an ordinary crew that has stopped, the normal-mode watcher first surfaces one stale wake unless the backend confidently reports its agent dead, then keeps an unchanged `paused:` or durable `captain-held` endpoint on that same cadence for dead or inconclusive liveness.
+For an ordinary crew that has stopped, the standalone normal-mode watcher first surfaces one stale wake unless the backend confidently reports its agent dead, then keeps an unchanged `paused:` or durable `captain-held` endpoint on that same cadence for dead or inconclusive liveness.
 Among liveness outcomes, only a confirmed-live agent bypasses that cadence so a live decision gate surfaces immediately, and the secondmate idle-endpoint exemption is unchanged.
-Its initial normal-mode status signal still surfaces through the no-verb path, while away mode self-handles that routine signal and owns the later recheck.
+The standalone normal-mode watcher's initial status signal still surfaces through the no-verb path, while daemon-owned triage self-handles that routine signal and defers nonterminal stales to its persistence recheck.
 No-change heartbeats are also benign.
 Absorbed wakes advance their suppression markers, log to `state/.watch-triage.log`, and keep the watcher blocking without a queue record or LLM turn.
 After each drain, `fm-wake-drain.sh` runs the same liveness guard as the supervision scripts, so a lapsed watcher chain surfaces even on a turn that only drains and handles queued wakes.
@@ -61,8 +61,7 @@ On every verified primary harness, tracked hook integration gives the primary se
 The guard covers the main primary and genuinely marked secondmate homes, exempts child crewmate/scout worktrees, is loop-safe per harness, and is documented in [turnend-guard.md](turnend-guard.md).
 
 A sub-supervisor daemon (`bin/fm-supervise-daemon.sh`) is the PERMANENT wake consumer on a supported claude or codex primary on tmux or herdr: the session-start bootstrap sweep launches and maintains it (below), and the watcher runs one-shot as its child (`FM_WATCH_DAEMON_OWNED=1`, unconditionally) so the daemon does the triage in both delivery styles - exactly one triage layer ever runs. `/afk` no longer starts or stops it; the durable `state/.afk` flag it owns only picks the delivery STYLE (away: patient batching plus an OS-level wedge alert; present: urgent-immediate plus a short routine batch, no OS-level alert). [`alwayson-triage.md`](alwayson-triage.md) is the full mechanism doc; this section stays a summary.
-The watcher and daemon share `bin/fm-classify-lib.sh` for their classification primitives.
-[`alwayson-triage.md`](alwayson-triage.md#provably-working-stale-absorption) is the single owner of the shared stale-pane and no-verb classification policy, including its terminal-verb and away-mode wedge-aging refinements.
+The watcher and daemon share classification primitives from `bin/fm-classify-lib.sh`, not a complete wake-decision policy.
 The daemon emits captain-required events as one batched, single-line digest using the canonical `away-supervisor` kind from `bin/fm-operational-input.sh` so firstmate can tell daemon injections apart from real messages, in both delivery styles.
 Its supervisor injection path supports tmux and herdr panes, with `FM_SUPERVISOR_BACKEND` and `FM_SUPERVISOR_TARGET` resolved independently from the task-spawn backend.
 Pane existence, busy checks, composer checks, capture, and verified submit route through `bin/fm-backend.sh`: tmux keeps the same submit core used by the tmux send backend, while herdr uses native busy state, native agent-state submit confirmation on idle baselines, and its ANSI-aware structural composer classifier for pending-input guards and submit fallback.

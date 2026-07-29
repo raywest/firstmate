@@ -133,10 +133,8 @@ test_classify_stale_present_mode_defers_to_recheck() {
   pass "present mode defers a non-terminal stale to the persistence recheck, same as afk mode"
 }
 
-# Regression: afk mode must still defer a non-terminal stale to the
-# persistence recheck. No FM_CREW_STATE_BIN stub here: afk_active
-# short-circuits before the daemon ever reads crew state, so the
-# pre-existing (cheap) transient-defer path runs exactly as it always has.
+# Regression: afk mode must defer a nonterminal stale to the same persistence
+# recheck as present mode.
 test_classify_stale_afk_mode_still_defers_to_recheck() {
   local dir state out
   dir=$(make_supercase stale-afk-regression)
@@ -179,9 +177,6 @@ test_stale_transient_self_records_marker() {
   state="$dir/state"
   printf 'working: building\n' > "$state/qux-w4.status"
   stale_marker_record "sess:fm-qux-w4" "$state"
-  # afk mode: unchanged - defers to the persistence recheck without ever
-  # reading crew state (see the present-mode delta 2 tests for the mode split).
-  afk_enter "$state"
   out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-qux-w4" "$state")
   case "$out" in self\|*) ;; *) fail "transient stale did not self-handle: $out" ;; esac
   key=$(printf '%s' "$(window_to_task "sess:fm-qux-w4")" | tr ':/.' '___')
@@ -1321,13 +1316,13 @@ test_classify_stale_dedup_against_signal() {
   pass "classify_stale dedupes against the signal path seen marker"
 }
 
-# AFK incident regression: a nonterminal working: line that was already surfaced
+# Regression: a nonterminal working: line that was already surfaced
 # (seen marker matches, including free-text "merged") must keep possible-wedge
 # aging. handle_wake must record the stale marker; housekeeping re-escalates
 # once at the configured bound.
-test_afk_nonterminal_working_merged_keeps_wedge_aging() {
+test_nonterminal_working_merged_keeps_wedge_aging() {
   local dir state key out win pane incident fakebin
-  dir=$(make_supercase afk-working-merged-wedge)
+  dir=$(make_supercase nonterminal-working-merged-wedge)
   state="$dir/state"
   fakebin="$dir/fakebin"
   win="sess:fm-wishlist-w1"
@@ -1338,12 +1333,7 @@ test_afk_nonterminal_working_merged_keeps_wedge_aging() {
   key=$(printf '%s' "wishlist-w1" | tr ':/.' '___')
   # Simulate an earlier false-positive escalate that wrote the seen marker.
   printf '%s' "$incident" > "$state/.subsuper-seen-status-$key"
-  # The crew is genuinely still working (a live run-step): the provably-working
-  # guard must let this already-seen nonterminal line keep wedge aging rather
-  # than taking the present-mode "stopped crew" fast escalate path.
-  out=$(FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: run-step · validating' \
-    classify_stale "$win" "$state")
+  out=$(FM_STATE_OVERRIDE="$state" classify_stale "$win" "$state")
   case "$out" in
     self\|*transient*) ;;
     escalate\|*) fail "nonterminal working: escalated as terminal stale: $out" ;;
@@ -1354,9 +1344,7 @@ test_afk_nonterminal_working_merged_keeps_wedge_aging() {
       esac
       ;;
   esac
-  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_FAKE_CREW_STATE='state: working · source: run-step · validating' \
-    handle_wake "stale: $win" "$state"
+  FM_STATE_OVERRIDE="$state" handle_wake "stale: $win" "$state"
   [ -e "$state/.subsuper-stale-$key" ] \
     || fail "wedge stale marker was not recorded for already-seen nonterminal working:"
   [ ! -s "$state/.subsuper-escalations" ] \
@@ -1373,7 +1361,7 @@ test_afk_nonterminal_working_merged_keeps_wedge_aging() {
     || fail "housekeeping did not re-escalate aged nonterminal working: wedge"
   grep -q 'possible wedge' "$state/.subsuper-escalations" \
     || fail "housekeeping escalate was not a possible-wedge: $(cat "$state/.subsuper-escalations")"
-  pass "AFK nonterminal working:+merged keeps wedge aging and re-escalates at bound"
+  pass "nonterminal working:+merged keeps wedge aging and re-escalates at bound"
 }
 
 test_afk_genuine_done_still_terminal_stale() {
@@ -2274,7 +2262,7 @@ test_tmux_composer_state_requires_matching_box_borders
 test_pane_input_pending_honors_idle_override_after_border_strip
 test_classify_signal_dedup_against_scan
 test_classify_stale_dedup_against_signal
-test_afk_nonterminal_working_merged_keeps_wedge_aging
+test_nonterminal_working_merged_keeps_wedge_aging
 test_afk_genuine_done_still_terminal_stale
 test_pane_input_pending_bordered_idle_not_pending
 test_pane_input_pending_bordered_with_text_is_pending

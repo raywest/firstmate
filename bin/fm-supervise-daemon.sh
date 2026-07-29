@@ -17,10 +17,10 @@
 # bootstrap sweep, or the harness-native/terminal launch paths under
 # bin/fm-daemon-launch.sh) and never stops during normal operation - see
 # docs/alwayson-triage.md. The durable flag state/.afk no longer gates WHETHER
-# it injects; it only picks the delivery STYLE: away (long batch, OS-level
-# wedge alert, patient stale recheck) vs present (urgent-immediate + a short
-# routine batch, in-band wedge-marker surfacing only, first-sight stale
-# escalation). Invoking the /afk skill sets/clears that flag with
+# it injects; it only picks the delivery STYLE: away (long batch plus an
+# OS-level max-defer alert) vs present (urgent-immediate plus a short routine
+# batch and in-band max-defer surfacing only). Invoking the /afk skill
+# sets/clears that flag with
 # `bin/fm-daemon-launch.sh afk-enter`/`afk-exit`; it never starts or stops the
 # daemon itself. Unflipped combinations retain the legacy return stop. Any
 # buffered escalations that remain across an afk-exit survive in
