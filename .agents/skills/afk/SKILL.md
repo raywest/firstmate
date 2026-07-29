@@ -139,44 +139,11 @@ Enter, not a swallowed one. The herdr adapter observes the same opencode
 behavior but needs a separate fix; the gap is recorded in
 `docs/herdr-backend.md` rather than papered over here.
 
-## Classification policy
+## Classification and delivery policy
 
-The daemon wraps `fm-watch.sh`, runs the watcher as a child, classifies each
-wake reason in bash, and self-handles the routine majority without consuming a
-firstmate turn.
-Captain-relevant events, plus a bounded recheck of a declared external wait that remains idle, escalate to firstmate's context as one pre-read, single-line, batched digest.
-The classification predicates (the captain-relevant verb set, declared-pause vocabulary, signal/stale tests, and fleet-scan) live in the shared `bin/fm-classify-lib.sh`, the same library the standalone (non-daemon-owned) watcher uses for its own triage.
-The daemon uses the same no-verb signal and nonterminal stale decisions in both delivery styles; the style flag changes delivery cadence and max-defer alerting only.
-The daemon always owns its watcher child (`FM_WATCH_DAEMON_OWNED=1`, regardless of `state/.afk`), so the child reverts to one-shot and lets the daemon do the triage in BOTH styles - the two never run their triage at the same time.
-The watcher's own standalone triage code is dormant whenever a daemon owns it; it is only the degraded/recovery mode when the daemon is down.
-
-Classify each wake this way:
-
-- `signal` with a terminal captain verb (`done:`, `needs-decision:`, `blocked:`, or `failed:`) -> escalate.
-  A nonterminal progress verb remains nonterminal even when its prose contains a legacy free-text token such as `PR ready`, `checks green`, `ready in branch`, or `merged`; only a bare legacy line with such a token escalates.
-  Other signals with no captain-relevant status -> self-handle without a crew-state read.
-- `signal` or `stale` for a declared `paused:` external wait -> self-handle and track the pause rather than a wedge.
-  If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping sends one awaiting-external recheck and resets the pause window.
-- `check` -> always escalate. Check scripts print only when firstmate should wake.
-- `stale` with a terminal status or bare legacy captain-relevant line -> escalate.
-  Every other non-paused stale self-handles on first sight and records a persistence marker in both delivery styles, including when no status exists.
-  Nonterminal progress remains transient even when its prose contains a legacy free-text token or its seen-status marker already matches.
-  If the pane is still idle past `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a possible wedge.
-  This bounds wedge-detection latency to the threshold plus a tick: a delay, never a loss.
-  Healthy crewmates are autonomous and do not wait on firstmate mid-task.
-  Each escalation resets the persistence window instead of removing it, so an unchanged wedge re-surfaces repeatedly.
-  Its consecutive count reaches `FM_WEDGE_DEMAND_INSPECT_COUNT` (default 3) before adding `demand-deep-inspection`, and a resume, disappearance, or pause transition clears that count.
-- `heartbeat` -> self-handle. The daemon runs its own cheap bash fleet scan
-  every `FM_HEARTBEAT_SCAN_SECS` (default 300s) as the catch-all for a
-  captain-relevant status line the per-wake classifier might miss.
-- Unknown reason, or any uncertainty -> escalate fail-safe.
-
-Escalations are buffered and flushed as one single-line digest prefixed with the current
-operational prefix, carrying pre-read status summaries and a recommended action.
-Away mode keeps one `FM_ESCALATE_BATCH_SECS` window (default 90s; 0 = immediate) regardless of item urgency.
-Present mode is two-tier: an urgent item (`check:` output, `failed:`, `needs-decision:`, `blocked:`, `done:`/PR-ready, or a wedge alarm) flushes immediately, while a routine-only buffer (a possible-wedge stale escalation, a declared-pause recheck, or a catch-all scan hit) waits out the shorter `FM_ESCALATE_BATCH_SECS_PRESENT` window (default 30s).
-The single-line format makes the submission unambiguous across harnesses, and
-the operational prefix lets firstmate distinguish it from a real captain message.
+[`docs/alwayson-triage.md`](../../../docs/alwayson-triage.md#classification-and-delivery-policy) is the single owner of daemon wake classification, batching, pause, persistence, and catch-all policy.
+The `/afk` flag changes only delivery cadence and max-defer alerting, never first-sight wake decisions.
+When a marked escalation arrives, treat its distilled digest as pre-read evidence, follow the ordinary lifecycle in `AGENTS.md`, and do not arm a separate watcher.
 
 ## Injection hardening
 

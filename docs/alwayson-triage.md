@@ -38,11 +38,7 @@ Captain-approved 2026-07-22 ("if you can validate the worker directly then so
 can the daemon"), after 8 of 10 daemon escalations for one healthy worker in a
 single evening turned out to be false wedge alarms: an idle-LOOKING pane is not
 the same as an idle crew.
-Before `housekeeping`'s stale persistence recheck (`bin/fm-supervise-daemon.sh`)
-treats a still-idle pane as a possible wedge, it consults
-`crew_absorb_class` (`bin/fm-classify-lib.sh`), which in turn reads
-`bin/fm-crew-state.sh`'s one authoritative current-state line for two sources
-of positive evidence:
+Before `housekeeping`'s stale persistence recheck (`bin/fm-supervise-daemon.sh`) treats a still-idle pane as a possible wedge, it consults `crew_absorb_class` (`bin/fm-classify-lib.sh`), which in turn reads `bin/fm-crew-state.sh`'s one authoritative current-state line for two sources of positive evidence:
 
 1. **Run-step**: an actively-running no-mistakes validation attributed to the
    crew's own branch (`state: working · source: run-step`).
@@ -68,6 +64,21 @@ change.
 This document is the one policy owner; `bin/fm-classify-lib.sh` and
 `bin/fm-crew-state.sh` implement the predicate and its two sources.
 
+## Classification and delivery policy
+
+The daemon applies the same first-sight wake decisions in both delivery styles.
+A `signal` with a terminal captain verb (`done:`, `needs-decision:`, `blocked:`, or `failed:`) escalates.
+A nonterminal progress verb remains nonterminal even when its prose contains a legacy free-text token such as `PR ready`, `checks green`, `ready in branch`, or `merged`; only a bare legacy line with such a token escalates.
+Every other signal self-handles without a crew-state read, and vanished files are ignored.
+A `signal` or `stale` for a declared `paused:` external wait self-handles and tracks the pause rather than a wedge.
+If the pause remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping sends one awaiting-external recheck and resets the pause window.
+A `check` always escalates because check scripts print only when firstmate should wake.
+A `stale` with a terminal status or bare legacy captain-relevant line escalates.
+Every other non-paused stale self-handles on first sight and records a persistence marker, including when no status exists.
+If the pane is still idle past `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping applies the provably-working absorption above or escalates a possible wedge.
+A `heartbeat` self-handles, while the daemon's `FM_HEARTBEAT_SCAN_SECS` fleet scan remains the catch-all for captain-relevant status lines the per-wake classifier might miss.
+An unknown wake reason escalates.
+
 Urgent items (always flush immediately regardless of style): `check:` output
 (PR merges, X mentions), `failed:`, `needs-decision:`, `blocked:`, `done:`/PR-ready,
 and wedge alarms.
@@ -76,9 +87,7 @@ escalation, a declared-pause recheck, and catch-all scan hits.
 Terminal verbs remain captain-relevant, while a nonterminal progress verb
 cannot become terminal merely because its prose contains a legacy free-text
 token such as `merged`; bare legacy free-text lines remain compatible.
-In away mode, seen-status dedupe does not clear possible-wedge aging for
-nonterminal progress, so housekeeping still re-escalates an unchanged idle
-pane at the configured bound.
+In both delivery styles, seen-status dedupe does not clear possible-wedge aging for nonterminal progress, so housekeeping still re-escalates an unchanged idle pane at the configured bound.
 
 `/afk` and its return path (`bin/fm-afk-return.sh`) only flip the style flag
 via `bin/fm-daemon-launch.sh afk-enter` / `afk-exit` - neither call ever
