@@ -1,0 +1,24 @@
+=== Claude worker launch command (fm-spawn.sh launch template) ===
+BEFORE FIX (base): new test fails; the actual launch command carries no scrub of the child-session markers:
+
+not ok - no-profile claude launch did not use the canonical launch kind
+expected: env -u CURSOR_AGENT -u CURSOR_INVOKED_AS env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDECODE CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions "$('/tmp/fm-base-repro/bin/fm-operational-input.sh' encode launch-brief < '/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T//fm-spawn-dispatch-profile.bjmIXR/profile-off/home/data/profile-off-z1/brief.md')"
+actual:   env -u CURSOR_AGENT -u CURSOR_INVOKED_AS CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions "$('/tmp/fm-base-repro/bin/fm-operational-input.sh' encode launch-brief < '/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T//fm-spawn-dispatch-profile.bjmIXR/profile-off/home/data/profile-off-z1/brief.md')"
+
+AFTER FIX (target): full suite passes; the launch command now begins with env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDECODE:
+
+ok - claude launches clear inherited child-session markers regardless of the spawning process's own environment
+# all fm-spawn-dispatch-profile tests passed
+exit: 0
+
+=== Herdr backend server start (fm_backend_herdr_server_ensure) ===
+BEFORE FIX (base): the fake herdr binary records what env the server process received when started from a process carrying both markers:
+
+ok - fm_backend_herdr_container_ensure: surfaces the exact ambiguous-placement refusal instead of a generic failure
+not ok - server_ensure's own herdr server start must clear both inherited Claude child-session markers (missing: 'CLAUDE_CODE_CHILD_SESSION=<unset> CLAUDECODE=<unset>')
+--- output ---
+
+AFTER FIX (target): server process starts with both markers unset:
+
+ok - fm_backend_herdr_server_ensure: clears inherited Claude child-session markers on its own server-start command
+(full herdr suite on target: 182 ok, 0 failures)
