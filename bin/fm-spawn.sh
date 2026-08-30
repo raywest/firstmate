@@ -1233,9 +1233,11 @@ launch_template() {
     # the defense-in-depth backstop for any pane this flag cannot reach.
     # env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDECODE clears the markers Claude Code
     # stamps on its own process and that a multiplexer server started from inside a
-    # Claude session then hands down to every later pane (verified 2026-08-03, Claude
-    # Code 2.1.220): a worker inheriting either one treats itself as a nested child
-    # session and runs with transcripts off, so it writes no
+    # Claude session then hands down to every later pane (first observed 2026-08-03,
+    # Claude Code 2.1.220; reproduced and this fix verified 2026-08-30, Claude Code
+    # 2.1.251 - docs/verification/runtime-backends.md "Claude Code"): a worker
+    # inheriting either one treats itself as a nested child session and runs
+    # with transcripts off, so it writes no
     # ~/.claude/projects/<slug>/*.jsonl, the context tracker reads 0, and the session
     # cannot be resumed. Scrubbing here makes every Claude worker launch clean
     # regardless of what its server happened to inherit; bin/backends/herdr.sh and

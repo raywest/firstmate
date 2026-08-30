@@ -64,8 +64,9 @@ fm_backend_source tmux || fail "fm_backend_source tmux failed"
 # the server with its own (unscrubbed) environment. A server started from
 # inside a Claude Code session inherits CLAUDE_CODE_CHILD_SESSION and
 # CLAUDECODE, and every claude worker later launched under that server would
-# inherit them and run with transcripts off (verified 2026-08-03, Claude Code
-# 2.1.220).
+# inherit them and run with transcripts off (first observed 2026-08-03, Claude
+# Code 2.1.220; reproduced and this fix verified 2026-08-30, Claude Code
+# 2.1.251 - docs/verification/runtime-backends.md "Claude Code").
 CCS_TARGET="firstmate"
 CCS_READY=false
 TMUX= CLAUDE_CODE_CHILD_SESSION=1 CLAUDECODE=1 fm_backend_tmux_container_ensure >/dev/null \

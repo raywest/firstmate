@@ -503,7 +503,9 @@ test_container_ensure_refuses_an_ambiguous_home_label() {
 # fm_backend_herdr_cli's generic passthrough: a server started from inside a
 # Claude Code session inherits CLAUDE_CODE_CHILD_SESSION and CLAUDECODE, and
 # every claude worker later launched under that server would inherit them and
-# run with transcripts off (verified 2026-08-03, Claude Code 2.1.220). Models
+# run with transcripts off (first observed 2026-08-03, Claude Code 2.1.220;
+# reproduced on tmux and this fix verified 2026-08-30, Claude Code 2.1.251 -
+# docs/verification/runtime-backends.md "Claude Code"). Models
 # the real state transition (status false until "server" runs, then true)
 # instead of a fixed call count, since the real start is backgrounded.
 make_herdr_server_env_capture_fakebin() {  # <dir> -> echoes fakebin dir

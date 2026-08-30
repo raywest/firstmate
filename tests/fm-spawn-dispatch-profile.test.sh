@@ -155,8 +155,10 @@ test_non_cursor_launch_clears_inherited_cursor_markers() {
 # A multiplexer server started from inside a Claude Code session inherits
 # CLAUDE_CODE_CHILD_SESSION and CLAUDECODE, and every claude process later
 # launched under that server inherits them and runs with transcripts off
-# (verified 2026-08-03, Claude Code 2.1.220). The launch template scrubs both
-# regardless of what the spawning process itself carries.
+# (first observed 2026-08-03, Claude Code 2.1.220; reproduced and this fix
+# verified 2026-08-30, Claude Code 2.1.251 -
+# docs/verification/runtime-backends.md "Claude Code"). The launch template
+# scrubs both regardless of what the spawning process itself carries.
 test_claude_launch_clears_inherited_child_session_markers() {
   local rec id out status launch
   id=profile-claude-child-session-z1c
