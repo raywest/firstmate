@@ -66,18 +66,18 @@ fm_backend_source tmux || fail "fm_backend_source tmux failed"
 # CLAUDECODE, and every claude worker later launched under that server would
 # inherit them and run with transcripts off (verified 2026-08-03, Claude Code
 # 2.1.220).
-CCS_TARGET="firstmate:0"
+CCS_TARGET="firstmate"
 CCS_READY=false
-CLAUDE_CODE_CHILD_SESSION=1 CLAUDECODE=1 fm_backend_tmux_container_ensure >/dev/null \
+TMUX= CLAUDE_CODE_CHILD_SESSION=1 CLAUDECODE=1 fm_backend_tmux_container_ensure >/dev/null \
   || fail "fm_backend_tmux_container_ensure failed while Claude child-session markers were set"
 tmux has-session -t firstmate 2>/dev/null \
   || fail "fm_backend_tmux_container_ensure did not create the firstmate session"
 for _ in $(seq 1 100); do
   tmux send-keys -t "$CCS_TARGET" C-c
   # shellcheck disable=SC2016  # single quotes are deliberate: this expands in the pane's shell, not here.
-  tmux send-keys -t "$CCS_TARGET" -l 'printf "CCS=%s CC=%s\n" "${CLAUDE_CODE_CHILD_SESSION-<unset>}" "${CLAUDECODE-<unset>}"'
+  tmux send-keys -t "$CCS_TARGET" -l 'printf "ccsprobe-%s CCS=%s CC=%s\n" done "${CLAUDE_CODE_CHILD_SESSION-<unset>}" "${CLAUDECODE-<unset>}"'
   tmux send-keys -t "$CCS_TARGET" Enter
-  if wait_for_capture_text "$CCS_TARGET" "CCS=" 10; then
+  if wait_for_capture_text "$CCS_TARGET" "ccsprobe-done" 10; then
     CCS_READY=true
     break
   fi
