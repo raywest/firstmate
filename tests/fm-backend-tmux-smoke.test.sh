@@ -69,7 +69,7 @@ fm_backend_source tmux || fail "fm_backend_source tmux failed"
 # 2.1.251 - docs/verification/runtime-backends.md "Claude Code").
 CCS_TARGET="firstmate"
 CCS_READY=false
-TMUX= CLAUDE_CODE_CHILD_SESSION=1 CLAUDECODE=1 fm_backend_tmux_container_ensure >/dev/null \
+TMUX='' CLAUDE_CODE_CHILD_SESSION=1 CLAUDECODE=1 fm_backend_tmux_container_ensure >/dev/null \
   || fail "fm_backend_tmux_container_ensure failed while Claude child-session markers were set"
 tmux has-session -t firstmate 2>/dev/null \
   || fail "fm_backend_tmux_container_ensure did not create the firstmate session"
