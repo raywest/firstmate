@@ -203,8 +203,11 @@ Workspace and tab ids support verification and cleanup but are not inferred from
 ## Current transport behavior
 
 The adapter starts and polls a named server before workspace, tab, pane, or agent calls.
-Every Herdr invocation goes through `fm_backend_herdr_cli`, which sets the environment and passes an explicit trailing `--session <name>`.
+Every Herdr invocation except the server start below goes through `fm_backend_herdr_cli`, which sets the environment and passes an explicit trailing `--session <name>`.
 An environment variable alone is not reliable when another Herdr server is running.
+
+The server-starting call in `fm_backend_herdr_server_ensure` (`bin/backends/herdr.sh`) inlines the equivalent `herdr server` invocation directly, rather than going through `fm_backend_herdr_cli`, so it can scrub `CLAUDE_CODE_CHILD_SESSION` and `CLAUDECODE` with `env -u` before the server starts.
+A server started from inside a Claude Code session inherits both, and every Claude worker later launched under that server would otherwise run as a nested child session with transcripts off.
 
 Literal text and Enter are separate operations on `fm-send.sh`'s typed plane; ordinary local text steers instead use the durable steering inbox and send only its best-effort constant doorbell through this adapter.
 Spawn-time fixed commands may use Herdr's atomic run primitive.

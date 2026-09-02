@@ -1447,11 +1447,21 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
 # has-session || tmux new-session -d`. Verified: a bare socket CLI call does
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. Bounded poll for the server to report running.
+#
+# The server start bypasses fm_backend_herdr_cli to scrub CLAUDE_CODE_CHILD_SESSION
+# and CLAUDECODE with env -u on this exact command, so a server started from inside
+# a Claude session never hands either marker down to the panes it later launches
+# (first observed 2026-08-03, Claude Code 2.1.220; reproduced on tmux and this
+# fix verified 2026-08-30, Claude Code 2.1.251 -
+# docs/verification/runtime-backends.md "Claude Code": a pane inheriting either
+# one treats itself as a nested child session and runs with transcripts off).
+# Every other fm_backend_herdr_cli call is left untouched; only the server's
+# own environment needs scrubbing.
 fm_backend_herdr_server_ensure() {  # <session>
   local session=$1 running out i
   running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
   [ "$running" = "true" ] && return 0
-  ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
+  ( env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDECODE HERDR_SESSION="$session" herdr server --session "$session" >/dev/null 2>&1 & ) || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
     [ "$running" = "true" ] && return 0

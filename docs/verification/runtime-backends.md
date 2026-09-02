@@ -974,6 +974,52 @@ Refresh this harness-dependent proof before accepting a cursor upgrade:
 FM_HARNESS_LIVENESS_DRIFT=1 bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh
 ```
 
+## Claude Code
+
+### Child-session markers inherited by nested launches
+
+A herdr or tmux server started from inside a Claude Code session inherits `CLAUDE_CODE_CHILD_SESSION` and `CLAUDECODE`.
+Every `claude` process later launched under that server inherits them too, treats itself as a nested child session, and runs with transcripts off: it writes no `~/.claude/projects/<slug>/*.jsonl`, the context tracker reads 0, and the session cannot be resumed.
+First observed 2026-08-03 on Claude Code 2.1.220; reproduced and the fix (`bin/fm-spawn.sh`'s claude launch template, `bin/backends/tmux.sh`, `bin/backends/herdr.sh`) independently verified below on 2026-08-30 with Claude Code 2.1.251, tmux 3.7c, on macOS 26.6.2 arm64.
+
+**Base-commit reproduction** (pre-fix, commit 1260adc, tmux backend): `fm_backend_tmux_container_ensure` starts the tmux server for the "firstmate" session with whatever environment its own caller exported, and every later pane inherits that server's original environment regardless of what a subsequent `new-session` call carries.
+
+```sh
+git worktree add --detach "$base" 1260adc
+cd "$base" && PATH="$shim:$PATH"   # $shim redirects tmux to a private -L socket
+. bin/fm-backend.sh && fm_backend_source tmux
+CLAUDE_CODE_CHILD_SESSION=1 CLAUDECODE=1 fm_backend_tmux_container_ensure
+tmux send-keys -t firstmate:0 -l 'printf "REPRO_CCS=%s REPRO_CC=%s\n" "${CLAUDE_CODE_CHILD_SESSION-<unset>}" "${CLAUDECODE-<unset>}"'
+tmux send-keys -t firstmate:0 Enter
+tmux capture-pane -t firstmate:0 -p
+```
+
+Observed output:
+
+```text
+REPRO_CCS=1 REPRO_CC=1
+```
+
+Both markers reached the pane: a tmux server started under an inherited Claude Code session hands both down to every later pane, confirming the bug.
+
+**Fixed-spawn transcript proof** (post-fix, commit 1103b43): from a shell exporting `CLAUDE_CODE_CHILD_SESSION=1` and `CLAUDECODE=1`, a real Claude worker was spawned through `bin/fm-spawn.sh` on an isolated scratch `FM_HOME` and a separately named scratch tmux socket.
+
+```sh
+CLAUDE_CODE_CHILD_SESSION=1 CLAUDECODE=1 PATH="$shim:$PATH" FM_HOME="$home" \
+bin/fm-spawn.sh live-verify-1 "$proj" --scout --harness claude --backend tmux
+```
+
+The pane's launch command showed the new scrub applied ahead of the pre-existing generic wrap:
+
+```text
+env -u CURSOR_AGENT -u CURSOR_INVOKED_AS env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDECODE CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions ...
+```
+
+Claude 2.1.251 answered the launch brief normally and wrote a fresh 26-line session transcript to `~/.claude/projects/<slug>/e9d7ed7f-56df-4239-b204-38c18be866da.jsonl`, proving the worker ran with transcripts on despite both markers being set in the spawning shell's own environment.
+
+The herdr server-start scrub (`fm_backend_herdr_server_ensure`) is analogous by construction - it inlines the same `env -u` prefix ahead of the same herdr server invocation - but is pinned only at the unit level against a fake herdr CLI stub in `tests/fm-backend-herdr.test.sh`; no live herdr server reproduction was run for this record.
+Refresh this record after a Claude Code, tmux, or Herdr upgrade that touches launch or server-start environment handling; the portable regression is `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-backend-tmux-smoke.test.sh`, and `tests/fm-backend-herdr.test.sh`.
+
 ## Pi supervision branch
 
 The supervision-branch extension (`.pi/extensions/fm-branch-supervision.ts`, [docs/pi-supervision-branch.md](../pi-supervision-branch.md)) builds its persistent second session through the Pi SDK surface: `createAgentSession` (including its `model`, `modelRuntime`, and `thinkingLevel` options), `DefaultResourceLoader` with `extensionFactories`, `SessionManager`, `createBashToolDefinition` with a `spawnHook`, `sendCustomMessage`, the `before_provider_request` hook, the command context's model registry for picker candidates, a fresh `ModelRuntime` for isolated-branch resolution, and Pi's own `getSupportedThinkingLevels`/`clampThinkingLevel` plus its `getThinkingLevel` and `thinking_level_select` extension surface for effort.

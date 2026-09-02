@@ -499,6 +499,58 @@ test_container_ensure_refuses_an_ambiguous_home_label() {
 
 # --- container_ensure / create_task ------------------------------------------
 
+# fm_backend_herdr_server_ensure's own server-start call, not
+# fm_backend_herdr_cli's generic passthrough: a server started from inside a
+# Claude Code session inherits CLAUDE_CODE_CHILD_SESSION and CLAUDECODE, and
+# every claude worker later launched under that server would inherit them and
+# run with transcripts off (first observed 2026-08-03, Claude Code 2.1.220;
+# reproduced on tmux and this fix verified 2026-08-30, Claude Code 2.1.251 -
+# docs/verification/runtime-backends.md "Claude Code"). Models
+# the real state transition (status false until "server" runs, then true)
+# instead of a fixed call count, since the real start is backgrounded.
+make_herdr_server_env_capture_fakebin() {  # <dir> -> echoes fakebin dir
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+LOG="${FM_HERDR_LOG:?}"
+FLAG="${FM_HERDR_RUNNING_FLAG:?}"
+if [ "${1:-}" = server ]; then
+  printf 'CLAUDE_CODE_CHILD_SESSION=%s CLAUDECODE=%s\n' \
+    "${CLAUDE_CODE_CHILD_SESSION-<unset>}" "${CLAUDECODE-<unset>}" >> "$LOG"
+  touch "$FLAG"
+  exit 0
+fi
+if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then
+  if [ -f "$FLAG" ]; then
+    printf '{"server":{"running":true}}\n'
+  else
+    printf '{"server":{"running":false}}\n'
+  fi
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$fb/herdr"
+  printf '%s\n' "$fb"
+}
+
+test_server_ensure_clears_inherited_claude_child_session_markers() {
+  local dir log flag fb out status
+  dir="$TMP_ROOT/server-ensure-child-session"; mkdir -p "$dir"
+  log="$dir/log"; flag="$dir/running-flag"; : > "$log"
+  fb=$(make_herdr_server_env_capture_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RUNNING_FLAG="$flag" \
+    CLAUDE_CODE_CHILD_SESSION=1 CLAUDECODE=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" 2>&1 )
+  status=$?
+  expect_code 0 "$status" "server_ensure should succeed even when the launching process carries Claude child-session markers"$'\n'"$out"
+  assert_contains "$(cat "$log")" "CLAUDE_CODE_CHILD_SESSION=<unset> CLAUDECODE=<unset>" \
+    "server_ensure's own herdr server start must clear both inherited Claude child-session markers"
+  pass "fm_backend_herdr_server_ensure: clears inherited Claude child-session markers on its own server-start command"
+}
+
 test_container_ensure_starts_server_and_workspace() {
   local dir log resp fb out
   dir="$TMP_ROOT/container"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -4445,6 +4497,7 @@ test_workspace_ensure_prefers_the_launcher_over_the_first_label_match
 test_workspace_ensure_refuses_an_ambiguous_label_with_no_launcher
 test_workspace_ensure_other_home_ignores_the_launcher_identity
 test_container_ensure_refuses_an_ambiguous_home_label
+test_server_ensure_clears_inherited_claude_child_session_markers
 test_container_ensure_starts_server_and_workspace
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
