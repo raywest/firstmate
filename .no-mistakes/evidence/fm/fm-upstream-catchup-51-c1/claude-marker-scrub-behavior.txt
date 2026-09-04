@@ -1,0 +1,38 @@
+Claude child-session marker scrub: behavioral evidence
+
+Counterfactual: execute the upstream parent's tmux container-start function under
+the polluted Claude environment, with tmux replaced by an environment-capturing
+test double:
+
+  upstream-parent server env: CLAUDE_CODE_CHILD_SESSION=1 CLAUDECODE=1
+  firstmate
+
+This reproduces the pre-fix leak at upstream parent 8f7b79c.
+
+Target behavior, real tmux on the test's isolated private socket:
+
+  ok - real tmux: fm_backend_tmux_container_ensure's server start clears inherited Claude child-session markers
+
+Target behavior, isolated Herdr CLI simulation exercising the public server
+ensure function and its actual server-start transition:
+
+  ok - fm_backend_herdr_server_ensure: clears inherited Claude child-session markers on its own server-start command
+  ok - fm_backend_herdr_server_ensure: scrubs home and harness identity without disturbing unrelated environment or session routing
+
+Target behavior, fm-spawn executed through launch construction and fake pane
+delivery with both inherited markers set:
+
+  emitted claude launch: env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDECODE CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{"feedbackDrafts":"off"}' "$(.../bin/fm-operational-input.sh encode launch-brief < .../launch-brief.md)"
+
+  ok - no --model/--effort records defaults and types the claude launch instructions
+  ok - claude launches clear inherited child-session markers regardless of the spawning process's own environment
+  # all fm-spawn-dispatch-profile tests passed
+
+Focused commands completed successfully:
+  tests/fm-spawn-dispatch-profile.test.sh
+  tests/fm-backend-herdr.test.sh
+  tests/fm-backend-tmux-smoke.test.sh
+
+The live shared Herdr session was not touched; the task explicitly forbids that
+lifecycle interaction, and the Herdr path is covered by the isolated executable
+simulation above.

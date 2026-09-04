@@ -1,0 +1,28 @@
+Firstmate upstream catch-up: topology and scope evidence
+Target: 7e35570e9cb1dafca0be3f947871ee462426ed4a
+
+git show --no-patch --pretty=raw 2e1fda8767cba33d5978e88fa9567fb7d26b288b
+  parent b2cc06030fb7dd5045378da8086aa8b4fc4c83ae
+  parent 8f7b79c77c2198a71a01082215227a64500015e3
+
+git rev-list --count 1260adc..8f7b79c
+  51
+
+git merge-base --is-ancestor b2cc060... 7e35570... && echo fork-parent-absorbed=yes
+  fork-parent-absorbed=yes
+
+git merge-base --is-ancestor 8f7b79c... 7e35570... && echo upstream-parent-absorbed=yes
+  upstream-parent-absorbed=yes
+
+git diff --name-status 8f7b79c..7e35570
+  M bin/backends/herdr.sh
+  M bin/backends/tmux.sh
+  M bin/fm-spawn.sh
+  M docs/herdr-backend.md
+  M docs/tmux-backend.md
+  M docs/verification/runtime-backends.md
+  M tests/fm-backend-herdr.test.sh
+  M tests/fm-backend-tmux-smoke.test.sh
+  M tests/fm-spawn-dispatch-profile.test.sh
+
+Unresolved conflict-edge markers across tracked files: none.
