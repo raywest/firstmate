@@ -1299,7 +1299,7 @@ env -u CURSOR_AGENT -u CURSOR_INVOKED_AS env -u CLAUDE_CODE_CHILD_SESSION -u CLA
 
 Claude 2.1.251 answered the launch brief normally and wrote a fresh 26-line session transcript to `~/.claude/projects/<slug>/e9d7ed7f-56df-4239-b204-38c18be866da.jsonl`, proving the worker ran with transcripts on despite both markers being set in the spawning shell's own environment.
 
-The herdr server-start scrub (`fm_backend_herdr_server_ensure`) is analogous by construction - it inlines the same `env -u` prefix ahead of the same herdr server invocation - but is pinned only at the unit level against a fake herdr CLI stub in `tests/fm-backend-herdr.test.sh`; no live herdr server reproduction was run for this record.
+The herdr server-start scrub (`fm_backend_herdr_server_ensure`) is analogous by construction - its launch subshell unsets both markers before calling `fm_backend_herdr_cli` to start the server - but is pinned only at the unit level against a fake herdr CLI stub in `tests/fm-backend-herdr.test.sh`; no live herdr server reproduction was run for this record.
 Refresh this record after a Claude Code, tmux, or Herdr upgrade that touches launch or server-start environment handling; the portable regression is `tests/fm-spawn-dispatch-profile.test.sh`, `tests/fm-backend-tmux-smoke.test.sh`, and `tests/fm-backend-herdr.test.sh`.
 
 ## Pi supervision branch
