@@ -151,10 +151,15 @@ test_brief_assertion_precedes_branch() {
 # --- GUARD 1b: fm-spawn isolation abort -------------------------------------
 
 # Spawn isolation uses the shared spawn fakebin (pane path + window ops).
+# [settle_polls] [settle_interval] shrink the settle poll for a case that can
+# never produce an accepted candidate (a non-worktree or primary-checkout
+# pane never becomes valid no matter how many times it is read), matching the
+# override idiom in fm-spawn-worktree-settle.test.sh.
 run_spawn() {
-  local home=$1 id=$2 proj=$3 pane=$4 fakebin=$5
+  local home=$1 id=$2 proj=$3 pane=$4 fakebin=$5 settle_polls=${6:-} settle_interval=${7:-}
   fm_test_spawn_brief "$home" "$id" brief
-  fm_test_run_spawn "$home" "$pane" "$fakebin" \
+  FM_SPAWN_SETTLE_POLLS="$settle_polls" FM_SPAWN_SETTLE_POLL_INTERVAL="$settle_interval" \
+    fm_test_run_spawn "$home" "$pane" "$fakebin" \
     "$id" "$proj" codex --mode no-mistakes --yolo off
 }
 
@@ -168,16 +173,23 @@ test_spawn_isolation_abort() {
   git -C "$proj" worktree add -q --detach "$TMP_ROOT/spawn-wt" >/dev/null 2>&1
   mkdir -p "$TMP_ROOT/spawn-notgit" "$proj/sub"
 
-  # Abort: the pane resolves to a plain non-git directory (not a worktree at all).
-  out=$(run_spawn "$home" abort-notgit-dd4 "$proj" "$TMP_ROOT/spawn-notgit" "$fakebin"); status=$?
+  # Abort: the pane resolves to a plain non-git directory (not a worktree at
+  # all). It can never become an accepted candidate no matter how many times
+  # the settle poll reads it, so it now exhausts the poll and times out rather
+  # than ever reaching validate_spawn_worktree's isolation check - a stronger
+  # refusal (nothing was ever accepted) than the old one (something was
+  # accepted but failed isolation). Shrink the poll so the case stays fast.
+  out=$(run_spawn "$home" abort-notgit-dd4 "$proj" "$TMP_ROOT/spawn-notgit" "$fakebin" 3 0.05); status=$?
   expect_code 1 "$status" "spawn into a non-worktree dir should abort"
-  assert_contains "$out" "did not yield an isolated worktree" "non-worktree spawn lacked the isolation error"
+  assert_contains "$out" "never observed a settled worktree of the primary repo" "non-worktree spawn lacked the settle-timeout error"
   assert_absent "$home/state/abort-notgit-dd4.meta" "aborted spawn must not record meta"
 
   # Abort: the pane resolves INTO the primary checkout (a subdir of PROJ_ABS).
-  out=$(run_spawn "$home" abort-primary-ee5 "$proj" "$proj/sub" "$fakebin"); status=$?
+  # Same reasoning: a subdirectory of the primary is never its own toplevel,
+  # so the settle poll can never accept it either.
+  out=$(run_spawn "$home" abort-primary-ee5 "$proj" "$proj/sub" "$fakebin" 3 0.05); status=$?
   expect_code 1 "$status" "spawn landing inside the primary checkout should abort"
-  assert_contains "$out" "did not yield an isolated worktree" "primary-checkout spawn lacked the isolation error"
+  assert_contains "$out" "never observed a settled worktree of the primary repo" "primary-checkout spawn lacked the settle-timeout error"
 
   # Proceed: the pane resolves to a genuine, isolated worktree.
   out=$(run_spawn "$home" ok-isolated-ff6 "$proj" "$TMP_ROOT/spawn-wt" "$fakebin"); status=$?

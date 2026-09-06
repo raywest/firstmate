@@ -142,6 +142,17 @@
 #   configured host for a remote home. Skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
 #   git worktree root distinct from the primary project checkout.
+#   Inherited Git repository-selection overrides are cleared at script entry
+#   so discovery, validation, and refresh use the explicit project/worktree
+#   paths rather than a caller's repository, index, or object storage.
+#   Fresh Treehouse spawns additionally require two consecutive reads of the
+#   same physical worktree root sharing the primary's resolved git common dir.
+#   Invalid or empty reads clear the candidate; transient .git directories and
+#   unrelated checkouts are ignored until a valid worktree settles.
+#   The poll defaults to 60 attempts with one-second sleeps; test-only overrides
+#   FM_SPAWN_SETTLE_POLLS and FM_SPAWN_SETTLE_POLL_INTERVAL shorten that budget.
+#   Exhaustion reports that no settled worktree of the primary was observed,
+#   names the endpoint to inspect, and stops before publishing task metadata.
 #   Before a fresh ship or scout worker starts, its clean task worktree fetches
 #   origin, resolves the current remote default branch, and resets to its tip.
 #   An unreachable origin, unresolved default branch, or non-clean worktree
@@ -236,6 +247,10 @@
 #   pane export happens on the remote host (bin/fm-remote-secondmate-control.sh).
 #   Local spawns never pass it and resolve their own carrier exactly as before.
 set -eu
+
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_INDEX_FILE \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_NAMESPACE \
+  GIT_DISCOVERY_ACROSS_FILESYSTEM
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -1964,6 +1979,32 @@ real_path_or_raw() {  # <path>
   fi
 }
 
+# <path>'s resolved git-common-dir, or empty. --git-common-dir can answer with
+# a path relative to <path>, so it is resolved from inside <path> with CDPATH
+# cleared to prevent redirected resolution or extra stdout from cd.
+# This is the same idiom bin/fm-claude-trust.sh uses for its own,
+# separately-run copy of this check; that script is an isolated subprocess
+# with its own git-env sanitation, so it keeps its own copy rather than
+# sourcing this one.
+spawn_git_common_dir_real() {  # <path>
+  local path=$1 common
+  common=$(git -C "$path" rev-parse --git-common-dir 2>/dev/null) || return 1
+  (unset CDPATH; cd -P -- "$path" 2>/dev/null && cd -P -- "$common" 2>/dev/null && pwd -P)
+}
+PROJ_COMMON_DIR_REAL=$(spawn_git_common_dir_real "$PROJ_ABS_REAL") || PROJ_COMMON_DIR_REAL=
+
+# Repository identity must be checked during discovery: the later
+# validate_spawn_worktree guard alone also accepts unrelated checkout roots.
+spawn_candidate_is_primary_worktree() {  # <resolved-path>
+  local path=$1 top top_real common
+  [ -n "$PROJ_COMMON_DIR_REAL" ] || return 1
+  top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 1
+  top_real=$(real_path_or_raw "$top")
+  [ "$top_real" = "$path" ] || return 1
+  common=$(spawn_git_common_dir_real "$path") || return 1
+  [ "$common" = "$PROJ_COMMON_DIR_REAL" ]
+}
+
 # Session-provider container-ensure + task creation. tmux stays exactly as P1
 # left it (same session-name / new-window sequence, see bin/backends/tmux.sh);
 # a herdr spawn goes through the version-gated, workspace-per-HOME,
@@ -2571,38 +2612,35 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # prefix would otherwise make the pane's OS-level cwd read differ from
   # PROJ_ABS on the very first poll, before the pane has actually moved.
   #
-  # A single read that already differs from PROJ_ABS_REAL is not proof the pane
-  # settled there: on some tmux/WSL setups a brand-new window's pane_current_path
-  # transiently reports an unrelated stale path (seen live as another real git
-  # checkout entirely) before the shell catches up with treehouse get's cd. That
-  # stale path still passes the PROJ_ABS_REAL comparison and validate_spawn_worktree
-  # below (it resolves to a real, distinct worktree top-level too), so accepting it
-  # on one read alone silently records the wrong worktree= in state/<id>.meta. Require
-  # two consecutive reads to agree on the same non-project path before accepting it;
-  # a mismatch just becomes the new candidate rather than resetting the wait, so a
-  # pane that is already settled by the first real read only costs the one existing
-  # inter-poll sleep as confirmation, not a whole extra cycle on top.
+  # A transient subprocess cwd can persist across multiple reads, so waiting
+  # longer cannot replace the header's repository-identity acceptance check.
+  # A changed valid candidate reuses the next inter-poll sleep for confirmation.
+  # tests/fm-spawn-worktree-settle.test.sh covers discovery and timeout safety.
+  settle_polls=${FM_SPAWN_SETTLE_POLLS:-60}
+  settle_interval=${FM_SPAWN_SETTLE_POLL_INTERVAL:-1}
   candidate=""
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 "$settle_polls"); do
     p=$(spawn_current_path "$WT_TARGET" || true)
+    p_real=""
     if [ -n "$p" ]; then
       p_real=$(real_path_or_raw "$p")
-      if [ "$p_real" != "$PROJ_ABS_REAL" ]; then
-        if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
-          WT="$p"
-          break
-        fi
-        candidate="$p_real"
-      else
-        candidate=""
+      if [ "$p_real" = "$PROJ_ABS_REAL" ] || ! spawn_candidate_is_primary_worktree "$p_real"; then
+        p_real=""
       fi
+    fi
+    if [ -n "$p_real" ]; then
+      if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
+        WT="$p"
+        break
+      fi
+      candidate="$p_real"
     else
       candidate=""
     fi
-    sleep 1
+    sleep "$settle_interval"
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
+    echo "error: treehouse get never observed a settled worktree of the primary repo (polled $settle_polls time(s) at ${settle_interval}s intervals); inspect window $T" >&2
     exit 1
   fi
 
