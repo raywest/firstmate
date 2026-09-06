@@ -1,0 +1,10 @@
+# Counterfactual: original spawn at cff093e448a9462f0223b0b7fff2af7d571eef9d, current repeated-.git behavioral regression
+
+# spawn scenario: settle-live-incident-z3
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.mh58Zh/settle-live-incident/project/.git for 2 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.mh58Zh/settle-live-incident/wt
+# command: fm-spawn.sh settle-live-incident-z3 /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.mh58Zh/settle-live-incident/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.mh58Zh/settle-live-incident/home/data/settle-live-incident-z3/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+error: treehouse get did not yield an isolated worktree (resolved '/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.mh58Zh/settle-live-incident/project/.git'; worktree root 'none'; primary '/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.mh58Zh/settle-live-incident/project'); refusing to launch to avoid tangling the primary checkout. Inspect target firstmate:fm-settle-live-incident-z3
+# exit=1; observed cwd reads=2
+# persisted task metadata: absent
+not ok - spawn should succeed past the repeated .git-directory read: expected exit 0, got 1

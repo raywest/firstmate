@@ -1,0 +1,199 @@
+
+# spawn scenario: settle-single-stale-z1
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-single/stale-other-checkout for 1 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-single/wt
+# command: fm-spawn.sh settle-single-stale-z1 /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-single/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-single/home/data/settle-single-stale-z1/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned settle-single-stale-z1 harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-settle-single-stale-z1 worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-single/wt
+# exit=0; observed cwd reads=3
+# persisted task metadata:
+window=firstmate:fm-settle-single-stale-z1
+endpoint_task_id=settle-single-stale-z1
+worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-single/wt
+project=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-single/project
+harness=codex
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-settle-single-stale-z1
+model=default
+effort=default
+spawn_gen=s1788709830.54200.15016
+ok - a single transient stale pane_current_path read is not accepted as the worktree
+
+# spawn scenario: settle-already-settled-z2
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-already-settled/stale-other-checkout for 0 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-already-settled/wt
+# command: fm-spawn.sh settle-already-settled-z2 /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-already-settled/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-already-settled/home/data/settle-already-settled-z2/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned settle-already-settled-z2 harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-settle-already-settled-z2 worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-already-settled/wt
+# exit=0; observed cwd reads=2
+# persisted task metadata:
+window=firstmate:fm-settle-already-settled-z2
+endpoint_task_id=settle-already-settled-z2
+worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-already-settled/wt
+project=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-already-settled/project
+harness=codex
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-settle-already-settled-z2
+model=default
+effort=default
+spawn_gen=s1788709834.54899.7167
+ok - an already-settled pane confirms via the existing inter-poll sleep, not an extra full cycle
+
+# spawn scenario: settle-live-incident-z3
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-live-incident/project/.git for 2 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-live-incident/wt
+# command: fm-spawn.sh settle-live-incident-z3 /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-live-incident/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-live-incident/home/data/settle-live-incident-z3/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned settle-live-incident-z3 harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-settle-live-incident-z3 worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-live-incident/wt
+# exit=0; observed cwd reads=4
+# persisted task metadata:
+window=firstmate:fm-settle-live-incident-z3
+endpoint_task_id=settle-live-incident-z3
+worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-live-incident/wt
+project=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-live-incident/project
+harness=codex
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-settle-live-incident-z3
+model=default
+effort=default
+spawn_gen=s1788709839.55559.29845
+ok - a repeated pane read of the primary project's own .git directory is not accepted as the worktree
+
+# spawn scenario: settle-near-miss-z4
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-near-miss/stale-other-checkout for 2 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-near-miss/wt
+# command: fm-spawn.sh settle-near-miss-z4 /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-near-miss/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-near-miss/home/data/settle-near-miss-z4/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned settle-near-miss-z4 harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-settle-near-miss-z4 worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-near-miss/wt
+# exit=0; observed cwd reads=4
+# persisted task metadata:
+window=firstmate:fm-settle-near-miss-z4
+endpoint_task_id=settle-near-miss-z4
+worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-near-miss/wt
+project=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-near-miss/project
+harness=codex
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-settle-near-miss-z4
+model=default
+effort=default
+spawn_gen=s1788709845.56310.29691
+ok - a repeated pane read of a real, separate repo's worktree is not accepted as the task's worktree
+
+# spawn scenario: settle-never-z5
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-never/project/.git for 999999 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-never/wt
+# command: fm-spawn.sh settle-never-z5 /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-never/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-never/home/data/settle-never-z5/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+error: treehouse get never observed a settled worktree of the primary repo (polled 3 time(s) at 0.05s intervals); inspect window firstmate:fm-settle-never-z5
+# exit=1; observed cwd reads=3
+# persisted task metadata: absent
+ok - a pane that never settles into a primary-repo worktree times out with its own distinct message
+
+# spawn scenario: settle-cdpath-dot
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-dot/project/.git for 2 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-dot/wt
+# command: fm-spawn.sh settle-cdpath-dot /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-dot/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-dot/home/data/settle-cdpath-dot/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned settle-cdpath-dot harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-settle-cdpath-dot worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-dot/wt
+# exit=0; observed cwd reads=4
+# persisted task metadata:
+window=firstmate:fm-settle-cdpath-dot
+endpoint_task_id=settle-cdpath-dot
+worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-dot/wt
+project=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-dot/project
+harness=codex
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-settle-cdpath-dot
+model=default
+effort=default
+spawn_gen=s1788709848.58930.10283
+ok - inherited CDPATH=dot does not affect worktree detection
+
+# spawn scenario: settle-cdpath-shadow
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-shadow/project/.git for 2 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-shadow/wt
+# command: fm-spawn.sh settle-cdpath-shadow /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-shadow/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-shadow/home/data/settle-cdpath-shadow/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned settle-cdpath-shadow harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-settle-cdpath-shadow worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-shadow/wt
+# exit=0; observed cwd reads=4
+# persisted task metadata:
+window=firstmate:fm-settle-cdpath-shadow
+endpoint_task_id=settle-cdpath-shadow
+worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-shadow/wt
+project=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-cdpath-shadow/project
+harness=codex
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-settle-cdpath-shadow
+model=default
+effort=default
+spawn_gen=s1788709851.60284.20569
+ok - inherited CDPATH=shadow does not affect worktree detection
+
+# spawn scenario: settle-git-common-dir
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-common-dir/stale-other-checkout for 2 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-common-dir/wt
+# command: fm-spawn.sh settle-git-common-dir /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-common-dir/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-common-dir/home/data/settle-git-common-dir/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned settle-git-common-dir harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-settle-git-common-dir worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-common-dir/wt
+# exit=0; observed cwd reads=4
+# persisted task metadata:
+window=firstmate:fm-settle-git-common-dir
+endpoint_task_id=settle-git-common-dir
+worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-common-dir/wt
+project=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-common-dir/project
+harness=codex
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-settle-git-common-dir
+model=default
+effort=default
+spawn_gen=s1788709854.61472.20976
+ok - inherited Git common-dir overrides do not redirect discovery, validation, or refresh
+
+# spawn scenario: settle-git-dir-work-tree
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-dir-work-tree/stale-other-checkout for 2 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-dir-work-tree/wt
+# command: fm-spawn.sh settle-git-dir-work-tree /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-dir-work-tree/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-dir-work-tree/home/data/settle-git-dir-work-tree/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned settle-git-dir-work-tree harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-settle-git-dir-work-tree worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-dir-work-tree/wt
+# exit=0; observed cwd reads=4
+# persisted task metadata:
+window=firstmate:fm-settle-git-dir-work-tree
+endpoint_task_id=settle-git-dir-work-tree
+worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-dir-work-tree/wt
+project=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-dir-work-tree/project
+harness=codex
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-settle-git-dir-work-tree
+model=default
+effort=default
+spawn_gen=s1788709856.62194.22213
+ok - inherited Git dir-work-tree overrides do not redirect discovery, validation, or refresh
+
+# spawn scenario: settle-git-index-objects
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-index-objects/stale-other-checkout for 2 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-index-objects/wt
+# command: fm-spawn.sh settle-git-index-objects /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-index-objects/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-index-objects/home/data/settle-git-index-objects/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned settle-git-index-objects harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-settle-git-index-objects worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-index-objects/wt
+# exit=0; observed cwd reads=4
+# persisted task metadata:
+window=firstmate:fm-settle-git-index-objects
+endpoint_task_id=settle-git-index-objects
+worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-index-objects/wt
+project=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VNQ9C27CJJZQ5A1K7DCEMN/.test-phase-tmp/fm-spawn-worktree-settle.JfdOPB/settle-git-index-objects/project
+harness=codex
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-settle-git-index-objects
+model=default
+effort=default
+spawn_gen=s1788709859.63671.6459
+ok - inherited Git index-objects overrides do not redirect discovery, validation, or refresh
+# all fm-spawn-worktree-settle tests passed
