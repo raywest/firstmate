@@ -150,6 +150,23 @@ run_settle_spawn() {
     "$SPAWN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off 2>&1
 }
 
+# Opt-in evidence records the real CLI response and persisted task contract.
+# Terminal cwd reads are scripted; repository discovery and refresh use Git.
+settle_evidence() {  # <id> <status> <output>
+  [ "${FM_TEST_EVIDENCE:-0}" = 1 ] || return 0
+  printf '\n# spawn scenario: %s\n' "$1"
+  printf '# scripted cwd: %s for %s reads, then %s\n' "$STALE_DIR" "$STALE_READS" "$WT_DIR"
+  printf '# command: fm-spawn.sh %s %s --mode no-mistakes --yolo off\n' "$1" "$PROJ_DIR"
+  printf '%s\n' "$3"
+  printf '# exit=%s; observed cwd reads=%s\n' "$2" "$(cat "$COUNTFILE")"
+  if [ -f "$HOME_DIR/state/$1.meta" ]; then
+    printf '# persisted task metadata:\n'
+    cat "$HOME_DIR/state/$1.meta"
+  else
+    printf '# persisted task metadata: absent\n'
+  fi
+}
+
 # A single stale first read (the exact incident) must not be accepted: the
 # loop should keep polling until two consecutive reads agree, landing on the
 # real settled worktree instead.
@@ -161,6 +178,7 @@ test_single_stale_first_read_is_not_accepted() {
 
   out=$(run_settle_spawn "$id")
   status=$?
+  settle_evidence "$id" "$status" "$out"
   expect_code 0 "$status" "spawn should succeed once the pane settles"
   assert_contains "$out" "spawned $id" "spawn did not report success"
   assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
@@ -182,6 +200,7 @@ test_already_settled_pane_costs_one_confirm_sleep() {
   start=$(date +%s)
   out=$(run_settle_spawn "$id")
   status=$?
+  settle_evidence "$id" "$status" "$out"
   end=$(date +%s)
   elapsed=$((end - start))
   expect_code 0 "$status" "spawn should succeed when the pane is already settled"
@@ -206,6 +225,7 @@ test_repeated_project_dotgit_is_not_accepted() {
 
   out=$(run_settle_spawn "$id")
   status=$?
+  settle_evidence "$id" "$status" "$out"
   expect_code 0 "$status" "spawn should succeed past the repeated .git-directory read"
   assert_contains "$out" "spawned $id" "spawn did not report success"
   assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
@@ -231,6 +251,7 @@ test_repeated_separate_repo_is_not_accepted() {
 
   out=$(run_settle_spawn "$id")
   status=$?
+  settle_evidence "$id" "$status" "$out"
   expect_code 0 "$status" "spawn should succeed past the repeated separate-repo read"
   assert_contains "$out" "spawned $id" "spawn did not report success"
   assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
@@ -257,6 +278,7 @@ test_never_settling_pane_times_out_with_distinct_message() {
 
   out=$(run_settle_spawn "$id" 3 0.05)
   status=$?
+  settle_evidence "$id" "$status" "$out"
   expect_code 1 "$status" "spawn should fail when the pane never settles into a worktree of the primary"
   assert_contains "$out" "never observed a settled worktree" \
     "timeout error did not use the never-observed-a-worktree wording"
@@ -281,6 +303,7 @@ test_inherited_cdpath_does_not_affect_worktree_detection() {
 
     out=$(export CDPATH="$cdpath"; run_settle_spawn "$id" 4 0.05)
     status=$?
+    settle_evidence "$id" "$status" "$out"
     expect_code 0 "$status" "spawn should succeed with inherited CDPATH=$cdpath"
     assert_contains "$out" "spawned $id" "spawn did not report success"
     assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
@@ -313,6 +336,7 @@ test_inherited_git_overrides_do_not_redirect_spawn() {
       run_settle_spawn "$id" 4 0.05
     )
     status=$?
+    settle_evidence "$id" "$status" "$out"
     expect_code 0 "$status" "spawn should succeed with inherited Git $variant overrides"
     assert_contains "$out" "spawned $id" "spawn did not report success"
     assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \

@@ -142,6 +142,9 @@
 #   configured host for a remote home. Skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
 #   git worktree root distinct from the primary project checkout.
+#   Inherited Git repository-selection overrides are cleared at script entry
+#   so discovery, validation, and refresh use the explicit project/worktree
+#   paths rather than a caller's repository, index, or object storage.
 #   Fresh Treehouse spawns additionally require two consecutive reads of the
 #   same physical worktree root sharing the primary's resolved git common dir.
 #   Invalid or empty reads clear the candidate; transient .git directories and
