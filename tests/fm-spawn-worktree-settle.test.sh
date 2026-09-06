@@ -267,10 +267,34 @@ test_never_settling_pane_times_out_with_distinct_message() {
   pass "a pane that never settles into a primary-repo worktree times out with its own distinct message"
 }
 
+test_inherited_cdpath_does_not_affect_worktree_detection() {
+  local variant cdpath rec id out status
+  mkdir -p "$TMP_ROOT/cdpath-shadow/.git"
+  for variant in dot shadow; do
+    case "$variant" in
+      dot) cdpath=. ;;
+      shadow) cdpath="$TMP_ROOT/cdpath-shadow" ;;
+    esac
+    id="settle-cdpath-$variant"
+    rec=$(make_settle_case "$id" "$id" 2 project-dotgit)
+    read_settle_record "$rec"
+
+    out=$(export CDPATH="$cdpath"; run_settle_spawn "$id" 4 0.05)
+    status=$?
+    expect_code 0 "$status" "spawn should succeed with inherited CDPATH=$cdpath"
+    assert_contains "$out" "spawned $id" "spawn did not report success"
+    assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
+      "meta did not record the settled worktree with inherited CDPATH"
+    [ "$(cat "$COUNTFILE")" -eq 4 ] || fail "spawn did not reject the transient path and confirm the real worktree"
+    pass "inherited CDPATH=$variant does not affect worktree detection"
+  done
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_sleep
 test_repeated_project_dotgit_is_not_accepted
 test_repeated_separate_repo_is_not_accepted
 test_never_settling_pane_times_out_with_distinct_message
+test_inherited_cdpath_does_not_affect_worktree_detection
 
 echo "# all fm-spawn-worktree-settle tests passed"

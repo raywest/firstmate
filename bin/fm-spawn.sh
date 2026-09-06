@@ -1973,7 +1973,7 @@ real_path_or_raw() {  # <path>
 spawn_git_common_dir_real() {  # <path>
   local path=$1 common
   common=$(git -C "$path" rev-parse --git-common-dir 2>/dev/null) || return 1
-  (cd -P -- "$path" 2>/dev/null && cd -P -- "$common" 2>/dev/null && pwd -P)
+  (unset CDPATH; cd -P -- "$path" 2>/dev/null && cd -P -- "$common" 2>/dev/null && pwd -P)
 }
 PROJ_COMMON_DIR_REAL=$(spawn_git_common_dir_real "$PROJ_ABS_REAL") || PROJ_COMMON_DIR_REAL=
 
