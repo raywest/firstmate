@@ -290,11 +290,49 @@ test_inherited_cdpath_does_not_affect_worktree_detection() {
   done
 }
 
+test_inherited_git_overrides_do_not_redirect_spawn() {
+  local variant rec id out status primary_head stale_head
+  for variant in common-dir dir-work-tree index-objects; do
+    id="settle-git-$variant"
+    rec=$(make_settle_case "$id" "$id" 2 separate-repo)
+    read_settle_record "$rec"
+    primary_head=$(git -C "$PROJ_DIR" rev-parse HEAD)
+    stale_head=$(git -C "$STALE_DIR" rev-parse HEAD)
+
+    out=$(
+      case "$variant" in
+        (common-dir) export GIT_COMMON_DIR="$PROJ_DIR/.git" ;;
+        (dir-work-tree)
+          export GIT_DIR="$STALE_DIR/.git" GIT_WORK_TREE="$STALE_DIR"
+          ;;
+        (index-objects)
+          export GIT_INDEX_FILE="$STALE_DIR/.git/index"
+          export GIT_OBJECT_DIRECTORY="$STALE_DIR/.git/objects"
+          ;;
+      esac
+      run_settle_spawn "$id" 4 0.05
+    )
+    status=$?
+    expect_code 0 "$status" "spawn should succeed with inherited Git $variant overrides"
+    assert_contains "$out" "spawned $id" "spawn did not report success"
+    assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
+      "meta did not record the primary repo's settled worktree"
+    [ "$(cat "$COUNTFILE")" -eq 4 ] || fail "spawn accepted the unrelated checkout before the real worktree settled"
+    [ "$(git -C "$PROJ_DIR" rev-parse HEAD)" = "$primary_head" ] || fail "spawn changed the primary checkout's HEAD"
+    [ "$(git -C "$STALE_DIR" rev-parse HEAD)" = "$stale_head" ] || fail "spawn changed the unrelated checkout's HEAD"
+    [ -z "$(git -C "$PROJ_DIR" status --porcelain)" ] || fail "spawn changed the primary checkout's files or index"
+    [ -z "$(git -C "$STALE_DIR" status --porcelain)" ] || fail "spawn changed the unrelated checkout's files or index"
+    assert_absent "$STALE_DIR/.git/FETCH_HEAD" "spawn refreshed the unrelated checkout"
+    pass "inherited Git $variant overrides do not redirect discovery, validation, or refresh"
+  done
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_sleep
 test_repeated_project_dotgit_is_not_accepted
 test_repeated_separate_repo_is_not_accepted
 test_never_settling_pane_times_out_with_distinct_message
 test_inherited_cdpath_does_not_affect_worktree_detection
+test_inherited_git_overrides_do_not_redirect_spawn
 
 echo "# all fm-spawn-worktree-settle tests passed"

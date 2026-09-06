@@ -245,6 +245,10 @@
 #   Local spawns never pass it and resolve their own carrier exactly as before.
 set -eu
 
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_INDEX_FILE \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_NAMESPACE \
+  GIT_DISCOVERY_ACROSS_FILESYSTEM
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
