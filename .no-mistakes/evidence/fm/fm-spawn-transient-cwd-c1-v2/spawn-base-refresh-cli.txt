@@ -1,0 +1,23 @@
+Target: 4222d92d1db738afc675985bb451e381339165f5.
+Scope: real fm-spawn CLI, Git fetch, refresh, state, and refusal paths; terminal and worker launch are stubbed.
+
+# observed spawn: spawned pool-current-base-r1 harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-pool-current-base-r1 worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-pool-base-freshen.x0faAr/current-base/pool
+# observed base: HEAD=3ca290405240ba4d2780bf5bec29a6a0dab851dd origin/main=3ca290405240ba4d2780bf5bec29a6a0dab851dd advanced-main=must survive a newly spawned branch
+ok - a stale pooled worktree refreshes to current origin/main before a crew branch is created
+ok - a stale pooled worktree resolves and refreshes a non-main default branch
+# observed direct-pr spawn: spawned pool-direct-pr-r3 harness=codex kind=ship mode=direct-PR yolo=off window=firstmate:fm-pool-direct-pr-r3 worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-pool-base-freshen.x0faAr/direct-pr/pool
+# observed scout spawn: spawned pool-scout-r3 harness=codex kind=scout window=firstmate:fm-pool-scout-r3 worktree=/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-pool-base-freshen.x0faAr/scout/pool
+ok - direct-PR ships and scouts both refresh stale pooled worktrees before launch
+# observed dirty refusal: error: pooled worktree '/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-pool-base-freshen.x0faAr/dirty-refusal/pool' is not clean; refusing to discard uncommitted work while refreshing its base; preserved=keep this local work
+ok - a dirty pooled worktree is refused without discarding its local work
+# observed unresolved-default refusal: error: could not resolve origin's current default branch for pooled worktree '/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-pool-base-freshen.x0faAr/unresolved-default/pool'; refusing to launch from a potentially stale base
+ok - an unresolved remote default branch refuses the pooled worktree
+# observed unreachable-origin refusal: error: could not fetch origin for pooled worktree '/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-pool-base-freshen.x0faAr/unreachable-origin/pool'; refusing to launch from a potentially stale base
+ok - an unreachable origin refuses a potentially stale pooled worktree
+# observed stale-pin refusal: error: submodule 'ui' is checked out at 7379e05b01e9c403285a98fc7afc61d3289e57cd, but this base records 1ea32ac526258d5064cb74e617edbcd6ab50c72c
+ok - two consecutive spawns across a moved submodule pin end in a refusal naming both pins and no remedy
+ok - an unpushed submodule commit keeps the uncommitted-work refusal and survives it
+ok - work inside a submodule is still refused as uncommitted work, not called stale
+ok - a stale pin carrying real work is refused conservatively, never called stale
+ok - a stale pin beside other dirt yields the conservative refusal alone, with no stale-pin line
+# all fm-spawn-pool-base-freshen tests passed

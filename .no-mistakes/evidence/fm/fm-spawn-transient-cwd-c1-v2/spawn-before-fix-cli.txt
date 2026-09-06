@@ -1,0 +1,13 @@
+Counterfactual: bin/fm-spawn.sh from cff093e448a9462f0223b0b7fff2af7d571eef9d executed from a temporary sibling path with current test helpers.
+Selector: test_repeated_project_dotgit_is_not_accepted.
+Expected regression failure: exit 1 after two repeated .git cwd reads. The same scenario passes against the target (see spawn-settle-cli.txt). Temporary script copies removed after verification.
+
+
+# spawn scenario: settle-live-incident-z3
+# scripted cwd: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-worktree-settle.4n8DIN/settle-live-incident/project/.git for 2 reads, then /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-worktree-settle.4n8DIN/settle-live-incident/wt
+# command: fm-spawn.sh settle-live-incident-z3 /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-worktree-settle.4n8DIN/settle-live-incident/project --mode no-mistakes --yolo off
+warning: /Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-worktree-settle.4n8DIN/settle-live-incident/home/data/settle-live-incident-z3/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+error: treehouse get did not yield an isolated worktree (resolved '/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-worktree-settle.4n8DIN/settle-live-incident/project/.git'; worktree root 'none'; primary '/Users/raywest/.no-mistakes/worktrees/bc9324a69188/01M1VK284NSFFMXH5Y9RVS3ZW8/.test-phase-tmp/fm-spawn-worktree-settle.4n8DIN/settle-live-incident/project'); refusing to launch to avoid tangling the primary checkout. Inspect target firstmate:fm-settle-live-incident-z3
+# exit=1; observed cwd reads=2
+# persisted task metadata: absent
+not ok - spawn should succeed past the repeated .git-directory read: expected exit 0, got 1
