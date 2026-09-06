@@ -97,7 +97,16 @@ make_settle_case() {
   fm_git_worktree "$proj" "$wt" "wt-$name"
   case "$stale_kind" in
     project-dotgit) stale="$proj/.git" ;;
-    separate-repo) stale="$case_dir/stale-other-checkout"; fm_git_init_commit "$stale" ;;
+    separate-repo)
+      stale="$case_dir/stale-other-checkout"
+      fm_git_init_commit "$stale"
+      # A reachable origin so a pre-fix acceptance of this path runs all the
+      # way through freshen_spawn_worktree_base instead of dying early on
+      # "could not fetch origin" - the fixture must fail on the assertion the
+      # near-miss case exists to pin (a real-but-wrong repo recorded as the
+      # worktree), not on an unrelated missing-origin error.
+      fm_git_add_origin "$stale" "$stale.origin.git"
+      ;;
     *) echo "make_settle_case: unknown stale_kind '$stale_kind'" >&2; return 1 ;;
   esac
   mkdir -p "$home/data/$id"
