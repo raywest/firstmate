@@ -1964,6 +1964,36 @@ real_path_or_raw() {  # <path>
   fi
 }
 
+# <path>'s resolved git-common-dir, or empty. --git-common-dir can answer with
+# a path relative to <path>, so it is resolved from inside <path> rather than
+# joined here (the same idiom bin/fm-claude-trust.sh uses for its own,
+# separately-run copy of this check; that script is an isolated subprocess
+# with its own git-env sanitation, so it keeps its own copy rather than
+# sourcing this one).
+spawn_git_common_dir_real() {  # <path>
+  local path=$1 common
+  common=$(git -C "$path" rev-parse --git-common-dir 2>/dev/null) || return 1
+  (cd -P -- "$path" 2>/dev/null && cd -P -- "$common" 2>/dev/null && pwd -P)
+}
+PROJ_COMMON_DIR_REAL=$(spawn_git_common_dir_real "$PROJ_ABS_REAL") || PROJ_COMMON_DIR_REAL=
+
+# True (exit 0) when <path> is a worktree root of the SAME repository as
+# PROJ_ABS_REAL, the positive test the worktree-settle poll below needs.
+# validate_spawn_worktree deliberately does not check this - an independent
+# clone's worktree passes its "is a real, distinct worktree root" test just as
+# well as a genuine worktree of the primary does - so a poll that only adds
+# "was seen on two consecutive reads" can still latch onto a stale path that
+# is a real worktree of some OTHER repo and record the wrong worktree=.
+spawn_candidate_is_primary_worktree() {  # <resolved-path>
+  local path=$1 top top_real common
+  [ -n "$PROJ_COMMON_DIR_REAL" ] || return 1
+  top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 1
+  top_real=$(real_path_or_raw "$top")
+  [ "$top_real" = "$path" ] || return 1
+  common=$(spawn_git_common_dir_real "$path") || return 1
+  [ "$common" = "$PROJ_COMMON_DIR_REAL" ]
+}
+
 # Session-provider container-ensure + task creation. tmux stays exactly as P1
 # left it (same session-name / new-window sequence, see bin/backends/tmux.sh);
 # a herdr spawn goes through the version-gated, workspace-per-HOME,
@@ -2575,34 +2605,53 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # settled there: on some tmux/WSL setups a brand-new window's pane_current_path
   # transiently reports an unrelated stale path (seen live as another real git
   # checkout entirely) before the shell catches up with treehouse get's cd. That
-  # stale path still passes the PROJ_ABS_REAL comparison and validate_spawn_worktree
-  # below (it resolves to a real, distinct worktree top-level too), so accepting it
-  # on one read alone silently records the wrong worktree= in state/<id>.meta. Require
+  # stale path still passes the PROJ_ABS_REAL comparison, so accepting it on one
+  # read alone silently records the wrong worktree= in state/<id>.meta. Require
   # two consecutive reads to agree on the same non-project path before accepting it;
   # a mismatch just becomes the new candidate rather than resetting the wait, so a
   # pane that is already settled by the first real read only costs the one existing
   # inter-poll sleep as confirmation, not a whole extra cycle on top.
+  #
+  # Two agreeing reads are necessary but not sufficient: while treehouse get's
+  # own fetch runs, the pane's reported cwd can sit inside a transient git
+  # subprocess's directory for longer than the one-second poll interval - live
+  # UBP incident, 2026-09-05: the pane read '<project>/.git' (the fetch's cwd
+  # against an SMB-hosted origin) on both reads and the loop broke out holding
+  # it. Nor does validate_spawn_worktree below catch a bad acceptance here: it
+  # confirms the candidate is A worktree root distinct from the primary, but
+  # never that it is a worktree of the SAME repo, so a stale read that happens
+  # to land in some other real checkout would pass it too (the near-miss
+  # bin/fm-claude-trust.sh's own copy of this check exists to catch on its own
+  # path). spawn_candidate_is_primary_worktree adds that positive test as a
+  # third condition on top of the two existing ones, not in place of them.
+  # Overridable only so a test can shrink the wait for the genuine-timeout
+  # case without waiting through a real 60s; production always gets the 60x1s
+  # default.
+  settle_polls=${FM_SPAWN_SETTLE_POLLS:-60}
+  settle_interval=${FM_SPAWN_SETTLE_POLL_INTERVAL:-1}
   candidate=""
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 "$settle_polls"); do
     p=$(spawn_current_path "$WT_TARGET" || true)
+    p_real=""
     if [ -n "$p" ]; then
       p_real=$(real_path_or_raw "$p")
-      if [ "$p_real" != "$PROJ_ABS_REAL" ]; then
-        if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
-          WT="$p"
-          break
-        fi
-        candidate="$p_real"
-      else
-        candidate=""
+      if [ "$p_real" = "$PROJ_ABS_REAL" ] || ! spawn_candidate_is_primary_worktree "$p_real"; then
+        p_real=""
       fi
+    fi
+    if [ -n "$p_real" ]; then
+      if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
+        WT="$p"
+        break
+      fi
+      candidate="$p_real"
     else
       candidate=""
     fi
-    sleep 1
+    sleep "$settle_interval"
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
+    echo "error: treehouse get never observed a settled worktree of the primary repo (polled $settle_polls time(s) at ${settle_interval}s intervals); inspect window $T" >&2
     exit 1
   fi
 
