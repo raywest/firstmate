@@ -3,29 +3,11 @@
 # loop (bin/fm-spawn.sh, the `for _ in $(seq 1 "$settle_polls")` loop after
 # `treehouse get`).
 #
-# On some tmux/WSL setups a brand-new window's pane_current_path transiently
-# reports a stale, unrelated-but-real path on the very first poll, before the
-# pane actually settles into the worktree treehouse get moved it to. A naive
-# single-read loop would accept that on sight, so the loop requires two
-# consecutive reads to agree before accepting a candidate - covered by
-# test_single_stale_first_read_is_not_accepted and
-# test_already_settled_pane_costs_one_confirm_sleep below.
-#
-# Two agreeing reads are not sufficient on their own: while treehouse get's
-# own fetch runs, the pane can report a transient git subprocess's cwd for
-# longer than the one-second poll interval, so two reads can agree on a path
-# that is still not the settled worktree - the live 2026-09-05 UBP incident,
-# where the pane read the project's own .git directory on both reads while
-# its SMB-hosted origin fetched slowly. Nor does validate_spawn_worktree catch
-# a bad acceptance here: it confirms the candidate is A real, distinct
-# worktree root, never that it is a worktree of the SAME repo, so a stale read
-# landing in some other real checkout would pass it too - the more dangerous
-# near-miss, where the recorded worktree would be a real but unrelated repo.
-# spawn_candidate_is_primary_worktree adds that positive test, and
-# test_repeated_project_dotgit_is_not_accepted and
-# test_repeated_separate_repo_is_not_accepted below cover both cases. A pane
-# that never settles at all must time out with its own distinct message
-# rather than silently accepting anything - test_never_settling_pane_times_out_with_distinct_message.
+# bin/fm-spawn.sh's header owns the discovery and isolation contract.
+# These regressions script repeated transient cwd reads independently of fetch
+# duration: agreement alone cannot establish repository identity.
+# They cover .git directories, unrelated checkouts, confirmation latency,
+# timeout safety, and inherited environment overrides using real Git repos.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -79,10 +61,8 @@ SH
 #   separate-repo (default) - a real checkout of something else entirely,
 #     distinct from both the project and the worktree - mirroring the
 #     dangerous near-miss where the stale read is another real repo's worktree.
-#   project-dotgit - the primary project's own .git directory, mirroring the
-#     live 2026-09-05 UBP incident where treehouse get's own fetch subprocess
-#     left the pane sitting in the project's .git while its origin (an SMB
-#     volume) was slow.
+#   project-dotgit - the primary project's own .git directory, which can be
+#     reported as a transient subprocess cwd before worktree entry.
 make_settle_case() {
   local name=$1 id=$2 stale_reads=$3 stale_kind=${4:-separate-repo}
   local case_dir home proj wt stale fakebin countfile
@@ -210,13 +190,8 @@ test_already_settled_pane_costs_one_confirm_sleep() {
   pass "an already-settled pane confirms via the existing inter-poll sleep, not an extra full cycle"
 }
 
-# The live 2026-09-05 UBP incident: the pane reports the primary project's own
-# .git directory (where treehouse get's fetch subprocess sat while its SMB
-# origin was slow) on two consecutive reads - enough to satisfy the existing
-# repeat rule on its own. Before the fix this was accepted as WT and then
-# correctly refused by validate_spawn_worktree ("did not yield an isolated
-# worktree"), reproducing the reported total-dispatch-block symptom. The fix
-# must keep polling past it and settle on the real worktree instead.
+# Repeated .git-directory reads must remain in discovery rather than reach
+# validate_spawn_worktree's isolation refusal before the real worktree arrives.
 test_repeated_project_dotgit_is_not_accepted() {
   local rec id out status
   id=settle-live-incident-z3
