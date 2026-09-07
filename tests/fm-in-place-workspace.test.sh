@@ -921,17 +921,28 @@ SH
   PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
     && fail "Zellij treated an unreadable pane inventory as termination"
   rm "$W_FAKEBIN/queries"
-  for response in 'other [Created 2m ago] ' 'firstmate [Created 1m ago] (EXITED - attach to resurrect)'; do
+  for response in 'other [Created 2m ago] ' 'scratch notes [Created 2m ago] ' \
+    'scratch [notes] (today) [Created 2m ago] ' ' scratch notes  [Created 2m ago] ' \
+    'firstmate [Created 1m ago] (EXITED - attach to resurrect)'; do
     printf '%s\n' "$response" > "$W_FAKEBIN/sessions"
     PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
       || fail "Zellij refused confirmed session absence or exit"
     assert_absent "$W_FAKEBIN/queries" "Zellij queried panes in a stopped session"
   done
-  for response in '' '{}' 'firstmate' 'error: connection failed' $'other [Created 2m ago] \nmalformed' $'other [Created 2m ago] \nother [Created 1m ago] '; do
+  for response in '' '{}' 'firstmate' 'error: connection failed' \
+    '  [Created 2m ago] ' '. [Created 2m ago] ' '.. [Created 2m ago] ' \
+    $'scratch\tnotes [Created 2m ago] ' $'scratch notes [Created 2m ago] \nscratch notes [Created 1m ago] ' $'other [Created 2m ago] \nmalformed' $'other [Created 2m ago] \nother [Created 1m ago] '; do
     printf '%s\n' "$response" > "$W_FAKEBIN/sessions"
     PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
       && fail "Zellij accepted malformed or ambiguous session inventory: $response"
   done
+  printf 'scratch notes [Created 2m ago] \n' > "$W_FAKEBIN/sessions"
+  PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij "scratch notes:17"' _ "$ROOT" \
+    && fail "Zellij treated a live session with spaces as absent"
+  assert_present "$W_FAKEBIN/queries" "Zellij did not inspect panes for the exact session with spaces"
+  printf 'scratch notes [Created 2m ago] (EXITED - attach to resurrect)\n' > "$W_FAKEBIN/sessions"
+  PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij "scratch notes:17"' _ "$ROOT" \
+    || fail "Zellij refused a confirmed exited session with spaces"
   printf 'other [Created 2m ago] \n' > "$W_FAKEBIN/sessions"
   touch "$W_FAKEBIN/sessions-unreadable"
   PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
@@ -1237,7 +1248,7 @@ if [ "$1" = list-sessions ]; then
   [ ! -e "${0%/*}/sessions-unreadable" ] || exit 1
   case "$*" in
     *--short*) echo firstmate ;;
-    *) echo 'firstmate [Created 2m ago] (EXITED - attach to resurrect)' ;;
+    *) printf '%s\n' 'scratch notes [Created 1m ago] ' 'firstmate [Created 2m ago] (EXITED - attach to resurrect)' ;;
   esac
   exit 0
 fi

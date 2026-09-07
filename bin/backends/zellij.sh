@@ -620,9 +620,10 @@ fm_backend_zellij_endpoint_confirmed_gone() {
   sessions=$(ZELLIJ_SESSION_NAME='' zellij list-sessions --no-formatting 2>/dev/null) || return 1
   presence=$(printf '%s' "$sessions" | jq -Rrse --arg session "$FM_BACKEND_ZELLIJ_SESSION" '
     split("\n") | map(
-      "^(?<name>[^\\x00-\\x20\\x7f/\\[\\]()]+) \\[Created [^\\x00-\\x1f\\x7f\\[\\]]+ ago\\] (?<state>\\(current\\)|\\(EXITED - attach to resurrect\\))?$" as $pattern |
+      "^(?<name>[^\\x00-\\x1f\\x7f/]+) \\[Created [^\\x00-\\x1f\\x7f\\[\\]]+ ago\\] (?<state>\\(current\\)|\\(EXITED - attach to resurrect\\))?$" as $pattern |
       if test($pattern) then capture($pattern) else error("invalid session row") end) |
-    if length == 0 or (map(.name) | unique | length) != length then error("invalid session inventory")
+    if length == 0 or any(.[]; .name == "." or .name == ".." or (.name | test("^\\s*$"))) or
+      (map(.name) | unique | length) != length then error("invalid session inventory")
     elif any(.[]; .name == $session and .state != "(EXITED - attach to resurrect)") then "present"
     else "absent" end
   ' 2>/dev/null) || return 1
