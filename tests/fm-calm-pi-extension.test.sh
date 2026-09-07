@@ -1817,11 +1817,19 @@ TS
       fail "Pi follow-up $label case did not process the monitoring notification"
     fi
 
-    pane=$(tmux -L "$TMUX_SOCKET" capture-pane -p -t "$TMUX_SESSION" -S - 2>/dev/null || true)
-    [ "$(printf '%s\n' "$pane" | grep -Fc "CAPTAIN_ANSWER_$label" || true)" -eq 1 ] \
-      || fail "Pi follow-up $label case rendered a duplicate captain answer"
-    assert_contains "$pane" "CAPTAIN_PROMPT_$label" "Pi follow-up $label case hid the genuine captain prompt"
+    # Persistence precedes Pi's scheduled terminal redraw. Wait for the final
+    # processing response on screen before checking counts and row geometry.
+    i=0
+    while [ "$i" -lt 240 ]; do
+      pane=$(tmux -L "$TMUX_SOCKET" capture-pane -p -t "$TMUX_SESSION" -S - 2>/dev/null || true)
+      printf '%s\n' "$pane" | grep -Fq "MONITOR_HANDLED_${label}_ONE" && break
+      sleep 0.05
+      i=$((i + 1))
+    done
     assert_contains "$pane" "MONITOR_HANDLED_${label}_ONE" "Pi follow-up $label case did not render the intended processing result"
+    [ "$(printf '%s\n' "$pane" | grep -Fc "CAPTAIN_ANSWER_$label" || true)" -eq 1 ] \
+      || fail "Pi follow-up $label case did not render exactly one captain answer: $pane"
+    assert_contains "$pane" "CAPTAIN_PROMPT_$label" "Pi follow-up $label case hid the genuine captain prompt"
     if [ "$calm_state" = on ]; then
       assert_not_contains "$pane" "MONITOR_${label}_ONE" "Pi follow-up $label case rendered a Calm-hidden operational user row"
       if [ "$label" = exact_watcher ]; then
