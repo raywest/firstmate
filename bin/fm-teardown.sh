@@ -1505,7 +1505,12 @@ validate_worktree_teardown_safety() {
     secondmate|scout) return 0 ;;
   esac
 
-  if ! dirty_raw=$(git -C "$WT" status --porcelain 2>/dev/null); then
+  local status_args=()
+  # An in-place project has no scratch copy to destroy and its product files
+  # are gitignored by design, so untracked content is the normal steady state
+  # rather than unlanded work; tracked changes remain a blocker.
+  [ "$WORKSPACE" != in-place ] || status_args=(--untracked-files=no)
+  if ! dirty_raw=$(git -C "$WT" status --porcelain "${status_args[@]+"${status_args[@]}"}" 2>/dev/null); then
     if worktree_safety_blocked_by_lock "uncommitted changes"; then
       return "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED"
     fi
@@ -2037,6 +2042,10 @@ validate_child_worktree_for_removal() {
   local target=$1 project=$2 abs_target abs_home abs_root
   [ -n "$target" ] || return 0
   [ -e "$target" ] || return 0
+  if [ "${3:-}" = in-place ] || [ "$(teardown_real_path_or_raw "$target")" = "$(teardown_real_path_or_raw "$project")" ]; then
+    echo "REFUSED: child worktree $target is a real project directory, not a removable scratch copy" >&2
+    return 1
+  fi
   abs_target=$(validate_removal_target "$target" "child worktree") || return 1
   if abs_home=$(cd "$FM_HOME" 2>/dev/null && pwd -P); then
     if path_is_ancestor_of "$abs_home" "$abs_target"; then
@@ -2063,8 +2072,8 @@ safe_rm_rf() {
 }
 
 safe_rm_rf_child_worktree() {
-  local target=$1 project=$2
-  validate_child_worktree_for_removal "$target" "$project" >/dev/null || return 1
+  local target=$1 project=$2 workspace=${3:-}
+  validate_child_worktree_for_removal "$target" "$project" "$workspace" >/dev/null || return 1
   rm -rf -- "$target"
 }
 
@@ -2398,8 +2407,20 @@ preflight_descendant_task_locks() {
   done
 }
 
+validate_in_place_child() {
+  local meta=$1 home=$2 wt proj
+  wt=$(meta_value "$meta" worktree)
+  proj=$(meta_value "$meta" project)
+  if [ "$(meta_value "$meta" kind)" = secondmate ] || [ "$(fm_backend_of_meta "$meta")" = orca ] \
+      || [ -z "$wt" ] || [ "$(teardown_real_path_or_raw "$wt")" != "$(teardown_real_path_or_raw "$proj")" ] \
+      || path_is_ancestor_of "$(teardown_real_path_or_raw "$home")" "$(teardown_real_path_or_raw "$wt")"; then
+    echo "REFUSED: invalid in-place child workspace in $meta; refusing cleanup of the real project directory" >&2
+    return 1
+  fi
+}
+
 validate_firstmate_home_children_removal() {
-  local home=$1 sub_state child_meta child_id child_wt child_proj child_kind child_home child_backend child_orca_worktree_id
+  local home=$1 sub_state child_meta child_id child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_workspace
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -2411,7 +2432,11 @@ validate_firstmate_home_children_removal() {
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
     child_backend=$(fm_backend_of_meta "$child_meta")
-    if [ "$child_kind" = secondmate ]; then
+    child_workspace=$(meta_value "$child_meta" workspace)
+    if [ "$child_workspace" = in-place ]; then
+      validate_in_place_child "$child_meta" "$home" || return 1
+      continue
+    elif [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
       validate_firstmate_home_for_removal "$child_home" "child firstmate home" "$child_id" >/dev/null || return 1
@@ -2566,7 +2591,7 @@ preflight_firstmate_home_herdr_children() {  # <home>
 }
 
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen
+  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen child_workspace
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -2577,6 +2602,10 @@ cleanup_firstmate_home_children() {
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
     child_backend=$(fm_backend_of_meta "$child_meta")
+    child_workspace=$(meta_value "$child_meta" workspace)
+    if [ "$child_workspace" = in-place ]; then
+      validate_in_place_child "$child_meta" "$home" || return 1
+    fi
     if [ "$child_backend" = orca ]; then
       child_t=$(meta_value "$child_meta" terminal)
     else
@@ -2585,7 +2614,7 @@ cleanup_firstmate_home_children() {
     if [ "$child_backend" = orca ] && [ "$child_kind" != secondmate ]; then
       child_orca_worktree_id=$(require_orca_worktree_id "$child_meta") || return 1
       if [ -n "$child_wt" ] && [ -e "$child_wt" ]; then
-        validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+        validate_child_worktree_for_removal "$child_wt" "$child_proj" "$child_workspace" >/dev/null || return 1
       fi
     fi
     if [ -n "$child_t" ]; then
@@ -2608,7 +2637,11 @@ cleanup_firstmate_home_children() {
         fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 2>/dev/null || true
       fi
     fi
-    if [ "$child_kind" = secondmate ]; then
+    if [ "$child_workspace" = in-place ]; then
+      if [ -d "$child_wt" ]; then
+        python3 "$SCRIPT_DIR/fm-workspace-hooks.py" remove "$sub_state" "$child_id" "$child_wt" || return 1
+      fi
+    elif [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
       if [ -n "$child_home" ] && [ -d "$child_home" ]; then
@@ -2617,16 +2650,13 @@ cleanup_firstmate_home_children() {
       fi
     elif [ "$child_backend" = orca ]; then
       if [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
-        validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
-        rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
-          "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
+        validate_child_worktree_for_removal "$child_wt" "$child_proj" "$child_workspace" >/dev/null || return 1
+        python3 "$SCRIPT_DIR/fm-workspace-hooks.py" remove "$sub_state" "$child_id" "$child_wt" || return 1
       fi
       fm_backend_remove_worktree "$child_backend" "$child_orca_worktree_id" || return 1
     elif [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
-      validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
-      rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
-        "$child_wt/.opencode/plugins/fm-busy-state.js" \
-        "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
+      validate_child_worktree_for_removal "$child_wt" "$child_proj" "$child_workspace" >/dev/null || return 1
+      python3 "$SCRIPT_DIR/fm-workspace-hooks.py" remove "$sub_state" "$child_id" "$child_wt" || return 1
       if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
         if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree"; then
           :
@@ -2635,10 +2665,10 @@ cleanup_firstmate_home_children() {
           if [ "$child_return_rc" -eq "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ]; then
             return "$child_return_rc"
           fi
-          safe_rm_rf_child_worktree "$child_wt" "$child_proj"
+          safe_rm_rf_child_worktree "$child_wt" "$child_proj" "$child_workspace"
         fi
       else
-        safe_rm_rf_child_worktree "$child_wt" "$child_proj"
+        safe_rm_rf_child_worktree "$child_wt" "$child_proj" "$child_workspace"
       fi
     fi
     remove_grok_turnend_auth "$sub_state" "$child_id" || return 1
@@ -2881,9 +2911,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
         git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
       fi
     fi
-    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
-      "$WT/.opencode/plugins/fm-busy-state.js" \
-      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+    python3 "$SCRIPT_DIR/fm-workspace-hooks.py" remove "$STATE" "$ID" "$WT" || exit 1
   fi
   [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
@@ -2896,8 +2924,7 @@ elif [ "$IN_PLACE" -eq 1 ] && [ "$KIND" != secondmate ]; then
   # local merge leaves behind) and is not itself checked out; anything else is
   # left in place with a note rather than touched.
   if [ -d "$WT" ]; then
-    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
-      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+    python3 "$SCRIPT_DIR/fm-workspace-hooks.py" remove "$STATE" "$ID" "$WT" || exit 1
     in_place_branch="fm/$ID"
     in_place_cur=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
     if git -C "$WT" rev-parse --verify --quiet "refs/heads/$in_place_branch" >/dev/null; then
@@ -2911,7 +2938,7 @@ elif [ "$IN_PLACE" -eq 1 ] && [ "$KIND" != secondmate ]; then
       fi
     fi
     if [ "$KIND" = scout ] \
-       && [ -n "$(git -C "$WT" status --porcelain 2>/dev/null | head -1)" ]; then
+       && [ -n "$(git -C "$WT" status --porcelain --untracked-files=no 2>/dev/null | head -1)" ]; then
       echo "warning: in-place scout $ID left uncommitted changes in $WT; nothing was discarded - review them by hand" >&2
     fi
   fi
@@ -2923,8 +2950,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
     fi
   fi
   # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
-  rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
-    "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+  python3 "$SCRIPT_DIR/fm-workspace-hooks.py" remove "$STATE" "$ID" "$WT" || exit 1
   # Kills remaining processes in the worktree (including the agent), resets, returns
   # to pool. treehouse resolves the pool from the working directory, so run it from
   # the project. teardown_treehouse_return tolerates transient and stale git locks

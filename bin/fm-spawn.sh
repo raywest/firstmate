@@ -37,8 +37,9 @@
 #   firstmate home, outside the firstmate repo, and outside this home's
 #   projects/ clone root (an in-place project's real work location is
 #   elsewhere by definition; clones under projects/ keep scratch copies).
-#   Exactly one live worker may own an in-place directory: while any task
-#   record in this home names that directory as its worktree, a second
+#   Within one firstmate home, exactly one live worker may own an in-place
+#   directory; two homes pointing at the same directory are not coordinated.
+#   While any task record in this home names that directory as its worktree, a second
 #   in-place spawn of it is refused (checked under the same task-set lock a
 #   fresh spawn already holds through publication, so two concurrent spawns
 #   cannot both pass). The launched pane is verified to be sitting in the
@@ -239,7 +240,10 @@
 # because Claude's interactive workspace-trust dialog gates a fresh worktree and
 # firstmate cannot answer it. That helper's header owns the structural scope test
 # and every refusal; a failed registration stops this spawn rather than launching
-# a worker that would wedge on the dialog. A --secondmate launch never runs it,
+# a worker that would wedge on the dialog. Workspace hook ownership receipts
+# live in state/<id>.workspace-hooks.json (bin/fm-workspace-hooks.py); installation
+# refuses pre-existing unowned files, and cleanup preserves edited replacements.
+# A --secondmate launch never runs it,
 # so a claude secondmate home keeps its own one-time trust decision.
 # Publishing the record and moving this home's backlog item to In flight are one
 # step, not two: bin/fm-backlog-transition-lib.sh owns that invariant, and this
@@ -247,8 +251,9 @@
 # success. A ship or scout dispatch therefore REFUSES up front, before any
 # endpoint, worktree, or record exists, unless the home's backlog has an
 # unheld, unblocked Queued or In flight item for the id; a transition that fails
-# after publication removes the record it just wrote rather than leaving a
-# worker the backlog does not own. A relaunch re-reads the row instead of
+# after publication removes the record it just wrote, except that in-place
+# tasks retain directory ownership until guarded teardown stops the endpoint.
+# A relaunch re-reads the row instead of
 # re-running the transition, so an eligible In-flight item is left untouched.
 # The transition is
 # skipped entirely for --secondmate spawns (persistent agents are not work
@@ -814,6 +819,11 @@ CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
 
 spawn_fresh_commit_rollback() {
+  if [ "$IN_PLACE" -eq 1 ] && [ -f "$STATE/$ID.meta" ]; then
+    SPAWN_FRESH_COMMIT_PENDING=0
+    echo "error: retaining in-place task $ID's ownership record until its endpoint is confirmed stopped; reconcile the backlog and use guarded teardown before another worker can enter $WT" >&2
+    return 1
+  fi
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
       "$FM_ROOT/bin/fm-busy-event.sh" "$STATE" "$ID" "${BUSY_GEN:-}"; then
     SPAWN_FRESH_COMMIT_PENDING=0
@@ -994,7 +1004,10 @@ clear_relaunch_harness_wiring() {
   fi
   while IFS= read -r path; do
     [ -n "$path" ] || continue
-    rm -f -- "$path" || return 1
+    case "$path" in
+      "$wt"/*) python3 "$FM_ROOT/bin/fm-workspace-hooks.py" remove "$state" "$id" "$wt" "${path#"$wt"/}" || return 1 ;;
+      *) rm -f -- "$path" || return 1 ;;
+    esac
   done <<EOF
 $(fm_control_harness_wiring_paths "$harness" "$wt" "$state" "$id")
 EOF
@@ -2116,7 +2129,7 @@ if [ "$IN_PLACE" -eq 1 ] && [ "$RELAUNCH" -eq 0 ]; then
     if [ "$in_place_other_wt" = "$PROJ_ABS" ] \
        || [ "$(real_path_or_raw "$in_place_other_wt")" = "$PROJ_ABS_REAL" ]; then
       in_place_other_id=$(basename "$in_place_meta" .meta)
-      echo "error: task '$in_place_other_id' already occupies '$PROJ_ABS' as its working directory; an in-place project takes one worker at a time - finish and clean up that task first" >&2
+      echo "error: task '$in_place_other_id' already occupies '$PROJ_ABS' as its working directory; an in-place project takes one worker at a time within one firstmate home (two homes pointing at the same directory are not coordinated) - finish and clean up that task first" >&2
       exit 1
     fi
   done
@@ -2904,14 +2917,13 @@ if [ "$KIND" != secondmate ]; then
       # the turn-ended NOTIFICATION touch for the watcher. Every
       # hook command tolerates a refused event (|| true) so a stale-gen writer
       # can never break Claude's own lifecycle.
-      mkdir -p "$WT/.claude"
       busy_cmd_prefix="$(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID")"
       busy_suffix="--gen $(shell_quote "$BUSY_GEN") --source claude-hook"
       j_submit=$(json_escape "$busy_cmd_prefix busy $busy_suffix --event user-prompt-submit 2>/dev/null || true")
       j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
-      cat > "$WT/.claude/settings.local.json" <<EOF
+      python3 "$FM_ROOT/bin/fm-workspace-hooks.py" install "$STATE_REAL" "$ID" "$WT" .claude/settings.local.json <<EOF
 {"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
 EOF
       exclude_path '.claude/settings.local.json'
@@ -2951,8 +2963,7 @@ EOF
       fi
       ;;
     opencode*)
-      mkdir -p "$WT/.opencode/plugins"
-      cat > "$WT/.opencode/plugins/fm-busy-state.js" <<EOF
+      python3 "$FM_ROOT/bin/fm-workspace-hooks.py" install "$STATE_REAL" "$ID" "$WT" .opencode/plugins/fm-busy-state.js <<EOF
 // Firstmate semantic busy-state events + turn-end notification; written by
 // fm-spawn under the contract owned by bin/fm-busy-lib.sh.
 // Semantic state comes from OpenCode's session.status events: busy and retry
@@ -3092,7 +3103,7 @@ EOF
       chmod +x "$GROK_HOOKS_DIR/fm-turn-end.sh"
       hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-turn-end.sh")")
       printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" > "$GROK_HOOKS_DIR/fm-turn-end.json"
-      printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
+      printf 'token=%s\n' "${auth_file##*/}" | python3 "$FM_ROOT/bin/fm-workspace-hooks.py" install "$STATE_REAL" "$ID" "$WT" .fm-grok-turnend
       exclude_path '.fm-grok-turnend'
       ;;
     muse*)
@@ -3158,7 +3169,7 @@ EOF
       umask "$old_umask"
       printf '%s\n' "$TURNEND" > "$auth_file"
       printf '%s\n' "${auth_file##*/}" > "$STATE/$ID.kimi-turnend-token"
-      printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
+      printf 'token=%s\n' "${auth_file##*/}" | python3 "$FM_ROOT/bin/fm-workspace-hooks.py" install "$STATE_REAL" "$ID" "$WT" .fm-kimi-turnend
       exclude_path '.fm-kimi-turnend'
       ;;
   esac
@@ -3511,7 +3522,7 @@ if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
     if spawn_fresh_commit_rollback; then
       echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); its record was removed so no worker is left that the backlog does not own - close out endpoint $T and local copy $WT by hand, then re-run the spawn" >&2
     else
-      echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR), and failed-dispatch cleanup is incomplete; the provisional record may remain at $STATE/$ID.meta - close out endpoint $T and local copy $WT by hand, then remove the record and busy state before retrying" >&2
+      echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR), and failed-dispatch cleanup is incomplete; the provisional record may remain at $STATE/$ID.meta - confirm endpoint $T is stopped and complete guarded teardown before retrying; do not remove a live worker's ownership record" >&2
     fi
   else
     echo "error: task $ID was republished but its backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); fix the backlog and re-run the relaunch" >&2

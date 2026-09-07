@@ -77,7 +77,16 @@ if [ "$WORKSPACE" = in-place ]; then
 else
   [ "$cur" = "$DEFAULT" ] || { echo "error: $PROJ is on '$cur', expected default branch '$DEFAULT'; cannot merge safely" >&2; exit 1; }
 fi
-if [ -n "$(git -C "$PROJ" status --porcelain 2>/dev/null | head -1)" ]; then
+status_args=()
+# An in-place project has no scratch copy to destroy and its product files are
+# gitignored by design, so untracked content is the normal steady state rather
+# than unlanded work; tracked changes remain a blocker.
+[ "$WORKSPACE" != in-place ] || status_args=(--untracked-files=no)
+if ! dirty=$(git -C "$PROJ" status --porcelain "${status_args[@]+"${status_args[@]}"}" 2>/dev/null); then
+  echo "error: cannot inspect $PROJ for uncommitted changes; refusing to merge" >&2
+  exit 1
+fi
+if [ -n "$dirty" ]; then
   echo "error: $PROJ has a dirty working tree; refusing to merge into it" >&2
   exit 1
 fi

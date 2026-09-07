@@ -25,6 +25,8 @@
 # bin/fm-spawn.sh cross-checks this declaration against its explicit
 # --in-place flag and refuses a mismatch in either direction, so the
 # declaration alone never changes how any task is launched.
+# The single-worker guarantee is scoped to one firstmate home; two homes
+# pointing at the same in-place directory are not coordinated.
 #
 # Registered modes:
 #   no-mistakes            full pipeline -> PR -> configured merge authority (default)

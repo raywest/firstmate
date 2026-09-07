@@ -479,7 +479,7 @@ This directory, including everything gitignored in it, is the captain's product;
 **Verify location before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the project directory you were launched in.
 If they do not, STOP - do not branch or commit - append \`blocked: not launched in the declared project directory\` to the status file and stop.
 
-1. First action: inspect \`git status\`. Untracked and gitignored files are normal here and never a blocker, but if uncommitted changes to TRACKED files that you did not create are present, STOP - they may be the captain's own work in progress - and append \`blocked: project directory has pre-existing uncommitted tracked changes\` to the status file.
+1. First action: inspect \`git status\`. Untracked and gitignored files are normal here and do not block landing or cleanup; uncommitted tracked changes still block completion. If uncommitted changes to TRACKED files that you did not create are present, STOP - they may be the captain's own work in progress - and append \`blocked: project directory has pre-existing uncommitted tracked changes\` to the status file.
 2. Check out the default branch if the directory is not already on it, then create your branch: \`git checkout -b fm/$ID\`$SETUP2
 EOF
 # shellcheck disable=SC2016  # single quotes are deliberate: the backtick-wrapped git commands are literal brief text for the reading agent.

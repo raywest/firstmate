@@ -445,8 +445,8 @@ test_teardown_preserves_landed_in_place_directory() {
     || fail "teardown moved the project off its default branch"
   git -C "$W_PROJ" rev-parse --verify --quiet refs/heads/fm/t1 >/dev/null \
     && fail "teardown left the landed task branch behind"
-  [ ! -e "$W_PROJ/.claude/settings.local.json" ] \
-    || fail "teardown left the task hook file behind"
+  [ "$(cat "$W_PROJ/.claude/settings.local.json")" = '{}' ] \
+    || fail "teardown changed pre-existing project settings"
   [ ! -e "$TMP_ROOT/td-landed/treehouse.log" ] \
     || fail "teardown invoked treehouse against the real project directory"
   assert_absent "$W_HOME/state/t1.meta" "teardown did not retire the task record"
@@ -501,6 +501,175 @@ test_teardown_record_crosschecks_fail_closed() {
   pass "fm-teardown: in-place record cross-checks and the unreachable-directory guard fail closed"
 }
 
+test_workspace_hook_ownership() {
+  local rec hook state out rel
+  rec=$(make_world hook-ownership '[local-only +in-place]')
+  read_world "$rec"
+  hook="$ROOT/bin/fm-workspace-hooks.py"
+  state="$W_HOME/state"
+  for rel in .claude/settings.local.json .opencode/plugins/fm-busy-state.js .fm-grok-turnend .fm-kimi-turnend; do
+    printf 'owned\n' | python3 "$hook" install "$state" owner "$W_PROJ" "$rel" || fail "hook install failed"
+    printf 'foreign\n' | python3 "$hook" install "$state" other "$W_PROJ" "$rel" >/dev/null 2>&1 \
+      && fail "another task overwrote an owned hook"
+    python3 "$hook" remove "$state" other "$W_PROJ" "$rel" || fail "foreign cleanup failed"
+    [ "$(cat "$W_PROJ/$rel")" = owned ] || fail "foreign cleanup deleted the hook"
+    printf 'replacement\n' | python3 "$hook" install "$state" owner "$W_PROJ" "$rel" || fail "owned hook replacement failed"
+    [ "$(cat "$W_PROJ/$rel")" = replacement ] || fail "owned replacement did not install"
+    printf 'captain edit\n' > "$W_PROJ/$rel"
+    python3 "$hook" remove "$state" owner "$W_PROJ" "$rel" || fail "edited hook cleanup failed"
+    [ "$(cat "$W_PROJ/$rel")" = 'captain edit' ] || fail "cleanup deleted edited settings"
+    rm "$W_PROJ/$rel"
+    printf 'owned again\n' | python3 "$hook" install "$state" owner "$W_PROJ" "$rel" || fail "reinstall failed"
+  done
+  python3 "$hook" remove "$state" owner "$W_PROJ" || fail "owned hooks cleanup failed"
+  assert_absent "$W_PROJ/.claude/settings.local.json" "owned Claude hook survived cleanup"
+  assert_absent "$W_PROJ/.opencode/plugins/fm-busy-state.js" "owned OpenCode hook survived cleanup"
+  assert_absent "$state/owner.workspace-hooks.json" "receipt survived complete cleanup"
+  rmdir "$W_PROJ/.claude"
+  mkdir "$W_HOME/external-config"
+  printf 'external\n' > "$W_HOME/external-config/settings.local.json"
+  ln -s "$W_HOME/external-config" "$W_PROJ/.claude"
+  printf 'hook\n' | python3 "$hook" install "$state" owner "$W_PROJ" .claude/settings.local.json >/dev/null 2>&1 \
+    && fail "hook installation followed a project symlink"
+  [ "$(cat "$W_HOME/external-config/settings.local.json")" = external ] || fail "symlink target changed"
+  pass "workspace hooks preserve unowned, edited, foreign-task and symlinked files"
+}
+
+test_claude_spawn_preserves_preexisting_settings() {
+  local rec out
+  rec=$(make_world claude-existing '[local-only +in-place]')
+  read_world "$rec"
+  scaffold_brief "$W_HOME" hook-existing --mode local-only --in-place
+  mkdir -p "$W_PROJ/.claude" "$W_HOME/claude-config"
+  printf '{"permissions":{"deny":["Bash(rm:*)"]}}\n' > "$W_PROJ/.claude/settings.local.json"
+  cp "$W_PROJ/.claude/settings.local.json" "$W_HOME/original-settings"
+  out=$(CLAUDE_CONFIG_DIR="$W_HOME/claude-config" run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/launch.log" \
+    hook-existing "$W_PROJ" --mode local-only --yolo off --in-place --harness claude) \
+    && fail "Claude overwrote pre-existing project settings"
+  assert_contains "$out" "without task ownership" "Claude did not refuse the unowned settings"
+  cmp -s "$W_HOME/original-settings" "$W_PROJ/.claude/settings.local.json" || fail "Claude changed pre-existing settings"
+  pass "Claude spawn refuses unowned settings without changing them"
+}
+
+test_in_place_relaunch_preserves_unowned_hooks() {
+  local rec out
+  rec=$(make_world relaunch-hooks '[local-only +in-place]')
+  read_world "$rec"
+  scaffold_brief "$W_HOME" relaunch-hooks --mode local-only --in-place
+  fm_write_meta "$W_HOME/state/relaunch-hooks.meta" "window=firstmate:fm-relaunch-hooks" \
+    "endpoint_task_id=relaunch-hooks" "worktree=$W_PROJ" "project=$W_PROJ" \
+    "kind=ship" "mode=local-only" "yolo=off" "workspace=in-place" "harness=claude"
+  mkdir -p "$W_PROJ/.claude"
+  printf '{"captain":true}\n' > "$W_PROJ/.claude/settings.local.json"
+  mv "$W_FAKEBIN/tmux" "$W_FAKEBIN/tmux-base"
+  cat > "$W_FAKEBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *pane_current_command*) echo zsh; exit 0 ;;
+  list-windows*) echo fm-relaunch-hooks; exit 0 ;;
+esac
+exec "${0%/*}/tmux-base" "$@"
+SH
+  chmod +x "$W_FAKEBIN/tmux"
+  out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/relaunch.log" \
+    relaunch-hooks --relaunch --harness codex) || fail "in-place relaunch failed: $out"
+  [ "$(cat "$W_PROJ/.claude/settings.local.json")" = '{"captain":true}' ] || fail "relaunch removed unowned prior settings"
+  assert_grep 'harness=codex' "$W_HOME/state/relaunch-hooks.meta" "relaunch did not publish replacement"
+  pass "in-place relaunch preserves unowned project settings when switching harnesses"
+}
+
+test_completion_untracked_scope() {
+  local out wt
+  make_teardown_case completion-untracked untracked
+  printf 'product image\n' > "$W_PROJ/image.png"
+  out=$(run_merge_local "$W_HOME" untracked) || fail "untracked product blocked in-place merge: $out"
+  printf 'wip\n' >> "$W_PROJ/work.txt"
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" untracked) && fail "tracked changes passed in-place teardown"
+  assert_contains "$out" "uncommitted changes" "teardown did not identify tracked changes"
+  git -C "$W_PROJ" checkout -q -- work.txt
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" untracked) || fail "untracked product blocked in-place cleanup: $out"
+  [ "$(cat "$W_PROJ/image.png")" = 'product image' ] || fail "cleanup changed the product image"
+
+  make_teardown_case completion-isolated isolated
+  git -C "$W_PROJ" checkout -q main
+  wt="$TMP_ROOT/completion-isolated/scratch"
+  git -C "$W_PROJ" worktree add -q "$wt" fm/isolated
+  fm_write_meta "$W_HOME/state/isolated.meta" "window=firstmate:fm-isolated" "endpoint_task_id=isolated" \
+    "worktree=$wt" "project=$W_PROJ" "kind=ship" "mode=local-only"
+  printf 'untracked\n' > "$W_PROJ/image.png"
+  out=$(run_merge_local "$W_HOME" isolated) && fail "isolated merge allowed an untracked file"
+  assert_contains "$out" "dirty working tree" "isolated merge lost its untracked guard"
+  rm "$W_PROJ/image.png"
+  run_merge_local "$W_HOME" isolated >/dev/null || fail "could not land isolated task"
+  printf 'untracked\n' > "$wt/image.png"
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" isolated) && fail "isolated cleanup allowed an untracked file"
+  assert_contains "$out" "uncommitted changes" "isolated teardown lost its untracked guard"
+  pass "completion permits untracked files only for in-place tasks and still blocks tracked edits"
+}
+
+test_failed_dispatch_retains_in_place_ownership() {
+  local rec out real
+  command -v tasks-axi >/dev/null 2>&1 || { fail "tasks-axi required for dispatch regression"; }
+  real=$(command -v tasks-axi)
+  rec=$(make_world dispatch-ownership '[local-only +in-place]')
+  read_world "$rec"
+  printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$W_HOME/data/backlog.md"
+  tasks-axi add failed-owner 'Failed dispatch owner' --kind ship --file "$W_HOME/data/backlog.md" >/dev/null || fail "could not add dispatch fixture"
+  scaffold_brief "$W_HOME" failed-owner --mode local-only --in-place
+  scaffold_brief "$W_HOME" next-owner --mode local-only --in-place
+  cat > "$W_FAKEBIN/tasks-axi" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = start ]; then
+  echo 'error: forced dispatch failure' >&2
+  exit 1
+fi
+exec "$real" "\$@"
+SH
+  chmod +x "$W_FAKEBIN/tasks-axi"
+  out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/launch.log" \
+    failed-owner "$W_PROJ" --mode local-only --yolo off --in-place) && fail "failed dispatch reported success"
+  assert_contains "$out" "retaining in-place task" "failed dispatch did not explain retained ownership"
+  assert_grep 'codex ' "$W_HOME/launch.log" "failure did not occur after launch delivery"
+  assert_present "$W_HOME/state/failed-owner.meta" "failed dispatch released directory ownership"
+  out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/second-launch.log" \
+    next-owner "$W_PROJ" --mode local-only --yolo off --in-place) && fail "a second worker entered after failed dispatch"
+  assert_contains "$out" "already occupies" "retained ownership did not block a second worker"
+  assert_absent "$W_HOME/state/next-owner.meta" "second worker acquired a record"
+  pass "failed dispatch keeps directory ownership after launch and refuses a second worker"
+}
+
+test_forced_secondmate_preserves_in_place_child() {
+  local out child_home parent_home proj fakebin
+  make_teardown_case forced-child child
+  child_home="$W_HOME"
+  proj="$W_PROJ"
+  fakebin="$W_FAKEBIN"
+  parent_home="$TMP_ROOT/forced-child/parent"
+  mkdir -p "$parent_home/state" "$parent_home/data" "$parent_home/config"
+  printf 'mate\n' > "$child_home/.fm-secondmate-home"
+  fm_write_meta "$parent_home/state/mate.meta" "window=firstmate:fm-mate" "endpoint_task_id=mate" \
+    "worktree=$child_home" "home=$child_home" "project=$child_home" "kind=secondmate"
+  printf 'product image\n' > "$proj/image.png"
+  mkdir -p "$proj/.claude"
+  printf '{"captain":true}\n' > "$proj/.claude/settings.local.json"
+  printf 'owned\n' | python3 "$ROOT/bin/fm-workspace-hooks.py" install "$child_home/state" child "$proj" .opencode/plugins/fm-busy-state.js \
+    || fail "could not install child-owned hook"
+  cp "$child_home/state/child.meta" "$child_home/state/child.saved"
+  sed '/^workspace=/d' "$child_home/state/child.saved" > "$child_home/state/child.meta"
+  out=$(run_teardown "$parent_home" "$fakebin" mate --force) && fail "forced cleanup accepted an unflagged primary checkout"
+  assert_contains "$out" "real project directory" "child preflight did not reject a primary checkout"
+  assert_present "$child_home/state/child.meta" "refused child preflight removed ownership"
+  mv "$child_home/state/child.saved" "$child_home/state/child.meta"
+  out=$(run_teardown "$parent_home" "$fakebin" mate --force) || fail "forced secondmate cleanup failed: $out"
+  [ "$(cat "$proj/image.png")" = 'product image' ] || fail "forced cleanup lost product data"
+  [ "$(cat "$proj/.claude/settings.local.json")" = '{"captain":true}' ] || fail "forced cleanup lost project settings"
+  assert_absent "$proj/.opencode/plugins/fm-busy-state.js" "forced cleanup left owned child hook"
+  [ "$(git -C "$proj" symbolic-ref --short HEAD)" = fm/child ] || fail "forced cleanup changed the child's branch"
+  assert_absent "$TMP_ROOT/forced-child/treehouse.log" "forced cleanup returned the real project"
+  assert_absent "$parent_home/state/mate.meta" "forced cleanup retained parent metadata"
+  pass "forced secondmate cleanup preserves the in-place child's project and unowned settings"
+}
+
 # --- claude trust -----------------------------------------------------------
 
 test_claude_trust_in_place_scope() {
@@ -543,3 +712,11 @@ test_teardown_preserves_landed_in_place_directory
 test_teardown_refuses_unlanded_in_place_work
 test_teardown_record_crosschecks_fail_closed
 test_claude_trust_in_place_scope
+
+test_workspace_hook_ownership
+test_claude_spawn_preserves_preexisting_settings
+test_completion_untracked_scope
+test_failed_dispatch_retains_in_place_ownership
+test_forced_secondmate_preserves_in_place_child
+
+test_in_place_relaunch_preserves_unowned_hooks
