@@ -53,6 +53,7 @@ make_world() {  # <name> [<registry-annotation>]
   printf 'codex\n' > "$home/config/crew-harness"
   touch "$home/state/.last-watcher-beat"
   fm_git_init_commit "$proj"
+  git -C "$proj" branch -M main || fail "could not set the fixture default branch"
   fm_test_fake_tmux_spawn "$fakebin"
   fm_fake_exit0 "$fakebin" treehouse
   if [ -n "$annotation" ]; then

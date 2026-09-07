@@ -229,7 +229,10 @@ case "$DELIVERED" in
 esac
 
 # --- a finished child worker inside the remote secondmate home --------------
-CHILD_WT="$REMOTE_HOME/projects/alpha"
+CHILD_PROJECT="$REMOTE_HOME/projects/alpha"
+CHILD_WT="$TMP_ROOT/child-worktree"
+git -C "$CHILD_PROJECT" worktree add --quiet --detach "$CHILD_WT" HEAD \
+  || fail "could not create the child worker's isolated worktree"
 mkdir -p "$REMOTE_HOME/state"
 # This regression exercises remote-parent binding, not backlog mutation. Keep
 # its synthetic child home on the supported hand-edited backend so teardown's
@@ -238,7 +241,7 @@ printf '%s\n' manual > "$REMOTE_HOME/config/backlog-backend"
 write_child_meta() {
   fm_write_meta "$REMOTE_HOME/state/work-child.meta" \
     "window=firstmate:fm-work-child" "endpoint_task_id=work-child" \
-    "worktree=$CHILD_WT" "project=$CHILD_WT" "harness=codex" "kind=ship" \
+    "worktree=$CHILD_WT" "project=$CHILD_PROJECT" "harness=codex" "kind=ship" \
     "mode=local-only" "yolo=off"
 }
 mkdir -p "$TMP_ROOT/childfake"
