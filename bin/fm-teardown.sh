@@ -1141,8 +1141,8 @@ patch_id_for_commit() {
 }
 
 unpushed_patches_are_in_pr_head() {
-  local pr_head=$1 current base pr_patch_ids commit patch_id unpushed
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  local pr_head=$1 work_ref=${2:-HEAD} current base pr_patch_ids commit patch_id unpushed
+  current=$(git -C "$WT" rev-parse --verify "$work_ref" 2>/dev/null) || return 1
   base=$(git -C "$WT" merge-base "$current" "$pr_head" 2>/dev/null) || return 1
   pr_patch_ids=$(
     git -C "$WT" log --format=%H "$base..$pr_head" -- 2>/dev/null \
@@ -1153,7 +1153,7 @@ unpushed_patches_are_in_pr_head() {
       | sort -u
   ) || return 1
   [ -n "$pr_patch_ids" ] || return 1
-  unpushed=$(git -C "$WT" log --format=%H HEAD --not --remotes -- 2>/dev/null) || return 1
+  unpushed=$(git -C "$WT" log --format=%H "$work_ref" --not --remotes -- 2>/dev/null) || return 1
   [ -n "$unpushed" ] || return 1
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
@@ -1171,7 +1171,7 @@ EOF
 # current work is not contained in the PR head, no PR is found, or any gh error
 # occurs - the caller then falls back to the content check.
 pr_is_merged() {
-  local branch=$1 target view state remainder head resolved_url current landed=0
+  local branch=$1 work_ref=${2:-HEAD} target view state remainder head resolved_url current landed=0
   if [ -n "$PR_URL" ]; then
     target=$PR_URL
   else
@@ -1191,10 +1191,10 @@ pr_is_merged() {
   esac
   [ -n "$head" ] || return 1
   ensure_commit_object "$target" "$head" || return 1
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  current=$(git -C "$WT" rev-parse --verify "$work_ref" 2>/dev/null) || return 1
   if git -C "$WT" merge-base --is-ancestor "$current" "$head" 2>/dev/null; then
     landed=1
-  elif unpushed_patches_are_in_pr_head "$head"; then
+  elif unpushed_patches_are_in_pr_head "$head" "$work_ref"; then
     landed=1
   fi
   [ "$landed" = 1 ] || return 1
@@ -1206,14 +1206,14 @@ pr_is_merged() {
 }
 
 # Is the branch's content already present in the up-to-date default branch? Fetches
-# first, then 3-way merges the default branch with HEAD: when HEAD introduces nothing
+# first, then 3-way merges the default branch with the work ref: when it introduces nothing
 # the default branch does not already contain (e.g. its change landed via squash) the
 # merged tree equals the default branch's tree. This isolates branch-only changes, so
 # unrelated commits the default branch gained past the merge-base do not count as
 # "added". Returns non-zero when inconclusive (no default ref, or a merge conflict),
 # so the caller refuses rather than guesses.
 content_in_default() {
-  local name ref default_tree merged_tree
+  local work_ref=${1:-HEAD} name ref default_tree merged_tree
   name=$(default_branch) || return 1
   if git -C "$WT" remote get-url origin >/dev/null 2>&1; then
     git -C "$WT" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
@@ -1225,7 +1225,7 @@ content_in_default() {
   fi
   default_tree=$(git -C "$WT" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
   [ -n "$default_tree" ] || return 1
-  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
+  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" "$work_ref" 2>/dev/null) || return 1
   merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
   [ "$merged_tree" = "$default_tree" ]
 }
@@ -1237,8 +1237,8 @@ content_in_default() {
 # only for genuinely unlanded work.
 work_is_landed() {
   local branch=$1
-  pr_is_merged "$branch" && return 0
-  content_in_default
+  pr_is_merged "$branch" "${2:-HEAD}" && return 0
+  content_in_default "${2:-HEAD}"
 }
 
 # The completion links this teardown already holds locally. A scout's
@@ -1500,7 +1500,7 @@ teardown_treehouse_return() {
 }
 
 validate_worktree_teardown_safety() {
-  local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch task_branch_status
+  local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch task_branch_status work_ref ref_unpushed
   [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
   case "$KIND" in
@@ -1531,7 +1531,20 @@ validate_worktree_teardown_safety() {
     return 0
   fi
 
-  if ! unpushed_raw=$(git -C "$WT" log --oneline HEAD --not --remotes -- 2>/dev/null); then
+  local landing_refs=(HEAD)
+  if [ "$WORKSPACE" = in-place ]; then
+    if git -C "$WT" show-ref --verify --quiet "refs/heads/fm/$ID"; then
+      landing_refs+=("refs/heads/fm/$ID")
+    else
+      task_branch_status=$?
+      if [ "$task_branch_status" -ne 1 ]; then
+        echo "REFUSED: cannot inspect task branch fm/$ID in $WT." >&2
+        return 1
+      fi
+    fi
+  fi
+
+  if ! unpushed_raw=$(git -C "$WT" log --oneline "${landing_refs[@]}" --not --remotes -- 2>/dev/null); then
     if worktree_safety_blocked_by_lock "commits not on a remote"; then
       return "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED"
     fi
@@ -1543,18 +1556,6 @@ validate_worktree_teardown_safety() {
 
   if [ "$MODE" = local-only ] && { [ -n "$unpushed" ] || [ "$WORKSPACE" = in-place ]; }; then
     DEFAULT=$(default_branch) || { echo "REFUSED: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master." >&2; return 1; }
-    local landing_refs=(HEAD)
-    if [ "$WORKSPACE" = in-place ]; then
-      if git -C "$WT" show-ref --verify --quiet "refs/heads/fm/$ID"; then
-        landing_refs+=("refs/heads/fm/$ID")
-      else
-        task_branch_status=$?
-        if [ "$task_branch_status" -ne 1 ]; then
-          echo "REFUSED: cannot inspect task branch fm/$ID in $WT." >&2
-          return 1
-        fi
-      fi
-    fi
     if ! unmerged_raw=$(git -C "$WT" log --oneline "${landing_refs[@]}" --not "$DEFAULT" -- 2>/dev/null); then
       if worktree_safety_blocked_by_lock "commits not on $DEFAULT"; then
         return "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED"
@@ -1577,17 +1578,25 @@ validate_worktree_teardown_safety() {
     echo "Commit them (or get the captain's explicit OK to discard, then --force)." >&2
     return 1
   elif [ -n "$unpushed" ]; then
-    branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
-    if [ -z "$branch" ]; then
-      branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-      TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
-    fi
-    if ! work_is_landed "$branch"; then
-      echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
-      printf 'unpushed commits:\n%s\n' "$unpushed" >&2
-      echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
-      return 1
-    fi
+    for work_ref in "${landing_refs[@]}"; do
+      ref_unpushed=$(git -C "$WT" log --oneline "$work_ref" --not --remotes -- 2>/dev/null) || return 1
+      [ -n "$ref_unpushed" ] || continue
+      if [ "$work_ref" = HEAD ]; then
+        branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
+        if [ -z "$branch" ]; then
+          branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+          TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
+        fi
+      else
+        branch=${work_ref#refs/heads/}
+      fi
+      if ! work_is_landed "$branch" "$work_ref"; then
+        echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
+        printf 'unpushed commits on %s:\n%s\n' "$branch" "$ref_unpushed" >&2
+        echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
+        return 1
+      fi
+    done
   fi
 }
 

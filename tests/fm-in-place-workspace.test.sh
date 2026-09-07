@@ -897,10 +897,18 @@ test_zellij_endpoint_confirmation() {
   read_world "$rec"
   cat > "$W_FAKEBIN/zellij" <<'SH'
 #!/usr/bin/env bash
+case "$1" in
+  list-sessions)
+    [ ! -e "${0%/*}/sessions-unreadable" ] || exit 1
+    cat "${0%/*}/sessions"
+    exit 0 ;;
+esac
+printf 'panes\n' >> "${0%/*}/queries"
 [ ! -e "${0%/*}/unreadable" ] || exit 1
 cat "${0%/*}/panes.json"
 SH
   chmod +x "$W_FAKEBIN/zellij"
+  printf 'firstmate [Created 1m ago] (current)\n' > "$W_FAKEBIN/sessions"
   for response in '{}' '[{"id":17,"is_plugin":false}]' '[{"id":18}]'; do
     printf '%s\n' "$response" > "$W_FAKEBIN/panes.json"
     PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
@@ -911,8 +919,24 @@ SH
     || fail "Zellij refused a successful inventory omitting the exact endpoint"
   touch "$W_FAKEBIN/unreadable"
   PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
-    && fail "Zellij treated an unreadable inventory as confirmed termination"
-  pass "Zellij termination requires a valid successful inventory omitting the exact pane"
+    && fail "Zellij treated an unreadable pane inventory as termination"
+  rm "$W_FAKEBIN/queries"
+  for response in 'other [Created 2m ago] ' 'firstmate [Created 1m ago] (EXITED - attach to resurrect)'; do
+    printf '%s\n' "$response" > "$W_FAKEBIN/sessions"
+    PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
+      || fail "Zellij refused confirmed session absence or exit"
+    assert_absent "$W_FAKEBIN/queries" "Zellij queried panes in a stopped session"
+  done
+  for response in '' '{}' 'firstmate' 'error: connection failed' $'other [Created 2m ago] \nmalformed' $'other [Created 2m ago] \nother [Created 1m ago] '; do
+    printf '%s\n' "$response" > "$W_FAKEBIN/sessions"
+    PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
+      && fail "Zellij accepted malformed or ambiguous session inventory: $response"
+  done
+  printf 'other [Created 2m ago] \n' > "$W_FAKEBIN/sessions"
+  touch "$W_FAKEBIN/sessions-unreadable"
+  PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
+    && fail "Zellij treated failed session enumeration as termination"
+  pass "Zellij accepts validated session absence or exit and refuses ambiguous inventories"
 }
 
 test_isolated_close_marker_precedes_scratch_cleanup() {
@@ -1150,6 +1174,89 @@ test_teardown_checks_task_branch_from_main() {
   pass "teardown checks the in-place task branch from main, even with published HEAD, and preserves force"
 }
 
+test_remote_modes_check_task_ref() {
+  local mode outcome out task_tip main_tip merged_head
+  for mode in direct-PR no-mistakes; do
+    for outcome in unpublished older-pr published merged-pr squash patches; do
+      make_teardown_case "$mode-$outcome" remote-task
+      task_tip=$(git -C "$W_PROJ" rev-parse HEAD)
+      git -C "$W_PROJ" checkout -q main
+      main_tip=$(git -C "$W_PROJ" rev-parse HEAD)
+      git -C "$W_PROJ" update-ref refs/remotes/origin/main HEAD
+      printf 'mode=%s\npr=https://github.com/example/proj/pull/1\n' "$mode" >> "$W_HOME/state/remote-task.meta"
+      add_test_in_flight_item "$W_HOME" remote-task
+      case "$outcome" in
+        published)
+          git -C "$W_PROJ" update-ref refs/remotes/origin/fm/remote-task "$task_tip"
+          merged_head= ;;
+        older-pr) merged_head=$main_tip ;;
+        merged-pr) merged_head=$task_tip ;;
+        patches)
+          merged_head=$(printf 'rebased PR\n' | git -C "$W_PROJ" commit-tree "$task_tip^{tree}" -p "$main_tip") ;;
+        squash)
+          git -C "$W_PROJ" merge --squash fm/remote-task >/dev/null
+          git -C "$W_PROJ" commit -qm 'squash task work'
+          git -C "$W_PROJ" update-ref refs/remotes/origin/main HEAD
+          merged_head= ;;
+        *) merged_head= ;;
+      esac
+      if [ -n "$merged_head" ]; then
+        cat > "$W_FAKEBIN/gh" <<SH
+#!/usr/bin/env bash
+printf 'MERGED\t%s\thttps://github.com/example/proj/pull/1\n' '$merged_head'
+SH
+        chmod +x "$W_FAKEBIN/gh"
+      fi
+      if [ "$outcome" = unpublished ] || [ "$outcome" = older-pr ]; then
+        out=$(run_teardown "$W_HOME" "$W_FAKEBIN" remote-task) && fail "$mode completed unpublished task work ($outcome)"
+        assert_contains "$out" "not on any remote and not landed" "teardown did not inspect the task ref ($outcome)"
+        assert_present "$W_HOME/state/remote-task.meta" "refusal released task ownership"
+        assert_absent "$W_HOME/state/remote-task.backlog-close" "refusal published a close marker"
+        [ "$(git -C "$W_PROJ" rev-parse fm/remote-task)" = "$task_tip" ] || fail "refusal altered the task branch"
+        [ "$(tasks-axi show remote-task --file "$W_HOME/data/backlog.md" | sed -n 's/^  state: *//p' | head -1)" = in_flight ] || fail "refusal closed the task"
+        out=$(run_teardown "$W_HOME" "$W_FAKEBIN" remote-task --force) || fail "$mode force failed: $out"
+      else
+        out=$(run_teardown "$W_HOME" "$W_FAKEBIN" remote-task) || fail "$mode refused landed task work ($outcome): $out"
+      fi
+      assert_absent "$W_HOME/state/remote-task.meta" "successful cleanup retained metadata"
+    done
+  done
+  pass "remote delivery modes inspect the task ref for remote, PR, patch, and content landing proofs"
+}
+
+test_zellij_stopped_session_releases_ownership() {
+  local out
+  make_teardown_case zellij-session-stop stopped-session
+  run_merge_local "$W_HOME" stopped-session >/dev/null || fail "could not land Zellij fixture"
+  fm_write_meta "$W_HOME/state/stopped-session.meta" "backend=zellij" "window=firstmate:17" \
+    "endpoint_task_id=stopped-session" "zellij_session=firstmate" "zellij_tab_id=3" "zellij_pane_id=17" \
+    "worktree=$W_PROJ" "project=$W_PROJ" "kind=ship" "mode=local-only" "workspace=in-place"
+  cat > "$W_FAKEBIN/zellij" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = list-sessions ]; then
+  [ ! -e "${0%/*}/sessions-unreadable" ] || exit 1
+  case "$*" in
+    *--short*) echo firstmate ;;
+    *) echo 'firstmate [Created 2m ago] (EXITED - attach to resurrect)' ;;
+  esac
+  exit 0
+fi
+exit 1
+SH
+  chmod +x "$W_FAKEBIN/zellij"
+  touch "$W_FAKEBIN/sessions-unreadable"
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" stopped-session --force) && fail "unreadable session state released ownership"
+  assert_contains "$out" "endpoint termination" "teardown did not reach session confirmation"
+  assert_present "$W_HOME/state/stopped-session.meta" "unreadable session inventory lost metadata"
+  rm "$W_FAKEBIN/sessions-unreadable"
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" stopped-session) || fail "fully stopped Zellij session prevented cleanup: $out"
+  assert_absent "$W_HOME/state/stopped-session.meta" "stopped session retained directory ownership"
+  scaffold_brief "$W_HOME" replacement --mode local-only --in-place
+  out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/replacement.log" \
+    replacement "$W_PROJ" --mode local-only --yolo off --in-place) || fail "stopped session blocked the next worker: $out"
+  pass "a positively exited Zellij session permits teardown and the next in-place worker"
+}
+
 test_project_mode_workspace_query
 test_brief_in_place_scaffolds
 test_spawn_refuses_flag_without_declaration
@@ -1190,3 +1297,6 @@ test_close_replay_preserves_live_owner
 test_spawned_owner_teardown_boundaries
 
 test_teardown_checks_task_branch_from_main
+
+test_remote_modes_check_task_ref
+test_zellij_stopped_session_releases_ownership

@@ -614,8 +614,19 @@ fm_backend_zellij_kill() {  # <target> [tab_id] [expected_label]
 }
 
 fm_backend_zellij_endpoint_confirmed_gone() {
-  local panes
+  local panes sessions presence
   fm_backend_zellij_parse_target "$1" || return 1
+  case "$FM_BACKEND_ZELLIJ_PANE" in ''|*[!0-9]*) return 1 ;; esac
+  sessions=$(ZELLIJ_SESSION_NAME='' zellij list-sessions --no-formatting 2>/dev/null) || return 1
+  presence=$(printf '%s' "$sessions" | jq -Rrse --arg session "$FM_BACKEND_ZELLIJ_SESSION" '
+    split("\n") | map(
+      "^(?<name>[^\\x00-\\x20\\x7f/\\[\\]()]+) \\[Created [^\\x00-\\x1f\\x7f\\[\\]]+ ago\\] (?<state>\\(current\\)|\\(EXITED - attach to resurrect\\))?$" as $pattern |
+      if test($pattern) then capture($pattern) else error("invalid session row") end) |
+    if length == 0 or (map(.name) | unique | length) != length then error("invalid session inventory")
+    elif any(.[]; .name == $session and .state != "(EXITED - attach to resurrect)") then "present"
+    else "absent" end
+  ' 2>/dev/null) || return 1
+  [ "$presence" != absent ] || return 0
   panes=$(fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action list-panes --json 2>/dev/null) || return 1
   printf '%s' "$panes" | jq -e --argjson id "$FM_BACKEND_ZELLIJ_PANE" '
     type == "array" and all(.[];
