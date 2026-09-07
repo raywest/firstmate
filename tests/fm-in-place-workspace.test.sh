@@ -626,11 +626,26 @@ fi
 exec "$real" "\$@"
 SH
   chmod +x "$W_FAKEBIN/tasks-axi"
+  mv "$W_FAKEBIN/tmux" "$W_FAKEBIN/tmux-base"
+  cat > "$W_FAKEBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  list-windows*)
+    if [ -f "${FM_FAKE_LAUNCH_LOG:-}" ] && grep -q 'codex ' "$FM_FAKE_LAUNCH_LOG"; then
+      echo fm-failed-owner
+    fi
+    exit 0 ;;
+  *pane_current_command*) echo codex; exit 0 ;;
+esac
+exec "${0%/*}/tmux-base" "$@"
+SH
+  chmod +x "$W_FAKEBIN/tmux"
   out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/launch.log" \
     failed-owner "$W_PROJ" --mode local-only --yolo off --in-place) && fail "failed dispatch reported success"
   assert_contains "$out" "retaining in-place task" "failed dispatch did not explain retained ownership"
   assert_grep 'codex ' "$W_HOME/launch.log" "failure did not occur after launch delivery"
   assert_present "$W_HOME/state/failed-owner.meta" "failed dispatch released directory ownership"
+  assert_present "$W_HOME/state/.in-place-owners/failed-owner.meta" "rollback lost the guarded ownership record"
   out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/second-launch.log" \
     next-owner "$W_PROJ" --mode local-only --yolo off --in-place) && fail "a second worker entered after failed dispatch"
   assert_contains "$out" "already occupies" "retained ownership did not block a second worker"
@@ -970,6 +985,140 @@ test_claude_trust_in_place_scope() {
   pass "fm-claude-trust: --in-place trusts exactly the declared project directory and nothing else changed"
 }
 
+test_same_id_acquisition_and_metadata_loss() {
+  local rec out phase count
+  rec=$(make_world same-id '[local-only +in-place]')
+  read_world "$rec"
+  scaffold_brief "$W_HOME" same-owner --mode local-only --in-place
+  mv "$W_FAKEBIN/tmux" "$W_FAKEBIN/tmux-base"
+  cat > "$W_FAKEBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  'display-message -p #S') echo "${FM_TEST_SESSION:-firstmate}"; exit 0 ;;
+  new-window*) echo created >> "$FM_TEST_ENDPOINT_LOG" ;;
+  'list-windows -t session-a '*) [ ! -s "$FM_HOME/endpoints" ] || echo fm-same-owner; exit 0 ;;
+  *pane_current_command*) echo codex; exit 0 ;;
+esac
+exec "${0%/*}/tmux-base" "$@"
+SH
+  chmod +x "$W_FAKEBIN/tmux"
+  out=$(FM_TEST_SESSION=session-a FM_TEST_ENDPOINT_LOG="$W_HOME/endpoints" run_spawn \
+    "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/launch.log" \
+    same-owner "$W_PROJ" --mode local-only --yolo off --in-place) || fail "initial ownership acquisition failed: $out"
+  count=$(wc -l < "$W_HOME/endpoints")
+  cp "$W_HOME/state/same-owner.meta" "$W_HOME/saved-meta"
+  for phase in recorded missing; do
+    [ "$phase" != missing ] || rm "$W_HOME/state/same-owner.meta"
+    out=$(FM_TEST_SESSION=session-b FM_TEST_ENDPOINT_LOG="$W_HOME/endpoints" run_spawn \
+      "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/second-launch.log" \
+      same-owner "$W_PROJ" --mode local-only --yolo off --in-place) && fail "same-id acquisition succeeded with $phase metadata"
+    assert_contains "$out" "already occupies" "same-id spawn bypassed the directory owner"
+    [ "$(wc -l < "$W_HOME/endpoints")" = "$count" ] || fail "same-id refusal created an endpoint"
+    assert_absent "$W_HOME/second-launch.log" "same-id refusal delivered a command"
+    if [ "$phase" = recorded ]; then
+      cmp -s "$W_HOME/saved-meta" "$W_HOME/state/same-owner.meta" || fail "same-id refusal replaced metadata"
+    fi
+  done
+  cp "$W_HOME/saved-meta" "$W_HOME/state/same-owner.meta"
+  out=$(FM_TEST_SESSION=session-b run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/relaunch.log" \
+    same-owner --relaunch --harness codex) && fail "relaunch replaced a live agent"
+  pass "same-id acquisition refuses before endpoint creation, even after ordinary metadata loss"
+}
+
+test_primary_hook_exclusions_from_linked_cwd() {
+  local rec out
+  rec=$(make_world primary-exclude '[local-only +in-place]')
+  read_world "$rec"
+  scaffold_brief "$W_HOME" hook-exclude --mode local-only --in-place
+  fm_git_init_commit "$W_HOME/source"
+  git -C "$W_PROJ" config core.excludesFile /dev/null
+  git -C "$W_HOME/source" config core.excludesFile /dev/null
+  git -C "$W_HOME/source" worktree add -q "$W_HOME/linked" -b linked || fail "could not create linked cwd"
+  mkdir -p "$W_HOME/claude-config"
+  out=$(cd "$W_HOME/linked" && CLAUDE_CONFIG_DIR="$W_HOME/claude-config" \
+    run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/launch.log" \
+    hook-exclude "$W_PROJ" --mode local-only --yolo off --in-place --harness claude) || fail "hook spawn from linked cwd failed: $out"
+  assert_present "$W_PROJ/.claude/settings.local.json" "hook was not installed"
+  git -C "$W_PROJ" check-ignore -q .claude/settings.local.json || fail "project hook was not excluded by Git"
+  git -C "$W_HOME/linked" check-ignore -q .claude/settings.local.json && fail "spawn changed the caller's exclusions"
+  pass "hook exclusions resolve against the primary project from a linked launch cwd"
+}
+
+test_close_replay_preserves_live_owner() {
+  local rec out generation mode
+  rec=$(make_world replay-owner '[local-only +in-place]')
+  read_world "$rec"
+  scaffold_brief "$W_HOME" replay-owner --mode local-only --in-place
+  out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/launch.log" \
+    replay-owner "$W_PROJ" --mode local-only --yolo off --in-place) || fail "could not acquire replay fixture: $out"
+  add_test_in_flight_item "$W_HOME" replay-owner
+  generation=$(sed -n 's/^spawn_gen=//p' "$W_HOME/state/replay-owner.meta")
+  printf 'id=replay-owner\ndata=%s/data\nspawn_gen=%s\ncleanup_incomplete=0\narg=--note\narg=local%%20main\n' \
+    "$W_HOME" "$generation" > "$W_HOME/state/replay-owner.backlog-close"
+  mv "$W_FAKEBIN/tmux" "$W_FAKEBIN/tmux-base"
+  cat > "$W_FAKEBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  list-windows*) [ "${FM_TEST_ENDPOINT_MODE:-live}" != live ] || echo fm-replay-owner; exit 0 ;;
+  *pane_current_command*) echo codex; exit 0 ;;
+esac
+exec "${0%/*}/tmux-base" "$@"
+SH
+  chmod +x "$W_FAKEBIN/tmux"
+  for mode in recorded missing; do
+    [ "$mode" != missing ] || rm "$W_HOME/state/replay-owner.meta"
+    PATH="$W_FAKEBIN:$PATH" replay_test_close_marker "$W_HOME" replay-owner && fail "replay released a live endpoint with $mode metadata"
+    assert_present "$W_HOME/state/.in-place-owners/replay-owner.meta" "replay released private ownership"
+    [ "$(tasks-axi show replay-owner --file "$W_HOME/data/backlog.md" | sed -n 's/^  state: *//p' | head -1)" = in_flight ] || fail "replay closed a live task"
+  done
+  FM_TEST_ENDPOINT_MODE=gone PATH="$W_FAKEBIN:$PATH" replay_test_close_marker "$W_HOME" replay-owner || fail "replay refused confirmed termination"
+  assert_absent "$W_HOME/state/.in-place-owners/replay-owner.meta" "replay did not release confirmed ownership"
+  assert_absent "$W_HOME/state/replay-owner.backlog-close" "replay did not complete"
+  pass "close replay requires termination evidence even when task metadata was removed"
+}
+
+test_spawned_owner_teardown_boundaries() {
+  local axis out child_home target_home target_id
+  for axis in direct child; do
+    make_teardown_case "owned-$axis" owned-cleanup
+    rm "$W_HOME/state/owned-cleanup.meta"
+    printf -- '- proj [local-only +in-place] - test\n' > "$W_HOME/data/projects.md"
+    scaffold_brief "$W_HOME" owned-cleanup --mode local-only --in-place
+    out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/launch.log" \
+      owned-cleanup "$W_PROJ" --mode local-only --yolo off --in-place) || fail "could not spawn cleanup fixture: $out"
+    child_home=$W_HOME
+    target_home=$child_home
+    target_id=owned-cleanup
+    if [ "$axis" = child ]; then
+      target_home="$TMP_ROOT/owned-child/parent"
+      target_id=mate
+      mkdir -p "$target_home/state" "$target_home/data" "$target_home/config"
+      printf 'mate\n' > "$child_home/.fm-secondmate-home"
+      fm_write_meta "$target_home/state/mate.meta" "window=firstmate:fm-mate" "endpoint_task_id=mate" \
+        "worktree=$child_home" "home=$child_home" "project=$child_home" "kind=secondmate"
+    fi
+    mv "$W_FAKEBIN/tmux" "$W_FAKEBIN/tmux-base"
+    cat > "$W_FAKEBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  list-windows*) [ "${FM_TEST_ENDPOINT_MODE:-live}" != live ] || echo fm-owned-cleanup; exit 0 ;;
+  *pane_current_command*) echo codex; exit 0 ;;
+  kill-window*) exit 1 ;;
+esac
+exec "${0%/*}/tmux-base" "$@"
+SH
+    chmod +x "$W_FAKEBIN/tmux"
+    out=$(run_teardown "$target_home" "$W_FAKEBIN" "$target_id" --force) && fail "$axis teardown released live ownership"
+    assert_contains "$out" "endpoint termination" "$axis teardown did not use the release guard"
+    assert_present "$child_home/state/owned-cleanup.meta" "$axis teardown lost metadata"
+    assert_present "$child_home/state/.in-place-owners/owned-cleanup.meta" "$axis teardown lost directory ownership"
+    out=$(FM_TEST_ENDPOINT_MODE=gone run_teardown "$target_home" "$W_FAKEBIN" "$target_id" --force) || fail "$axis teardown refused absent endpoint: $out"
+    assert_absent "$child_home/state/.in-place-owners/owned-cleanup.meta" "$axis teardown retained released ownership"
+    assert_present "$W_PROJ/work.txt" "$axis teardown removed the real project"
+  done
+  pass "direct and forced-child teardown release acquired ownership only after confirmed termination"
+}
+
 test_project_mode_workspace_query
 test_brief_in_place_scaffolds
 test_spawn_refuses_flag_without_declaration
@@ -1002,3 +1151,9 @@ test_zellij_endpoint_confirmation
 
 test_isolated_close_marker_precedes_scratch_cleanup
 test_generated_in_place_checkout_instructions
+
+test_same_id_acquisition_and_metadata_loss
+test_primary_hook_exclusions_from_linked_cwd
+test_close_replay_preserves_live_owner
+
+test_spawned_owner_teardown_boundaries

@@ -37,12 +37,9 @@
 #   firstmate home, outside the firstmate repo, and outside this home's
 #   projects/ clone root (an in-place project's real work location is
 #   elsewhere by definition; clones under projects/ keep scratch copies).
-#   Within one firstmate home, exactly one live worker may own an in-place
-#   directory; two homes pointing at the same directory are not coordinated.
-#   While any task record in this home names that directory as its worktree, a second
-#   in-place spawn of it is refused (checked under the same task-set lock a
-#   fresh spawn already holds through publication, so two concurrent spawns
-#   cannot both pass). The launched pane is verified to be sitting in the
+#   Directory ownership follows bin/fm-in-place-owner-lib.sh, within one
+#   firstmate home only; two homes pointing at the same directory are not
+#   coordinated. The launched pane is verified to be sitting in the
 #   project directory before the brief is delivered, the task's meta records
 #   workspace=in-place (absent means isolated, keeping every other task's
 #   meta byte-identical), and bin/fm-teardown.sh, bin/fm-merge-local.sh, and
@@ -251,8 +248,8 @@
 # success. A ship or scout dispatch therefore REFUSES up front, before any
 # endpoint, worktree, or record exists, unless the home's backlog has an
 # unheld, unblocked Queued or In flight item for the id; a transition that fails
-# after publication removes the record it just wrote, except that in-place
-# tasks retain directory ownership until guarded teardown stops the endpoint.
+# after publication rolls back through bin/fm-backlog-transition-lib.sh and
+# the in-place ownership contract in bin/fm-in-place-owner-lib.sh.
 # A relaunch re-reads the row instead of
 # re-running the transition, so an eligible In-flight item is left untouched.
 # The transition is
@@ -819,11 +816,6 @@ CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
 
 spawn_fresh_commit_rollback() {
-  if [ "$IN_PLACE" -eq 1 ] && [ -f "$STATE/$ID.meta" ]; then
-    SPAWN_FRESH_COMMIT_PENDING=0
-    echo "error: retaining in-place task $ID's ownership record until its endpoint is confirmed stopped; reconcile the backlog and use guarded teardown before another worker can enter $WT" >&2
-    return 1
-  fi
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
       "$FM_ROOT/bin/fm-busy-event.sh" "$STATE" "$ID" "${BUSY_GEN:-}"; then
     SPAWN_FRESH_COMMIT_PENDING=0
@@ -2099,13 +2091,6 @@ spawn_candidate_is_primary_worktree() {  # <resolved-path>
   [ "$common" = "$PROJ_COMMON_DIR_REAL" ]
 }
 
-# In-place launch preconditions, all checked before any endpoint or record
-# exists so a refusal costs nothing to unwind. The single-worker rule runs
-# under the task-set lock a fresh spawn already holds through publication
-# (fm_task_set_lock_path), so two concurrent spawns cannot both pass it, and it
-# tests record EXISTENCE rather than liveness: a dead worker's record still
-# owns the directory until its cleanup runs, because its unlanded work lives
-# there.
 if [ "$IN_PLACE" -eq 1 ] && [ "$RELAUNCH" -eq 0 ]; then
   in_place_top=$(git -C "$PROJ_ABS_REAL" rev-parse --show-toplevel 2>/dev/null) || in_place_top=
   if [ -z "$in_place_top" ] || [ "$(real_path_or_raw "$in_place_top")" != "$PROJ_ABS_REAL" ]; then
@@ -2121,18 +2106,15 @@ if [ "$IN_PLACE" -eq 1 ] && [ "$RELAUNCH" -eq 0 ]; then
       exit 1
     fi
   done
-  for in_place_meta in "$STATE"/*.meta; do
-    [ -e "$in_place_meta" ] || continue
-    [ "$in_place_meta" != "$STATE/$ID.meta" ] || continue
-    in_place_other_wt=$(fm_meta_get "$in_place_meta" worktree)
-    [ -n "$in_place_other_wt" ] || continue
-    if [ "$in_place_other_wt" = "$PROJ_ABS" ] \
-       || [ "$(real_path_or_raw "$in_place_other_wt")" = "$PROJ_ABS_REAL" ]; then
-      in_place_other_id=$(basename "$in_place_meta" .meta)
-      echo "error: task '$in_place_other_id' already occupies '$PROJ_ABS' as its working directory; an in-place project takes one worker at a time within one firstmate home (two homes pointing at the same directory are not coordinated) - finish and clean up that task first" >&2
-      exit 1
-    fi
-  done
+fi
+
+if [ "$IN_PLACE" -eq 1 ]; then
+  in_place_acquire_mode=fresh
+  [ "$RELAUNCH" -eq 0 ] || in_place_acquire_mode=relaunch
+  fm_in_place_owner_acquire "$STATE" "$ID" "$PROJ_ABS_REAL" "$in_place_acquire_mode" || {
+    echo "error: $FM_BACKLOG_TRANSITION_ERROR" >&2
+    exit 1
+  }
 fi
 
 # Session-provider container-ensure + task creation. tmux stays exactly as P1
@@ -2840,7 +2822,7 @@ STATE_REAL=$(cd "$STATE" && pwd -P)
 TURNEND="$STATE_REAL/$ID.turn-ended"
 exclude_path() {
   local rel=$1 EXCL
-  EXCL=$(git -C "$WT" rev-parse --git-path info/exclude 2>/dev/null || true)
+  EXCL=$(git -C "$WT" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null || true)
   [ -n "$EXCL" ] || return 0
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"

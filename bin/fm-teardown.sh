@@ -72,8 +72,7 @@
 # never deletes an unlanded branch there. The record cross-check near the top
 # of the script refuses in BOTH directions when workspace= and the recorded
 # worktree/project identity disagree. In-place scouts must also have no
-# tracked edits, and every in-place task retains directory ownership until
-# its backend positively confirms that the endpoint is gone.
+# tracked edits; bin/fm-in-place-owner-lib.sh owns directory release.
 # A Herdr presentation journal never authorizes cleanup. Teardown still closes
 # only the exact task pane from ordinary endpoint metadata and never calls
 # `workspace close`. It retires the non-authoritative journal only when a
@@ -2148,6 +2147,10 @@ remove_firstmate_home() {
   [ -e "$home" ] || return 0
   abs_home_path=$(validate_firstmate_home_for_removal "$home" "$label" "$expected_id") || return 1
   [ -n "$abs_home_path" ] || return 0
+  fm_in_place_owner_home_ready "$abs_home_path/state" remove || {
+    echo "REFUSED: $FM_BACKLOG_TRANSITION_ERROR" >&2
+    return 1
+  }
   process_event_backup=$(snapshot_firstmate_home_process_events "$abs_home_path" "$label") || return 1
   if ! cleanup_firstmate_home_process_events "$abs_home_path" "$label"; then
     restore_firstmate_home_process_events "$abs_home_path" "$label" "$process_event_backup" || return $?
@@ -2435,6 +2438,10 @@ validate_firstmate_home_children_removal() {
   local home=$1 sub_state child_meta child_id child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_workspace
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
+  fm_in_place_owner_home_ready "$sub_state" enumerate || {
+    echo "REFUSED: $FM_BACKLOG_TRANSITION_ERROR" >&2
+    return 1
+  }
   for child_meta in "$sub_state"/*.meta; do
     [ -e "$child_meta" ] || continue
     child_id=$(basename "$child_meta" .meta)
@@ -2657,10 +2664,10 @@ cleanup_firstmate_home_children() {
       fi
     fi
     if [ "$child_workspace" = in-place ]; then
-      if ! teardown_child_backend_call "$home" fm_backend_endpoint_confirmed_gone "$child_backend" "$child_t" "fm-$child_id"; then
-        echo "REFUSED: endpoint termination for in-place child $child_id is not confirmed; preserving directory ownership records" >&2
+      fm_in_place_owner_check "$child_meta" "$sub_state" || {
+        echo "REFUSED: $FM_BACKLOG_TRANSITION_ERROR" >&2
         return 1
-      fi
+      }
       if [ -d "$child_wt" ]; then
         python3 "$SCRIPT_DIR/fm-workspace-hooks.py" remove "$sub_state" "$child_id" "$child_wt" || return 1
       fi
@@ -2875,7 +2882,7 @@ if [ "$BACKEND" = herdr ]; then
 fi
 
 teardown_record_pending_close() {
-  fm_backlog_close_marker_write "$STATE" "$ID" "$DATA" "$META_SPAWN_GEN" \
+  fm_in_place_owner_close_marker "$1" "$STATE" "$ID" "$DATA" "$META_SPAWN_GEN" \
     "${BACKLOG_TRANSITION_FLAGS[@]+"${BACKLOG_TRANSITION_FLAGS[@]}"}" \
     "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" \
     || { echo "error: the pending backlog $BACKLOG_TRANSITION for $ID could not be recorded ($FM_BACKLOG_TRANSITION_ERROR); retaining every durable task record" >&2; exit 1; }
@@ -2893,9 +2900,7 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
   }
   BACKLOG_CLOSED=1
   META_SPAWN_GEN=$TEARDOWN_META_SPAWN_GEN
-  if [ "$IN_PLACE" -eq 0 ]; then
-    teardown_record_pending_close
-  fi
+  teardown_record_pending_close before
 else
   if [ "$CLEANUP_RECOVERY" = orca ]; then
     BACKLOG_SKIP_REASON="Orca cleanup recovery is not a launched backlog worker"
@@ -3064,12 +3069,12 @@ if [ "$BACKEND" = herdr ]; then
     exit 1
   fi
 fi
-if [ "$IN_PLACE" -eq 1 ] && ! fm_backend_endpoint_confirmed_gone "$BACKEND" "$T" "fm-$ID"; then
-  echo "REFUSED: endpoint termination for in-place task $ID is not confirmed; preserving directory ownership records" >&2
+fm_in_place_owner_check "$META" "$STATE" || {
+  echo "REFUSED: $FM_BACKLOG_TRANSITION_ERROR" >&2
   exit 1
-fi
-if [ "$IN_PLACE" -eq 1 ] && [ "$BACKLOG_CLOSED" = 1 ]; then
-  teardown_record_pending_close
+}
+if [ "$BACKLOG_CLOSED" = 1 ]; then
+  teardown_record_pending_close after
 fi
 if [ "$KIND" != secondmate ]; then
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
