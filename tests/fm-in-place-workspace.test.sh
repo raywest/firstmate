@@ -423,7 +423,7 @@ SH
 run_teardown() {  # <home> <fakebin> <id> [args...]
   local home=$1 fakebin=$2 id=$3
   shift 3
-  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_CONFIG_OVERRIDE="$home/config" \
     PATH="$fakebin:$PATH" \
@@ -670,6 +670,203 @@ test_forced_secondmate_preserves_in_place_child() {
   pass "forced secondmate cleanup preserves the in-place child's project and unowned settings"
 }
 
+test_landing_preserves_ignored_collisions() {
+  local rec out tip
+  rec=$(make_world landing-ignored-checkout '[local-only +in-place]')
+  read_world "$rec"
+  printf 'old tracked image\n' > "$W_PROJ/image.png"
+  git -C "$W_PROJ" add image.png
+  git -C "$W_PROJ" commit -qm 'track original image'
+  git -C "$W_PROJ" checkout -qb fm/collision
+  git -C "$W_PROJ" rm -q image.png
+  printf 'image.png\n' > "$W_PROJ/.gitignore"
+  git -C "$W_PROJ" add .gitignore
+  git -C "$W_PROJ" commit -qm 'keep product image outside git'
+  printf 'precious replacement\n' > "$W_PROJ/image.png"
+  fm_write_meta "$W_HOME/state/collision.meta" "project=$W_PROJ" "mode=local-only" "workspace=in-place"
+  tip=$(git -C "$W_PROJ" rev-parse HEAD)
+  out=$(run_merge_local "$W_HOME" collision) && fail "landing overwrote an ignored image during checkout"
+  [ "$(cat "$W_PROJ/image.png")" = 'precious replacement' ] || fail "checkout changed the ignored image"
+  [ "$(git -C "$W_PROJ" rev-parse HEAD)" = "$tip" ] || fail "refused checkout moved HEAD"
+
+  rec=$(make_world landing-ignored-merge '[local-only +in-place]')
+  read_world "$rec"
+  printf 'image.png\n' > "$W_PROJ/.gitignore"
+  git -C "$W_PROJ" add .gitignore
+  git -C "$W_PROJ" commit -qm 'ignore product images'
+  git -C "$W_PROJ" checkout -qb fm/collision
+  printf 'task image\n' > "$W_PROJ/image.png"
+  git -C "$W_PROJ" add -f image.png
+  git -C "$W_PROJ" commit -qm 'track task image'
+  git -C "$W_PROJ" checkout -q main
+  printf 'precious main image\n' > "$W_PROJ/image.png"
+  fm_write_meta "$W_HOME/state/collision.meta" "project=$W_PROJ" "mode=local-only" "workspace=in-place"
+  tip=$(git -C "$W_PROJ" rev-parse HEAD)
+  out=$(run_merge_local "$W_HOME" collision) && fail "landing overwrote an ignored image during merge"
+  [ "$(cat "$W_PROJ/image.png")" = 'precious main image' ] || fail "merge changed the ignored image"
+  [ "$(git -C "$W_PROJ" rev-parse HEAD)" = "$tip" ] || fail "refused merge moved HEAD"
+  pass "landing refuses ignored-file collisions at checkout and merge without changing product data"
+}
+
+test_in_place_scout_tracked_changes() {
+  local out wt
+  make_teardown_case scout-dirty scout-dirty
+  sed 's/^kind=ship$/kind=scout/' "$W_HOME/state/scout-dirty.meta" > "$W_HOME/state/scout-dirty.tmp"
+  mv "$W_HOME/state/scout-dirty.tmp" "$W_HOME/state/scout-dirty.meta"
+  mkdir -p "$W_HOME/data/scout-dirty"
+  printf 'Investigation complete.\n' > "$W_HOME/data/scout-dirty/report.md"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$W_HOME" "$ROOT/bin/fm-captain-hold.sh" complete scout-dirty --none >/dev/null || fail "could not complete scout inventory"
+  printf 'tracked edit\n' >> "$W_PROJ/work.txt"
+  printf 'product image\n' > "$W_PROJ/image.png"
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" scout-dirty) && fail "in-place scout cleanup allowed tracked edits"
+  assert_contains "$out" "uncommitted changes to tracked files" "scout tracked-change guard did not run"
+  assert_present "$W_HOME/state/scout-dirty.meta" "scout refusal removed directory ownership"
+  git -C "$W_PROJ" checkout -q -- work.txt
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" scout-dirty) || fail "untracked content blocked scout cleanup: $out"
+  [ "$(cat "$W_PROJ/image.png")" = 'product image' ] || fail "scout cleanup removed untracked content"
+
+  make_teardown_case scout-force scout-force
+  sed 's/^kind=ship$/kind=scout/' "$W_HOME/state/scout-force.meta" > "$W_HOME/state/scout-force.tmp"
+  mv "$W_HOME/state/scout-force.tmp" "$W_HOME/state/scout-force.meta"
+  printf 'tracked edit\n' >> "$W_PROJ/work.txt"
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" scout-force --force) || fail "explicit force could not complete scout cleanup: $out"
+  assert_grep 'tracked edit' "$W_PROJ/work.txt" "forced in-place cleanup discarded tracked content"
+
+  make_teardown_case scout-isolated scout-isolated
+  git -C "$W_PROJ" checkout -q main
+  wt="$TMP_ROOT/scout-isolated/scratch"
+  git -C "$W_PROJ" worktree add -q "$wt" fm/scout-isolated
+  fm_write_meta "$W_HOME/state/scout-isolated.meta" "window=firstmate:fm-scout-isolated" \
+    "endpoint_task_id=scout-isolated" "worktree=$wt" "project=$W_PROJ" "kind=scout"
+  mkdir -p "$W_HOME/data/scout-isolated"
+  printf 'Investigation complete.\n' > "$W_HOME/data/scout-isolated/report.md"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$W_HOME" "$ROOT/bin/fm-captain-hold.sh" complete scout-isolated --none >/dev/null || fail "could not complete isolated scout inventory"
+  printf 'scratch edit\n' >> "$wt/work.txt"
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" scout-isolated) || fail "isolated scout lost its scratch exemption: $out"
+  assert_absent "$W_HOME/state/scout-isolated.meta" "isolated scout did not complete"
+  pass "in-place scouts refuse tracked edits, allow untracked files and force, and isolated scouts keep their exemption"
+}
+
+test_direct_teardown_retains_unconfirmed_endpoint() {
+  local out mode
+  make_teardown_case endpoint-retained endpoint-retained
+  run_merge_local "$W_HOME" endpoint-retained >/dev/null || fail "could not land endpoint fixture"
+  mv "$W_FAKEBIN/tmux" "$W_FAKEBIN/tmux-base"
+  cat > "$W_FAKEBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  list-windows*)
+    case "${FM_TEST_ENDPOINT_MODE:-live}" in
+      live) echo fm-endpoint-retained ;;
+      unreadable) exit 1 ;;
+      gone) : ;;
+    esac
+    exit 0 ;;
+  *pane_current_command*) echo codex; exit 0 ;;
+  kill-window*) exit 1 ;;
+esac
+exec "${0%/*}/tmux-base" "$@"
+SH
+  chmod +x "$W_FAKEBIN/tmux"
+  for mode in live unreadable; do
+    out=$(FM_TEST_ENDPOINT_MODE="$mode" run_teardown "$W_HOME" "$W_FAKEBIN" endpoint-retained --force) \
+      && fail "teardown released a $mode endpoint"
+    assert_contains "$out" "endpoint termination" "teardown did not refuse unconfirmed termination"
+    assert_present "$W_HOME/state/endpoint-retained.meta" "teardown released directory ownership"
+  done
+  out=$(FM_TEST_ENDPOINT_MODE=gone run_teardown "$W_HOME" "$W_FAKEBIN" endpoint-retained) || fail "confirmed absence could not complete teardown: $out"
+  assert_absent "$W_HOME/state/endpoint-retained.meta" "confirmed absence did not release ownership"
+  pass "direct teardown retains ownership on live and unreadable endpoints, including under force"
+}
+
+test_cmux_teardown_confirms_child_home_close() {
+  local axis out child_home parent_home target_home target_id title mode code_root
+  for axis in direct child; do
+    make_teardown_case "cmux-$axis" cmux-owner
+    child_home="$W_HOME"
+    run_merge_local "$child_home" cmux-owner >/dev/null || fail "could not land cmux task"
+    fm_write_meta "$child_home/state/cmux-owner.meta" "backend=cmux" "window=workspace-id:surface-id" \
+      "endpoint_task_id=cmux-owner" "cmux_workspace_id=workspace-id" "cmux_surface_id=surface-id" \
+      "worktree=$W_PROJ" "project=$W_PROJ" "kind=ship" "mode=local-only" "workspace=in-place"
+    target_home=$child_home
+    target_id=cmux-owner
+    if [ "$axis" = child ]; then
+      parent_home="$TMP_ROOT/cmux-$axis/parent"
+      mkdir -p "$parent_home/state" "$parent_home/data" "$parent_home/config"
+      printf 'mate\n' > "$child_home/.fm-secondmate-home"
+      fm_write_meta "$parent_home/state/mate.meta" "window=firstmate:fm-mate" "endpoint_task_id=mate" \
+        "worktree=$child_home" "home=$child_home" "project=$child_home" "kind=secondmate"
+      target_home=$parent_home
+      target_id=mate
+    fi
+    code_root=$ROOT
+    [ "$axis" != child ] || code_root=$child_home
+    title=$(FM_HOME="$child_home" FM_ROOT="$code_root" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_source cmux; fm_backend_cmux_scoped_title fm-cmux-owner' _ "$ROOT")
+    printf '%s\n' "$title" > "$W_FAKEBIN/cmux-title"
+    cat > "$W_FAKEBIN/cmux" <<'SH'
+#!/usr/bin/env bash
+base=${0%/*}
+case "$*" in
+  list-windows*)
+    if [ -e "$base/cmux-closed" ] && [ "${FM_TEST_CMUX_CLOSE:-}" = malformed ]; then
+      echo '{}'
+    else
+      echo '[{"id":"window-id"}]'
+    fi ;;
+  'workspace list'*)
+    if [ -e "$base/cmux-closed" ] && [ "${FM_TEST_CMUX_CLOSE:-}" = gone ]; then
+      echo '{"workspaces":[]}'
+    else
+      printf '{"workspaces":[{"id":"workspace-id","title":"%s"},{"id":"sibling","title":"other"}]}\n' "$(cat "$base/cmux-title")"
+    fi ;;
+  list-panes*) echo '{"panes":[{"surface_ids":["surface-id"]}]}' ;;
+  close-workspace*)
+    printf '%s\n' "$FM_HOME" >> "$base/cmux-close-homes"
+    [ "${FM_TEST_CMUX_CLOSE:-}" = error ] && exit 1
+    : > "$base/cmux-closed" ;;
+esac
+exit 0
+SH
+    chmod +x "$W_FAKEBIN/cmux"
+    for mode in live malformed error; do
+      rm -f "$W_FAKEBIN/cmux-closed"
+      out=$(FM_TEST_CMUX_CLOSE="$mode" run_teardown "$target_home" "$W_FAKEBIN" "$target_id" --force) \
+        && fail "cmux $axis teardown released an unconfirmed $mode endpoint"
+      assert_contains "$out" "endpoint termination" "cmux $axis did not refuse unconfirmed termination"
+      assert_present "$child_home/state/cmux-owner.meta" "cmux $axis lost directory ownership"
+      [ "$(tail -1 "$W_FAKEBIN/cmux-close-homes")" = "$child_home" ] || fail "cmux close used the wrong owning home"
+    done
+    out=$(FM_TEST_CMUX_CLOSE=gone run_teardown "$target_home" "$W_FAKEBIN" "$target_id" --force) || fail "cmux $axis teardown failed after confirmed close: $out"
+    assert_absent "$target_home/state/$target_id.meta" "confirmed cmux $axis close retained task ownership"
+    assert_present "$W_PROJ/work.txt" "cmux cleanup deleted the real project"
+  done
+  pass "cmux direct and child cleanup use the owning home and retain records until confirmed closure"
+}
+
+test_zellij_endpoint_confirmation() {
+  local rec response
+  rec=$(make_world zellij-confirmation)
+  read_world "$rec"
+  cat > "$W_FAKEBIN/zellij" <<'SH'
+#!/usr/bin/env bash
+[ ! -e "${0%/*}/unreadable" ] || exit 1
+cat "${0%/*}/panes.json"
+SH
+  chmod +x "$W_FAKEBIN/zellij"
+  for response in '{}' '[{"id":17,"is_plugin":false}]' '[{"id":18}]'; do
+    printf '%s\n' "$response" > "$W_FAKEBIN/panes.json"
+    PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
+      && fail "Zellij accepted present or unverified endpoint inventory: $response"
+  done
+  printf '%s\n' '[{"id":18,"is_plugin":false}]' > "$W_FAKEBIN/panes.json"
+  PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
+    || fail "Zellij refused a successful inventory omitting the exact endpoint"
+  touch "$W_FAKEBIN/unreadable"
+  PATH="$W_FAKEBIN:$PATH" bash -c '. "$1/bin/fm-backend.sh"; fm_backend_endpoint_confirmed_gone zellij firstmate:17' _ "$ROOT" \
+    && fail "Zellij treated an unreadable inventory as confirmed termination"
+  pass "Zellij termination requires a valid successful inventory omitting the exact pane"
+}
+
 # --- claude trust -----------------------------------------------------------
 
 test_claude_trust_in_place_scope() {
@@ -720,3 +917,10 @@ test_failed_dispatch_retains_in_place_ownership
 test_forced_secondmate_preserves_in_place_child
 
 test_in_place_relaunch_preserves_unowned_hooks
+
+test_landing_preserves_ignored_collisions
+test_in_place_scout_tracked_changes
+test_direct_teardown_retains_unconfirmed_endpoint
+test_cmux_teardown_confirms_child_home_close
+
+test_zellij_endpoint_confirmation

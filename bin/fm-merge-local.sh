@@ -103,13 +103,15 @@ fi
 # the checkout only rewinds the tree to a state the merge below restores; a
 # checkout that still fails leaves the project exactly where the worker did.
 if [ "$cur" = "$BRANCH" ] && [ "$cur" != "$DEFAULT" ]; then
-  git -C "$PROJ" checkout --quiet "$DEFAULT" || {
+  git -C "$PROJ" checkout --quiet --no-overwrite-ignore "$DEFAULT" || {
     echo "error: could not check out '$DEFAULT' in $PROJ; nothing was merged" >&2
     exit 1
   }
 fi
 
 before=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
-git -C "$PROJ" merge --ff-only "$BRANCH" >/dev/null
+merge_args=()
+[ "$WORKSPACE" != in-place ] || merge_args=(--no-overwrite-ignore)
+git -C "$PROJ" merge --ff-only "${merge_args[@]+"${merge_args[@]}"}" "$BRANCH" >/dev/null
 after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"

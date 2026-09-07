@@ -50,7 +50,7 @@
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge after configured approval) as a fallback
 # for the common case where there is no remote at all.
-# Scout tasks (kind=scout in meta) carve out of that check: their worktree is
+# Isolated scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
@@ -70,7 +70,9 @@
 # resets, detaches, or process-sweeps the directory itself, and even --force
 # never deletes an unlanded branch there. The record cross-check near the top
 # of the script refuses in BOTH directions when workspace= and the recorded
-# worktree/project identity disagree.
+# worktree/project identity disagree. In-place scouts must also have no
+# tracked edits, and every in-place task retains directory ownership until
+# its backend positively confirms that the endpoint is gone.
 # A Herdr presentation journal never authorizes cleanup. Teardown still closes
 # only the exact task pane from ordinary endpoint metadata and never calls
 # `workspace close`. It retires the non-authoritative journal only when a
@@ -1502,7 +1504,8 @@ validate_worktree_teardown_safety() {
   [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
   case "$KIND" in
-    secondmate|scout) return 0 ;;
+    secondmate) return 0 ;;
+    scout) [ "$WORKSPACE" = in-place ] || return 0 ;;
   esac
 
   local status_args=()
@@ -1519,6 +1522,14 @@ validate_worktree_teardown_safety() {
     return 1
   fi
   dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.fm-(grok|kimi)-turnend$)' | head -1 || true)
+
+  if [ "$KIND" = scout ]; then
+    if [ -n "$dirty" ]; then
+      echo "REFUSED: in-place scout $ID has uncommitted changes to tracked files in $WT; commit them or get explicit discard authority before --force." >&2
+      return 1
+    fi
+    return 0
+  fi
 
   if ! unpushed_raw=$(git -C "$WT" log --oneline HEAD --not --remotes -- 2>/dev/null); then
     if worktree_safety_blocked_by_lock "commits not on a remote"; then
@@ -2590,6 +2601,15 @@ preflight_firstmate_home_herdr_children() {  # <home>
   done
 }
 
+teardown_child_backend_call() (
+  child_backend_home=$1
+  shift
+  unset FM_ROOT_OVERRIDE
+  export FM_HOME="$child_backend_home" FM_ROOT="$child_backend_home" FM_CONFIG_OVERRIDE="$child_backend_home/config"
+  export FM_STATE_OVERRIDE="$child_backend_home/state" FM_DATA_OVERRIDE="$child_backend_home/data"
+  "$@"
+)
+
 cleanup_firstmate_home_children() {
   local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc child_busy_gen child_workspace
   sub_state="$home/state"
@@ -2624,20 +2644,22 @@ cleanup_firstmate_home_children() {
           echo "error: herdr session presentation lock is not held for child $child_id; retaining that child's durable identity records and stopping forced cleanup" >&2
           return 1
         fi
-        fm_backend_herdr_kill_serialized "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" 2>/dev/null || true
-        if ! fm_backend_herdr_endpoint_confirmed_gone "$child_t"; then
+        teardown_child_backend_call "$home" fm_backend_herdr_kill_serialized "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" 2>/dev/null || true
+        if ! teardown_child_backend_call "$home" fm_backend_herdr_endpoint_confirmed_gone "$child_t"; then
           echo "error: herdr pane $child_t for child $child_id is not confirmed gone; retaining that child's durable identity records and stopping forced cleanup" >&2
           return 1
         fi
-      elif [ "$child_backend" = zellij ]; then
-        # Zellij titles are scoped by the owning home tag, so forced secondmate
-        # cleanup must verify child tabs as that child home, not the parent.
-        ( unset FM_ROOT_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" ) 2>/dev/null || true
       else
-        fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 2>/dev/null || true
+        # Backend titles are scoped by the owning home tag, so forced secondmate
+        # cleanup verifies child endpoints as that child home.
+        teardown_child_backend_call "$home" fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 2>/dev/null || true
       fi
     fi
     if [ "$child_workspace" = in-place ]; then
+      if ! teardown_child_backend_call "$home" fm_backend_endpoint_confirmed_gone "$child_backend" "$child_t" "fm-$child_id"; then
+        echo "REFUSED: endpoint termination for in-place child $child_id is not confirmed; preserving directory ownership records" >&2
+        return 1
+      fi
       if [ -d "$child_wt" ]; then
         python3 "$SCRIPT_DIR/fm-workspace-hooks.py" remove "$sub_state" "$child_id" "$child_wt" || return 1
       fi
@@ -2810,12 +2832,12 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
-# An in-place ship's directory is the durable location of the work itself, so
+# An in-place task's directory is the durable location of the work itself, so
 # an unreachable directory (an unmounted volume, say) means the landed-work
 # test CANNOT run - refuse rather than closing the record blind. A scratch-copy
 # task tolerates the missing directory because a missing scratch copy has
 # nothing left to protect.
-if [ "$IN_PLACE" -eq 1 ] && [ "$KIND" = ship ] && [ "$FORCE" != "--force" ] && [ ! -d "$WT" ]; then
+if [ "$IN_PLACE" -eq 1 ] && [ "$FORCE" != "--force" ] && [ ! -d "$WT" ]; then
   echo "REFUSED: in-place task $ID's project directory is unreachable at $WT (volume unmounted?)." >&2
   echo "Cannot verify dirty or unlanded work; restore the directory or get explicit OK, then --force." >&2
   exit 1
@@ -2937,10 +2959,6 @@ elif [ "$IN_PLACE" -eq 1 ] && [ "$KIND" != secondmate ]; then
         echo "note: task branch $in_place_branch is not contained in the checked-out branch of $WT; leaving it in place" >&2
       fi
     fi
-    if [ "$KIND" = scout ] \
-       && [ -n "$(git -C "$WT" status --porcelain --untracked-files=no 2>/dev/null | head -1)" ]; then
-      echo "warning: in-place scout $ID left uncommitted changes in $WT; nothing was discarded - review them by hand" >&2
-    fi
   fi
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
@@ -3038,6 +3056,10 @@ if [ "$BACKEND" = herdr ]; then
     echo "error: herdr pane $T for $ID is not confirmed gone after its close was refused, skipped, or failed; retaining every durable task record - rerun teardown once the close can run under the session lock" >&2
     exit 1
   fi
+fi
+if [ "$IN_PLACE" -eq 1 ] && ! fm_backend_endpoint_confirmed_gone "$BACKEND" "$T" "fm-$ID"; then
+  echo "REFUSED: endpoint termination for in-place task $ID is not confirmed; preserving directory ownership records" >&2
+  exit 1
 fi
 if [ "$KIND" != secondmate ]; then
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \

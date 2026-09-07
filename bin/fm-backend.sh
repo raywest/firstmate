@@ -887,6 +887,18 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
   esac
 }
 
+fm_backend_endpoint_confirmed_gone() {
+  local backend=$1 target=$2 label=${3:-}
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) [ "$(fm_backend_tmux_agent_state "$target")" = missing ] ;;
+    herdr) fm_backend_herdr_endpoint_confirmed_gone "$target" ;;
+    cmux) fm_backend_cmux_endpoint_confirmed_gone "$target" "$label" ;;
+    zellij) fm_backend_zellij_endpoint_confirmed_gone "$target" ;;
+    *) return 1 ;;
+  esac
+}
+
 # fm_backend_agent_state: the single recovery-grade agent/endpoint state
 # contract. It is deliberately richer than fm_backend_target_exists's cheap
 # pane-presence read and prints exactly one of:

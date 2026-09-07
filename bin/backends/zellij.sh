@@ -613,6 +613,17 @@ fm_backend_zellij_kill() {  # <target> [tab_id] [expected_label]
   fi
 }
 
+fm_backend_zellij_endpoint_confirmed_gone() {
+  local panes
+  fm_backend_zellij_parse_target "$1" || return 1
+  panes=$(fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action list-panes --json 2>/dev/null) || return 1
+  printf '%s' "$panes" | jq -e --argjson id "$FM_BACKEND_ZELLIJ_PANE" '
+    type == "array" and all(.[];
+      (.id | type == "number") and (.is_plugin | type == "boolean") and
+      (.is_plugin or .id != $id))
+  ' >/dev/null 2>&1
+}
+
 # fm_backend_zellij_list_live: recovery/orphan discovery. Lists every tab in
 # <session> whose title carries THIS firstmate home's own tag
 # (fm-<hometag>-, fm_backend_zellij_home_label) - never any other home's
