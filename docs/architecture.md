@@ -195,11 +195,12 @@ cmux is experimental, GUI-first, macOS-only, and can be selected explicitly or b
 cmux's container shape is one workspace per task with one surface, no per-home container split; workspace titles are scoped by the active home label plus a short hash of the resolved `FM_ROOT` path, and `--secondmate` spawns are refused, mirroring Orca.
 Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectable as a runtime backend.
 
-## Worktrees, not branches in your checkout
+## Worker workspaces
 
-Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
-The [`fm-spawn.sh` header](../bin/fm-spawn.sh) owns ship/scout isolation refusals and fresh Treehouse worktree discovery; [`fm-spawn-worktree-settle.test.sh`](../tests/fm-spawn-worktree-settle.test.sh) covers the discovery boundary.
-`fm-spawn.sh` also owns the base-freshness boundary for every fresh ship and scout: no worker starts until its clean task worktree matches the fetched tip of origin's resolved default branch, and any unsafe or unverifiable base stops the spawn.
+For isolated tasks, [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux, while Orca creates its own worktrees for `backend=orca`.
+The [`fm-spawn.sh` header](../bin/fm-spawn.sh) owns ship/scout isolation, the declared in-place alternative, and fresh Treehouse worktree discovery; [`fm-spawn-worktree-settle.test.sh`](../tests/fm-spawn-worktree-settle.test.sh) covers the discovery boundary.
+[`fm-in-place-owner-lib.sh`](../bin/fm-in-place-owner-lib.sh) owns directory acquisition, publication, and release; [`fm-in-place-workspace.test.sh`](../tests/fm-in-place-workspace.test.sh) covers the in-place lifecycle through public interfaces.
+`fm-spawn.sh` also owns the base-freshness boundary for fresh isolated ships and scouts: no worker starts until its clean task worktree matches the fetched tip of origin's resolved default branch, and any unsafe or unverifiable base stops the spawn.
 Its header owns the exact refusal mechanics, while `tests/fm-spawn-pool-base-freshen.test.sh` owns the portable regression coverage.
 
 The firstmate repo has one extra exposure because it can dispatch crewmates to work on itself.
@@ -288,7 +289,7 @@ A ship brief records its mode as a fixed machine-readable line and the spawn ref
 `bin/fm-dod-lib.sh` is the one owner of that mode's definition of done, rendered both into a generated ship brief and into the ship instructions a promoted scout receives, so a promoted worker cannot be handed a weaker contract than a briefed one.
 It is also the one owner of the no-mistakes `--intent` contract those workers follow.
 `data/projects.md` records each project's standing posture and optional `+yolo` merge flag as the captain's default and as context for that decision, including the conditional `no-mistakes-prod-only` policy; a ship spawn that drops below the registered rigor prints a deviation notice and continues.
-It also records the optional `+in-place` workspace declaration, which is enforced rather than advisory: `bin/fm-spawn.sh` refuses any disagreement between that declaration, its explicit `--in-place` flag, and the brief's recorded workspace contract, in both directions.
+The optional workspace declaration follows the launch contract referenced under [Worker workspaces](#worker-workspaces).
 `bin/fm-project-mode.sh` remains the one registry parser for the mechanical consumers that have no task in hand: fleet sync's `local-only` skip, home seeding's refusal and no-mistakes initialization, and the spawn's workspace-declaration check.
 When a selected delivery path calls for a diff, `bin/fm-review-diff.sh` refreshes the authoritative base and, when task meta records `pr=`, always fetches and compares against `refs/pull/<n>/head` by default (recorded `pr_head=` is only an offline fallback) before falling back to the local branch with a warning.
 Where a no-mistakes pipeline stores evidence in the repo, it publishes that PR-viewable validation evidence to an orphan evidence branch that shares no history with code branches, so it never enters the crew branch or the default branch.

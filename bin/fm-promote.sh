@@ -4,8 +4,12 @@
 # state/<task-id>.meta so fm-teardown.sh applies the full ship-task teardown protection
 # again. Promotion also writes the crewmate's ship instructions to
 # data/<task-id>/ship-instructions.md and prints the fm-send.sh command that
-# delivers them. Those instructions carry the scratch-state inventory, the clean
-# default-branch base, the fm/<task-id> branch, and - rendered from
+# delivers them. Those instructions select setup from the recorded workspace:
+# isolated scouts inventory scratch state and carry over only intended changes;
+# in-place scouts verify the real directory, report tracked edits, and use a
+# protected default-branch checkout without discarding product files. Both
+# variants require the fm/<task-id> branch, a reproduced bug's regression test,
+# and - rendered from
 # bin/fm-dod-lib.sh, the single owner an ordinary ship brief also uses - the
 # mode-specific Definition of done, so a promoted worker receives exactly the same
 # delivery contract as a briefed one, including the no-mistakes mode's ask-user
@@ -165,10 +169,7 @@ if [ "$MODE" = no-mistakes ]; then
 fi
 mkdir -p "$DATA/$ID"
 [ ! -d "$INSTRUCTIONS" ] || { echo "error: ship instructions path is a directory: $INSTRUCTIONS" >&2; exit 1; }
-# An in-place scout (workspace=in-place in meta, bin/fm-spawn.sh --in-place)
-# has been working in the project's real directory, so the promoted ship steps
-# verify that location instead of worktree isolation and never speak of scratch
-# state: its scout contract forbade commits and required a tree left as found.
+# Preserve the recorded workspace when selecting the header's promotion setup.
 PROMOTE_WORKSPACE=$(grep '^workspace=' "$META" | cut -d= -f2- || true)
 if [ "$PROMOTE_WORKSPACE" = in-place ]; then
   IFS= read -r -d '' PROMOTION_SETUP_STEPS <<EOF || true

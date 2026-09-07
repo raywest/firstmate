@@ -1268,6 +1268,84 @@ SH
   pass "a positively exited Zellij session permits teardown and the next in-place worker"
 }
 
+# Continuous public-CLI lifecycle; optional transcript is delivery evidence,
+# while the assertions always run. Terminal transport is the fixture's fake
+# tmux; Git, task records, backlog transitions, and product bytes are real.
+test_in_place_lifecycle_transcript() {
+  local out transcript before after tip id n
+  make_teardown_case lifecycle lifecycle
+  run_merge_local "$W_HOME" lifecycle >/dev/null || fail "could not prepare lifecycle base"
+  git -C "$W_PROJ" branch -d fm/lifecycle >/dev/null
+  rm "$W_HOME/state/lifecycle.meta"
+  transcript="$W_HOME/lifecycle.txt"
+  printf '%s\n' 'In-place lifecycle: real Firstmate CLI, Git, and tasks-axi; simulated tmux transport.' \
+    'Fixture project has no remote and no clone under the Firstmate home.' > "$transcript"
+  mkdir -p "$W_PROJ/assets"
+  for n in {1..45}; do printf 'unique product asset %s\n' "$n" > "$W_PROJ/assets/$n.dat"; done
+  printf 'ignored product data\n' > "$W_PROJ/ignored.dat"
+  printf 'ignored.dat\n' >> "$W_PROJ/.git/info/exclude"
+  before=$(cd "$W_PROJ" && shasum -a 256 assets/*.dat ignored.dat)
+  printf '\nProduct hashes before launch:\n%s\n' "$before" >> "$transcript"
+  scaffold_brief "$W_HOME" lifecycle --mode local-only --in-place
+  add_test_in_flight_item "$W_HOME" lifecycle
+  out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/launch.log" \
+    lifecycle "$W_PROJ" --mode local-only --yolo off --in-place) || fail "lifecycle spawn failed: $out"
+  printf '\n$ fm-spawn.sh lifecycle <project> --mode local-only --yolo off --in-place\n%s\n' "$out" >> "$transcript"
+  printf '\nPersisted task metadata:\n' >> "$transcript"
+  cat "$W_HOME/state/lifecycle.meta" >> "$transcript"
+  [ "$(git -C "$W_PROJ" worktree list --porcelain | grep -c '^worktree ')" = 1 ] || fail "spawn created a scratch worktree"
+  assert_absent "$W_HOME/projects/proj" "lifecycle required a throwaway project clone"
+  for id in lifecycle competitor; do
+    [ "$id" = lifecycle ] || scaffold_brief "$W_HOME" "$id" --mode local-only --in-place
+    out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/refused-launch.log" \
+      "$id" "$W_PROJ" --mode local-only --yolo off --in-place) && fail "lifecycle admitted competing worker $id"
+    assert_contains "$out" "already occupies" "lifecycle refusal did not identify ownership"
+    assert_absent "$W_HOME/refused-launch.log" "refused spawn delivered a worker command"
+    printf '\n$ fm-spawn.sh %s <project> --mode local-only --yolo off --in-place\n%s\n' "$id" "$out" >> "$transcript"
+  done
+  git -C "$W_PROJ" checkout -q --no-overwrite-ignore -b fm/lifecycle
+  printf 'delivered feature\n' >> "$W_PROJ/work.txt"
+  git -C "$W_PROJ" add work.txt
+  git -C "$W_PROJ" commit -qm 'deliver in-place feature'
+  tip=$(git -C "$W_PROJ" rev-parse HEAD)
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" lifecycle) && fail "lifecycle discarded unlanded work"
+  assert_contains "$out" "not yet merged" "lifecycle did not refuse unlanded task"
+  printf '\n$ fm-teardown.sh lifecycle (before landing)\n%s\n' "$out" >> "$transcript"
+  out=$(run_merge_local "$W_HOME" lifecycle) || fail "lifecycle landing failed: $out"
+  printf '\n$ fm-merge-local.sh lifecycle\n%s\n' "$out" >> "$transcript"
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" lifecycle) || fail "lifecycle cleanup failed: $out"
+  printf '\n$ fm-teardown.sh lifecycle\n%s\n' "$out" >> "$transcript"
+  assert_absent "$W_HOME/state/lifecycle.meta" "lifecycle retained task metadata"
+  assert_absent "$W_HOME/state/.in-place-owners/lifecycle.meta" "lifecycle retained directory ownership"
+  assert_absent "$TMP_ROOT/lifecycle/treehouse.log" "lifecycle returned the real directory to treehouse"
+  [ "$(git -C "$W_PROJ" symbolic-ref --short HEAD)" = main ] || fail "lifecycle did not leave main checked out"
+  [ "$(git -C "$W_PROJ" rev-parse main)" = "$tip" ] || fail "lifecycle did not land task commit"
+  out=$(tasks-axi show lifecycle --file "$W_HOME/data/backlog.md") || fail "could not inspect completed backlog item"
+  assert_contains "$out" 'state: done' "lifecycle did not close backlog item"
+  printf '\n$ tasks-axi show lifecycle --file <home>/data/backlog.md\n%s\n' "$out" >> "$transcript"
+  after=$(cd "$W_PROJ" && shasum -a 256 assets/*.dat ignored.dat)
+  [ "$before" = "$after" ] || fail "lifecycle changed product assets"
+  printf '\nProduct hashes after cleanup (identical):\n%s\n' "$after" >> "$transcript"
+  printf '\n$ git -C <project> log -1 --format=%%h:%%s main\n' >> "$transcript"
+  git -C "$W_PROJ" log -1 --format=%h:%s main >> "$transcript"
+  scaffold_brief "$W_HOME" replacement --mode local-only --in-place
+  tasks-axi add replacement 'Next in-place task' --kind ship --file "$W_HOME/data/backlog.md" >/dev/null \
+    || fail "could not register replacement backlog item"
+  out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/replacement.log" \
+    replacement "$W_PROJ" --mode local-only --yolo off --in-place) || fail "lifecycle blocked replacement: $out"
+  printf '\n$ fm-spawn.sh replacement <project> --mode local-only --yolo off --in-place\n%s\n' "$out" >> "$transcript"
+  if [ -n "${FM_IN_PLACE_EVIDENCE_DIR:-}" ]; then
+    mkdir -p "$FM_IN_PLACE_EVIDENCE_DIR"
+    cp "$transcript" "$FM_IN_PLACE_EVIDENCE_DIR/in-place-lifecycle.txt"
+  fi
+  pass "in-place lifecycle lands work, closes the backlog, preserves 46 product assets, and admits the next worker"
+}
+
+if [ "${1:-}" = --lifecycle-only ]; then
+  test_in_place_lifecycle_transcript
+  exit 0
+fi
+
 test_project_mode_workspace_query
 test_brief_in_place_scaffolds
 test_spawn_refuses_flag_without_declaration
@@ -1311,3 +1389,4 @@ test_teardown_checks_task_branch_from_main
 
 test_remote_modes_check_task_ref
 test_zellij_stopped_session_releases_ownership
+test_in_place_lifecycle_transcript

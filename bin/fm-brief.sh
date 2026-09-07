@@ -19,13 +19,14 @@
 #   (bin/fm-project-mode.sh owns that declaration): the worker runs directly in
 #   the project's real directory with no scratch copy. The Setup section
 #   replaces the worktree-isolation assertion with the in-place location
-#   assertion, forbids git clean/reset and any worktree creation (gitignored
+#   assertion, forbids destructive cleanup and any worktree creation (gitignored
 #   files in that directory are the captain's product data), and records the
 #   fixed machine-readable line "Workspace contract: in-place" that
-#   bin/fm-spawn.sh checks against its own explicit --in-place flag, refusing a
-#   mismatch in either direction. Refused on --secondmate scaffolds.
+#   participates in bin/fm-spawn.sh's launch-agreement contract.
+#   Refused on --secondmate scaffolds.
 #   --scout writes the scout contract instead: the deliverable is a report at
-#   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
+#   data/<task-id>/report.md (no branch, no push, no PR); only an isolated
+#   worktree is scratch. An in-place scout must leave the real tree as found.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;

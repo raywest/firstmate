@@ -14,11 +14,12 @@
 # --in-place contract), the project directory IS the directory the worker
 # committed in, so its checkout is legitimately sitting on the task branch
 # rather than the default branch. In that one case this script checks out the
-# default branch first (refused unless the tree is clean and the move is a pure
-# fast-forward), then performs the same ff-only merge, leaving the project on
-# its merged default branch. This is the honest replacement for the old
-# practice of rewriting task records so the standard path would accept the real
-# work location.
+# default branch first, then performs the same ff-only merge, leaving the
+# project on its merged default branch. Tracked edits still refuse; untracked
+# and ignored files do not block in-place landing. Checkout and merge both
+# protect ignored-file collisions with --no-overwrite-ignore and refuse rather
+# than overwrite them. A checkout on any branch other than the task or default
+# branch, unreadable status, or a non-fast-forward merge also refuses.
 # Usage: fm-merge-local.sh <task-id>
 set -eu
 
@@ -99,7 +100,7 @@ if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
 fi
 
 # In-place landing from the task branch: switch to the default branch first.
-# The tree is clean and the move is a pure fast-forward (both proven above), so
+# Tracked files are clean and the move is a pure fast-forward (both proven above), so
 # the checkout only rewinds the tree to a state the merge below restores; a
 # checkout that still fails leaves the project exactly where the worker did.
 if [ "$cur" = "$BRANCH" ] && [ "$cur" != "$DEFAULT" ]; then

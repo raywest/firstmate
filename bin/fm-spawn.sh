@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
-# secondmate in its isolated firstmate home.
+# Spawn a direct report: a crewmate in an isolated worktree or declared real
+# project directory, or a secondmate in its isolated firstmate home.
 # Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--in-place] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> <project-dir> --scout [--in-place] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
@@ -26,7 +26,8 @@
 #   --in-place launches the worker directly in the project's real directory:
 #   no scratch worktree is created, `treehouse get` is never sent, and the
 #   base is never fetched or reset. It is legal only for a ship or scout spawn
-#   of a project whose data/projects.md entry carries the captain's standing
+#   of a project whose data/projects.md entry, keyed by the project directory's
+#   basename, carries the captain's standing
 #   +in-place declaration (bin/fm-project-mode.sh --workspace), and only with
 #   a brief scaffolded by bin/fm-brief.sh --in-place; a mismatch on either
 #   axis - flag without declaration, declaration without flag, flag without
@@ -37,9 +38,8 @@
 #   firstmate home, outside the firstmate repo, and outside this home's
 #   projects/ clone root (an in-place project's real work location is
 #   elsewhere by definition; clones under projects/ keep scratch copies).
-#   Directory ownership follows bin/fm-in-place-owner-lib.sh, within one
-#   firstmate home only; two homes pointing at the same directory are not
-#   coordinated. The launched pane is verified to be sitting in the
+#   Directory ownership and its home-scoped limits follow
+#   bin/fm-in-place-owner-lib.sh. The launched pane is verified to be sitting in the
 #   project directory before the brief is delivered, the task's meta records
 #   workspace=in-place (absent means isolated, keeping every other task's
 #   meta byte-identical), and bin/fm-teardown.sh, bin/fm-merge-local.sh, and
@@ -81,7 +81,7 @@
 #   Spawn-capable backends are the reference tmux adapter and experimental
 #   herdr, zellij, orca, and cmux. Orca owns both the task worktree and
 #   terminal, so ship/scout Orca spawns do not run treehouse get; cmux is a
-#   session provider only, exactly like herdr/zellij, so it does. An
+#   session provider only, exactly like herdr/zellij, so isolated tasks do. An
 #   auto-detected herdr or cmux spawn prints a loud stderr notice;
 #   auto-detected tmux stays silent; zellij and orca are never auto-detected.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
@@ -237,9 +237,8 @@
 # because Claude's interactive workspace-trust dialog gates a fresh worktree and
 # firstmate cannot answer it. That helper's header owns the structural scope test
 # and every refusal; a failed registration stops this spawn rather than launching
-# a worker that would wedge on the dialog. In-place workspace hook receipts
-# live in state/<id>.workspace-hooks.json (bin/fm-workspace-hooks.py); in-place
-# installation refuses unowned files, and cleanup preserves edited replacements.
+# a worker that would wedge on the dialog. bin/fm-workspace-hooks.py owns
+# in-place workspace hook installation, cleanup, and receipt handling.
 # A --secondmate launch never runs it,
 # so a claude secondmate home keeps its own one-time trust decision.
 # Publishing the record and moving this home's backlog item to In flight are one
@@ -1933,12 +1932,7 @@ else
   BRIEF="$DATA/$ID/brief.md"
 fi
 
-# In-place declaration agreement (fresh ship/scout only; a relaunch re-reads
-# the task's own record instead). The captain's standing +in-place declaration
-# in data/projects.md and this spawn's explicit --in-place flag must both be
-# present or both absent: the flag without the declaration is an accident this
-# refusal makes impossible, and the declaration without the flag would
-# otherwise quietly hand a declared in-place project a scratch copy again.
+# Enforce the header's fresh-launch agreement before any endpoint is created.
 if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
   REGISTRY_WORKSPACE=$("$FM_ROOT/bin/fm-project-mode.sh" --workspace "$(basename "$PROJ_ABS")" 2>/dev/null) || REGISTRY_WORKSPACE=isolated
   if [ "$IN_PLACE" -eq 1 ] && [ "$REGISTRY_WORKSPACE" != in-place ]; then
@@ -2020,11 +2014,7 @@ if [ "$KIND" = ship ]; then
   fi
 fi
 
-# Brief/spawn workspace agreement, the same drift contract as the delivery-mode
-# check above but for both ship and scout: an in-place spawn must hand the
-# worker in-place instructions (fm-brief.sh --in-place records the fixed
-# "Workspace contract: in-place" line), and in-place instructions must never be
-# launched into a scratch copy where their real-directory rules would be wrong.
+# Complete the header's launch-agreement check against the worker's instructions.
 if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
   if grep -qxF 'Workspace contract: in-place' "$BRIEF"; then
     BRIEF_WORKSPACE=in-place

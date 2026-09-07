@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-register Claude Code's workspace trust for the isolated task worktree a
+# Pre-register Claude Code's workspace trust for the task directory a
 # ship/scout spawn is about to launch a claude crewmate into, so the worker
 # reaches its brief instead of wedging on the trust dialog.
 #
@@ -29,12 +29,13 @@
 # control that reaches an interactive pane.
 #
 # THE SCOPE TEST IS THE SAFETY PROPERTY, and it is STRUCTURAL rather than a
-# path policy. <worktree> must be a LINKED git worktree - its own git dir,
+# path policy. Without --in-place, <worktree> must be a LINKED git worktree - its own git dir,
 # sharing <project>'s common dir - whose top level is exactly the resolved
 # argument. Git is the ground truth, so the argument is never trusted on its
 # own word: a primary checkout (git dir == common dir), a worktree of an
 # unrelated repo, a subdirectory of a worktree, a plain directory, and a home
-# directory are each refused. Refusal is a non-zero exit, never a warning and
+# directory are each refused. --in-place uses the exact-identity test above.
+# Refusal is a non-zero exit, never a warning and
 # never a silent skip.
 #
 # The test is deliberately NOT a treehouse or orca path prefix. Treehouse's
@@ -144,11 +145,7 @@ WT_TOP_REAL=$(real_dir "$WT_TOP") || true
 [ "$WT_TOP_REAL" = "$WT_REAL" ] || refuse "'$WT_REAL' is not a worktree root (its root is '${WT_TOP_REAL:-unresolvable}')"
 
 if [ "$IN_PLACE" -eq 1 ]; then
-  # In-place scope: the one directory a declared in-place spawn may trust is the
-  # project directory itself, so the two arguments must be the same resolved
-  # path (a primary checkout is expected here, not refused). Everything above -
-  # accessible directory, not home, not the config dir, a git worktree root -
-  # still holds.
+  # Apply the header's in-place scope test after the shared path exclusions.
   [ "$WT_REAL" = "$PROJ_REAL" ] || refuse "--in-place requires the worktree and project to be the same directory (got '$WT_REAL' and '$PROJ_REAL')"
 else
   WT_GIT_DIR=$(git -C "$WT_REAL" rev-parse --absolute-git-dir 2>/dev/null) || true

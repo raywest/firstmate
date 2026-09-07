@@ -1,11 +1,13 @@
 # shellcheck shell=bash
 # In-place directory ownership, scoped to one firstmate home. Two homes pointed
-# at the same directory are not coordinated. ACQUIRE requires the task-set lock
-# and refuses every existing claimant, including the same task ID; only guarded
-# relaunch may replace an agent-free endpoint. Publication keeps a private copy
+# at the same directory are not coordinated. Fresh ACQUIRE requires the task-set
+# lock and refuses every existing claimant, including the same task ID; only
+# guarded relaunch under the task metadata lock may replace an agent-free
+# endpoint. Publication keeps a private copy
 # in state/.in-place-owners, so removing ordinary metadata cannot free a live
 # directory. RELEASE requires positive endpoint-absence evidence before removing
-# either record. Unknown presence fails closed. Lifecycle record publication,
+# either record, including under --force. Unknown presence fails closed.
+# Lifecycle record publication,
 # removal and close-marker recovery enter here through fm-backlog-transition-lib.
 
 FM_IN_PLACE_OWNER_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

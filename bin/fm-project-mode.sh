@@ -22,11 +22,8 @@
 # output; query it with --workspace, which prints exactly one word:
 #   in-place   the registry line carries +in-place
 #   isolated   every other case, including an absent registry or project
-# bin/fm-spawn.sh cross-checks this declaration against its explicit
-# --in-place flag and refuses a mismatch in either direction, so the
-# declaration alone never changes how any task is launched.
-# The single-worker guarantee is scoped to one firstmate home; two homes
-# pointing at the same in-place directory are not coordinated.
+# bin/fm-spawn.sh owns launch agreement; bin/fm-in-place-owner-lib.sh owns
+# directory ownership and its home-scoped limits.
 #
 # Registered modes:
 #   no-mistakes            full pipeline -> PR -> configured merge authority (default)
@@ -45,8 +42,9 @@
 # conditional policy apart from a flat mode sees "no-mistakes-prod-only" itself.
 #
 # An unknown/missing project or unknown mode falls back to "no-mistakes off" and warns
-# to stderr, so a typo never silently drops the gate. --workspace has the same
-# fail-closed shape: anything unparseable reads as "isolated", never "in-place".
+# to stderr, so a typo never silently drops the gate. --workspace is independent
+# of delivery-mode validation and selects in-place only for the exact +in-place
+# token in the parsed annotation.
 # Usage: fm-project-mode.sh [--raw|--workspace] <project-name>
 set -eu
 

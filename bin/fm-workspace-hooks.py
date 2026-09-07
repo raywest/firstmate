@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Install/remove task-owned workspace hooks with identity and content receipts.
+"""Install/remove in-place task hooks with identity and content receipts.
 
 Usage: python3 fm-workspace-hooks.py <install|remove> <state> <id> <workspace> [relative-path]
 Install reads bytes from stdin and refuses an existing unowned file.
 Remove preserves files without a matching receipt, including edited/replaced hooks.
 Receipts live in state/<id>.workspace-hooks.json; task lifecycle locks serialize callers.
+Isolated workers retain their existing hook handling without receipts.
 """
 
 import hashlib

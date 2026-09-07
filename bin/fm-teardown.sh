@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tear down a finished task: return the treehouse worktree, release the Orca
-# worktree, or retire a secondmate home; kill the recorded runtime endpoint,
+# worktree, preserve an in-place project, or retire a secondmate home; kill the recorded runtime endpoint,
 # clear volatile state, and transition this home's backlog item for ship and
 # scout tasks before reporting success (a secondmate teardown transitions none,
 # since secondmates are not backlog items), then refresh/prune the project's
@@ -64,15 +64,21 @@
 # remove the recorded worktree through `orca worktree rm`; teardown never guesses
 # an Orca target from ambient CLI state.
 # In-place tasks (workspace=in-place in meta, bin/fm-spawn.sh --in-place) ran
-# directly in the project's real directory: the same dirty and landed-work
-# refusals apply (an unreachable directory refuses too, because the work's
-# durable location cannot be inspected), but cleanup then removes only the
-# task's own hook files and the safely-landed task branch - it never returns,
-# resets, detaches, or process-sweeps the directory itself, and even --force
-# never deletes an unlanded branch there. The record cross-check near the top
+# directly in the project's real directory: untracked and ignored files do not
+# block completion, but tracked edits still refuse. Ship landing checks cover
+# both HEAD and fm/<id> when that branch exists, regardless of the checkout;
+# local-only tasks require both to be contained in the local default branch.
+# Other ship modes apply the remote/PR/content checks above to each ref.
+# An unreachable directory refuses because its work cannot be inspected.
+# In-place scouts retain the report gate and tracked-edit check, without ship
+# commit-landing checks. --force skips these checks as described below.
+# Cleanup removes only receipt-matching hooks (bin/fm-workspace-hooks.py) and
+# the task branch when it is not checked out and is contained in HEAD; it never
+# returns, resets, detaches, or process-sweeps the directory itself, even with
+# --force. The record cross-check near the top
 # of the script refuses in BOTH directions when workspace= and the recorded
-# worktree/project identity disagree. In-place scouts must also have no
-# tracked edits; bin/fm-in-place-owner-lib.sh owns directory release.
+# worktree/project identity disagree. bin/fm-in-place-owner-lib.sh owns
+# directory release, including forced child cleanup and close-marker replay.
 # A Herdr presentation journal never authorizes cleanup. Teardown still closes
 # only the exact task pane from ordinary endpoint metadata and never calls
 # `workspace close`. It retires the non-authoritative journal only when a
@@ -774,17 +780,8 @@ BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
-# workspace=in-place (bin/fm-spawn.sh --in-place): the task ran directly in the
-# project's real directory. Cleanup then has no scratch copy to return: hook
-# files are removed, the landed task branch is deleted only when it is safely
-# contained in the checked-out branch, and the directory itself - the captain's
-# product, gitignored content included - is never reset, cleaned, returned, or
-# swept for processes (only the task's own temp root is). The record and the
-# directory identity must agree in BOTH directions before anything destructive
-# runs: an in-place record whose worktree is not its project directory is
-# corrupt, and an ordinary record whose worktree IS its project directory
-# must never reach the scratch-copy return path, which would hard-reset a real
-# checkout.
+# Check workspace identity before selecting cleanup; otherwise corrupt metadata
+# could route a real checkout through destructive scratch-copy cleanup.
 WORKSPACE=$(fm_meta_get "$META" workspace)
 IN_PLACE=0
 [ "$WORKSPACE" != in-place ] || IN_PLACE=1
@@ -2976,13 +2973,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
 elif [ "$IN_PLACE" -eq 1 ] && [ "$KIND" != secondmate ]; then
-  # In-place cleanup: there is no scratch copy to return, and the directory is
-  # the captain's real checkout, so nothing here may detach its HEAD, reset it,
-  # or delete whatever branch happens to be checked out. Only the task's own
-  # per-task hook files are removed, and the task branch is deleted only when
-  # it is provably contained in the checked-out branch (the state an approved
-  # local merge leaves behind) and is not itself checked out; anything else is
-  # left in place with a note rather than touched.
+  # Apply the header's in-place cleanup boundary without changing the checkout.
   if [ -d "$WT" ]; then
     python3 "$SCRIPT_DIR/fm-workspace-hooks.py" remove "$STATE" "$ID" "$WT" || exit 1
     in_place_branch="fm/$ID"

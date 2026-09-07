@@ -31,7 +31,7 @@ Hard rules, in priority order:
 3. **Never tear down unlanded work.**
    Uncommitted changes are never landed, and `bin/fm-teardown.sh` owns the complete landed-work test.
    Never bypass a refusal or use `--force` unless the captain explicitly authorized discarding that work.
-   A scout worktree is declared scratch and may be discarded only after its report exists and the shared unresolved-decision completion gate passes.
+   An isolated scout worktree is declared scratch and may be discarded only after its report exists and the shared unresolved-decision completion gate passes.
 4. **Crewmates never address the captain.**
    All crewmate communication flows through firstmate.
    Treat direct captain intervention in a crewmate window as authoritative and reconcile it at the next supervision review.
@@ -299,7 +299,7 @@ Pass the mode explicitly to the brief, and pass both values explicitly to the sp
 A current explicit captain instruction wins; otherwise the project's registry entry is the captain's standing posture, and dropping below its rigor needs a reason you can state.
 On a `no-mistakes-prod-only` project, classify the task's surface: internal-only tooling, automation, contributor or operator process, and release or submission work ships `direct-PR`, while product-facing, mixed, and uncertain work ships `no-mistakes`; never infer internal-only from file location or project name.
 An unregistered project or absent registry resolves to `no-mistakes` with yolo off, and the registration gap goes to the captain.
-For a project whose registry entry declares `+in-place`, scaffold the brief with `fm-brief.sh --in-place` and spawn with `--in-place`; `bin/fm-spawn.sh` owns that launch contract and refuses any disagreement between declaration, flag, and brief.
+For a project whose registry entry declares `+in-place`, follow the launch contract in `bin/fm-spawn.sh` and its matching `bin/fm-brief.sh` scaffold.
 Record the resulting mode, `yolo` merge posture, and the one-line reason for any deviation in the backlog item note.
 
 Treat file or subsystem overlap as a risk signal rather than an automatic reason to wait, and dispatch isolated work immediately with no concurrency cap when each change can be independently implemented and validated and the selected delivery path can reconcile ordinary rebases or conflicts.
@@ -395,7 +395,7 @@ A report may recommend implementation but does not authorize it.
 Before treating the investigation or any visual review as complete, load `captain-hold-lifecycle`; teardown enforces that shared completion gate.
 When a scout's deliverable is a visual artifact the captain will iterate on, prefer keeping that scout alive to host its own Lavish loop rather than tearing it down and mediating from firstmate, so the scout keeps its investigation context and the captain iterates in one continuous session.
 When implementation is separately authorized, promote the existing scout through `bin/fm-promote.sh` rather than creating a duplicate task.
-The promoted worker must inventory scratch state, return to a clean default-branch base, carry over only intended fix changes, create the ship branch, and follow the project's selected delivery path while leaving scratch commits and debug edits behind and turning a reproduced bug into the regression test.
+The promoted worker must follow `bin/fm-promote.sh`'s generated ship instructions for its recorded workspace and delivery mode.
 
 ## 8. Supervision protocol
 
@@ -433,7 +433,7 @@ A forced repair must use the home-scoped owner path emitted by supervision instr
 
 Guard warnings do not replace the contract.
 Queued wakes must be presented before other action and acknowledged only after handling, stale liveness must be repaired through the emitted protocol, and the worktree-tangle warning must be resolved without touching unlanded work.
-The spawn assertion and generated ship brief must both enforce that project work starts in an isolated disposable worktree, never the primary checkout; the one exception is a declared in-place launch, where `bin/fm-spawn.sh`'s `--in-place` contract enforces the matching location assertion instead.
+Preserve the workspace assertion owned by `bin/fm-spawn.sh` and its matching generated brief.
 Harness-aware turn-end guards are structural backstops, not permission to omit the live cycle.
 
 ### Away-mode stub
@@ -526,7 +526,7 @@ Use its scaffold as the contract, then fill `## Captain's intent` (`{TASK}`) wit
 `bin/fm-dod-lib.sh` owns what a no-mistakes worker may pass as `--intent` and its rule that the string must be self-sufficient.
 Keep additions task-specific rather than repeating lifecycle instructions, and alter generated sections only when the task genuinely differs from the standard shape.
 
-Every ship brief must retain the worktree-isolation assertion and stop if launched in the primary checkout.
+Every ship brief must retain its scaffold's workspace assertion; `bin/fm-spawn.sh` owns the isolated and declared in-place launch contracts.
 If a ship task touches firstmate's shared tracked material, explicitly require `firstmate-coding-guidelines` before editing.
 If a task will drive Herdr lifecycle behavior, scaffold with `--herdr-lab`; if that need appears after an unguarded scaffold, stop and regenerate rather than adding commands by hand.
 The generated Herdr contract must use a named non-`default` isolated lab and its guarded helper for every lifecycle action.
