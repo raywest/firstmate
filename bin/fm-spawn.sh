@@ -38,6 +38,10 @@
 #   firstmate home, outside the firstmate repo, and outside this home's
 #   projects/ clone root (an in-place project's real work location is
 #   elsewhere by definition; clones under projects/ keep scratch copies).
+#   Any git operation that moves the tree inside an in-place directory must
+#   pass --no-overwrite-ignore: gitignored files there are the captain's
+#   irreplaceable product data, and Git's default checkout/merge behavior
+#   silently overwrites an ignored path that becomes tracked.
 #   Directory ownership and its home-scoped limits follow
 #   bin/fm-in-place-owner-lib.sh. The launched pane is verified to be sitting in the
 #   project directory before the brief is delivered, the task's meta records

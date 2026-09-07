@@ -1236,6 +1236,72 @@ SH
   pass "remote delivery modes inspect the task ref for remote, PR, patch, and content landing proofs"
 }
 
+test_teardown_fleet_sync_workspace_scope() {
+  local mode workspace checkout_state name origin publisher tip before out scratch
+  for mode in direct-PR no-mistakes; do
+    for workspace in in-place isolated; do
+      for checkout_state in main detached; do
+        name="fleet-sync-$mode-$workspace-$checkout_state"
+        make_teardown_case "$name" sync-task
+        tip=$(git -C "$W_PROJ" rev-parse HEAD)
+        git -C "$W_PROJ" checkout -q main || fail "could not select main"
+        if [ "$workspace" = isolated ]; then
+          mv "$W_PROJ" "$W_HOME/projects/proj"
+          W_PROJ="$W_HOME/projects/proj"
+        fi
+        if [ "$workspace" = isolated ]; then
+          printf -- '- proj [%s] - test\n' "$mode" > "$W_HOME/data/projects.md"
+        else
+          printf -- '- proj [%s +in-place] - test\n' "$mode" > "$W_HOME/data/projects.md"
+        fi
+        origin="$TMP_ROOT/$name/origin.git"
+        publisher="$TMP_ROOT/$name/publisher"
+        git init --bare -q "$origin" || fail "could not create origin"
+        git -C "$W_PROJ" remote add origin "$origin"
+        git -C "$W_PROJ" push -q origin main fm/sync-task || fail "could not publish task"
+        git -C "$origin" symbolic-ref HEAD refs/heads/main
+        git clone -q "$origin" "$publisher" || fail "could not create publisher"
+        printf 'upstream image\n' > "$publisher/image.png"
+        git -C "$publisher" add image.png
+        git -C "$publisher" commit -qm 'publish image'
+        git -C "$publisher" push -q origin main || fail "could not advance origin"
+        printf 'image.png\n' >> "$W_PROJ/.git/info/exclude"
+        printf 'irreplaceable product image\n' > "$W_PROJ/image.png"
+        before=$(git -C "$W_PROJ" rev-parse HEAD)
+        if [ "$checkout_state" = detached ]; then
+          git -C "$W_PROJ" checkout --no-overwrite-ignore -q --detach || fail "could not detach fixture"
+        fi
+        if [ "$workspace" = isolated ]; then
+          scratch="$TMP_ROOT/$name/scratch"
+          git -C "$W_PROJ" worktree add -q "$scratch" fm/sync-task || fail "could not create isolated worker"
+          fm_write_meta "$W_HOME/state/sync-task.meta" "window=firstmate:fm-sync-task" \
+            "endpoint_task_id=sync-task" "project=$W_PROJ" "worktree=$scratch" "kind=ship" "mode=$mode"
+        else
+          printf 'mode=%s\n' "$mode" >> "$W_HOME/state/sync-task.meta"
+        fi
+        out=$(run_teardown "$W_HOME" "$W_FAKEBIN" sync-task) || fail "$name teardown failed: $out"
+        assert_absent "$W_HOME/state/sync-task.meta" "$name retained task metadata"
+        if [ "$workspace" = in-place ]; then
+          [ "$(cat "$W_PROJ/image.png")" = 'irreplaceable product image' ] || fail "$name overwrote ignored product data"
+          [ "$(git -C "$W_PROJ" rev-parse HEAD)" = "$before" ] || fail "$name moved HEAD"
+          [ "$(git -C "$W_PROJ" rev-parse origin/main)" = "$before" ] || fail "$name fetched origin"
+          [ "$(git -C "$W_PROJ" rev-parse fm/sync-task)" = "$tip" ] || fail "$name changed the published task branch"
+          if [ "$checkout_state" = detached ]; then
+            git -C "$W_PROJ" symbolic-ref -q HEAD >/dev/null && fail "$name reattached HEAD"
+          else
+            [ "$(git -C "$W_PROJ" symbolic-ref --short HEAD)" = main ] || fail "$name left main"
+          fi
+        else
+          [ "$(git -C "$W_PROJ" rev-parse HEAD)" = "$(git -C "$publisher" rev-parse HEAD)" ] || fail "$name did not refresh the clone"
+          [ "$(git -C "$W_PROJ" symbolic-ref --short HEAD)" = main ] || fail "$name did not attach main"
+          [ "$(cat "$W_PROJ/image.png")" = 'upstream image' ] || fail "$name changed isolated sync behavior"
+        fi
+      done
+    done
+  done
+  pass "teardown skips fleet sync for in-place remote modes and preserves isolated clone refresh"
+}
+
 test_zellij_stopped_session_releases_ownership() {
   local out
   make_teardown_case zellij-session-stop stopped-session
@@ -1344,6 +1410,11 @@ test_in_place_lifecycle_transcript() {
   pass "in-place lifecycle lands work, closes the backlog, preserves 46 product assets, and admits the next worker"
 }
 
+if [ "${1:-}" = --fleet-sync-only ]; then
+  test_teardown_fleet_sync_workspace_scope
+  exit 0
+fi
+
 if [ "${1:-}" = --lifecycle-only ]; then
   test_in_place_lifecycle_transcript
   exit 0
@@ -1391,5 +1462,6 @@ test_spawned_owner_teardown_boundaries
 test_teardown_checks_task_branch_from_main
 
 test_remote_modes_check_task_ref
+test_teardown_fleet_sync_workspace_scope
 test_zellij_stopped_session_releases_ownership
 test_in_place_lifecycle_transcript

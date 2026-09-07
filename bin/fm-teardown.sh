@@ -3175,7 +3175,8 @@ else
 fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
-if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
+# Fleet sync refreshes clones under projects/; an in-place directory is never one.
+if [ "$WORKSPACE" != in-place ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   # shellcheck disable=SC2031 # The subshell-scoped child-home export is deliberate; this reads the outer value.
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
