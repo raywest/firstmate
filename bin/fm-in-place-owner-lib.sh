@@ -42,6 +42,7 @@ fm_in_place_owner_endpoint_gone() (
   if [ "$(cd "$state" && pwd -P)" != "$(cd "$current_state" 2>/dev/null && pwd -P)" ]; then
     home=$(cd "$state/.." && pwd -P) || return 1
     unset FM_ROOT_OVERRIDE
+    # shellcheck disable=SC2030 # Deliberate: this function body is a subshell, so the child-home env never leaks to the caller.
     export FM_HOME="$home" FM_ROOT="$home" FM_STATE_OVERRIDE="$state"
     export FM_CONFIG_OVERRIDE="$home/config" FM_DATA_OVERRIDE="$home/data"
   fi
@@ -224,6 +225,7 @@ fm_in_place_owner_home_ready() {
   for record in "$state/.in-place-owners"/*.meta; do
     [ -e "$record" ] || [ -L "$record" ] || continue
     if [ "$phase" = remove ] || [ ! -f "$state/${record##*/}" ]; then
+      # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
       FM_BACKLOG_TRANSITION_ERROR="in-place ownership remains at $record; reconcile the task before removing its home"
       return 1
     fi

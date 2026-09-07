@@ -2631,6 +2631,7 @@ teardown_child_backend_call() (
   child_backend_home=$1
   shift
   unset FM_ROOT_OVERRIDE
+  # shellcheck disable=SC2030 # Deliberate: this function body is a subshell, so the child-home env never leaks to the caller.
   export FM_HOME="$child_backend_home" FM_ROOT="$child_backend_home" FM_CONFIG_OVERRIDE="$child_backend_home/config"
   export FM_STATE_OVERRIDE="$child_backend_home/state" FM_DATA_OVERRIDE="$child_backend_home/data"
   "$@"
@@ -2805,6 +2806,7 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
     echo "The report is the work product. Have the crewmate write it, or use --force after explicit discard approval." >&2
     exit 1
   fi
+  # shellcheck disable=SC2031 # The subshell-scoped child-home export is deliberate; this reads the outer value.
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" verify "$ID" >/dev/null; then
     echo "REFUSED: scout task $ID has not passed the captain-call completion gate." >&2
@@ -3096,6 +3098,7 @@ if [ "$BACKLOG_CLOSED" = 1 ]; then
   teardown_record_pending_close after
 fi
 if [ "$KIND" != secondmate ]; then
+  # shellcheck disable=SC2031 # The subshell-scoped child-home export is deliberate; this reads the outer value.
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       "$SCRIPT_DIR/fm-inactive-reconcile.sh" report "$ID"; then
     echo "error: $ID's final outcome has not reached the parent channel; retaining every durable task record so a rerun can retry the delivery" >&2
@@ -3173,6 +3176,7 @@ fi
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
+  # shellcheck disable=SC2031 # The subshell-scoped child-home export is deliberate; this reads the outer value.
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi
 # A secondmate retirement may remove the home containing an overridden control

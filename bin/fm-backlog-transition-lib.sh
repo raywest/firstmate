@@ -54,7 +54,16 @@
 # closes a row that reads as an open captain call. An answer that closed the row
 # first simply retires the record.
 
-# shellcheck source=bin/fm-in-place-owner-lib.sh
+# The /dev/null source boundary below is load-bearing, not laziness: it is the
+# same independently-linted-AST boundary fm-backend.sh's adapters use. With the
+# real path, shellcheck 0.11.0's extended --external-sources analysis of
+# bin/fm-teardown.sh (which sources this file) crosses a termination cliff -
+# teardown alone already costs ~50s, and folding this lib's AST in on top made
+# the analysis diverge (>35min, unbounded memory) in the pipeline, locally,
+# and in CI, which pin the same version. fm-lint.sh still lints
+# bin/fm-in-place-owner-lib.sh as its own file, so no coverage is lost;
+# only the cross-file fold into every consumer is pruned.
+# shellcheck source=/dev/null
 . "$(dirname "${BASH_SOURCE[0]}")/fm-in-place-owner-lib.sh"
 
 # Set by fm_backlog_transition_applies for a return-1 exemption.
@@ -194,6 +203,7 @@ fm_backlog_transition_applies() {  # <config-dir> <data-dir> <kind>
   fi
   file=$(fm_backlog_file "$data")
   if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+    # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
     FM_BACKLOG_TRANSITION_SKIP="this home keeps no backlog at $file"
     return 1
   fi
@@ -960,8 +970,10 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
         FM_BACKLOG_CLOSE_REPLAY_RESULT=retained
       fi
     elif [ "$cleanup_incomplete" = 1 ]; then
+      # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
       FM_BACKLOG_CLOSE_REPLAY_RESULT=closed_incomplete
     else
+      # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
       FM_BACKLOG_CLOSE_REPLAY_RESULT=closed
     fi
     return 0

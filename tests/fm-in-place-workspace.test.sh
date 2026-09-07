@@ -136,6 +136,7 @@ test_brief_in_place_scaffolds() {
     "in-place ship brief lacks the fixed workspace line"
   assert_no_grep 'Verify isolation before anything else' "$home/data/b-ship/brief.md" \
     "in-place ship brief still carries the worktree-isolation assertion"
+  # shellcheck disable=SC2016 # The backtick-wrapped command is literal brief text.
   assert_grep 'NEVER run `git clean`' "$home/data/b-ship/brief.md" \
     "in-place ship brief lacks the git-clean ban protecting gitignored product data"
 
@@ -822,7 +823,7 @@ SH
   assert_present "$W_HOME/state/endpoint-retained.backlog-close" "confirmed termination lost its replayable close marker"
   replay_test_close_marker "$W_HOME" endpoint-retained || fail "recovery failed after confirmed termination"
   assert_absent "$W_HOME/state/endpoint-retained.backlog-close" "recovery left a completed close marker"
-  [ "$(tasks-axi show endpoint-retained --file "$W_HOME/data/backlog.md" | sed -n 's/^  state: *//p' | head -1)" = done ] \
+  [ "$(tasks-axi show endpoint-retained --file "$W_HOME/data/backlog.md" | sed -n 's/^  state: *//p' | head -1)" = "done" ] \
     || fail "recovery did not finish the confirmed worker's backlog close"
   pass "termination must be confirmed before publishing a close marker that recovery can replay"
 }
@@ -1290,6 +1291,7 @@ test_in_place_lifecycle_transcript() {
   add_test_in_flight_item "$W_HOME" lifecycle
   out=$(run_spawn "$W_HOME" "$W_FAKEBIN" "$W_PROJ" "$W_HOME/launch.log" \
     lifecycle "$W_PROJ" --mode local-only --yolo off --in-place) || fail "lifecycle spawn failed: $out"
+  # shellcheck disable=SC2129 # Transcript appends interleave with the assertions they document.
   printf '\n$ fm-spawn.sh lifecycle <project> --mode local-only --yolo off --in-place\n%s\n' "$out" >> "$transcript"
   printf '\nPersisted task metadata:\n' >> "$transcript"
   cat "$W_HOME/state/lifecycle.meta" >> "$transcript"
@@ -1325,6 +1327,7 @@ test_in_place_lifecycle_transcript() {
   printf '\n$ tasks-axi show lifecycle --file <home>/data/backlog.md\n%s\n' "$out" >> "$transcript"
   after=$(cd "$W_PROJ" && shasum -a 256 assets/*.dat ignored.dat)
   [ "$before" = "$after" ] || fail "lifecycle changed product assets"
+  # shellcheck disable=SC2129 # Transcript appends interleave with the assertions they document.
   printf '\nProduct hashes after cleanup (identical):\n%s\n' "$after" >> "$transcript"
   printf '\n$ git -C <project> log -1 --format=%%h:%%s main\n' >> "$transcript"
   git -C "$W_PROJ" log -1 --format=%h:%s main >> "$transcript"
