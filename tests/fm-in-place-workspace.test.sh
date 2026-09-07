@@ -1119,6 +1119,37 @@ SH
   pass "direct and forced-child teardown release acquired ownership only after confirmed termination"
 }
 
+test_teardown_checks_task_branch_from_main() {
+  local axis out tip
+  for axis in local remote; do
+    make_teardown_case "unlanded-on-main-$axis" unlanded-on-main
+    printf 'task image\n' > "$W_PROJ/image.png"
+    git -C "$W_PROJ" add -f image.png
+    git -C "$W_PROJ" commit -qm 'task image not yet landed'
+    tip=$(git -C "$W_PROJ" rev-parse HEAD)
+    git -C "$W_PROJ" checkout -q main
+    printf 'image.png\n' >> "$W_PROJ/.git/info/exclude"
+    printf 'precious main image\n' > "$W_PROJ/image.png"
+    if [ "$axis" = remote ]; then
+      git -C "$W_PROJ" update-ref refs/remotes/origin/main HEAD
+    fi
+    add_test_in_flight_item "$W_HOME" unlanded-on-main
+    out=$(run_merge_local "$W_HOME" unlanded-on-main) && fail "merge overwrote an ignored collision"
+    out=$(run_teardown "$W_HOME" "$W_FAKEBIN" unlanded-on-main) && fail "teardown closed an unlanded task from main ($axis)"
+    assert_contains "$out" "not yet merged into main" "teardown did not report the unlanded task branch"
+    assert_present "$W_HOME/state/unlanded-on-main.meta" "refused teardown removed task metadata"
+    assert_absent "$W_HOME/state/unlanded-on-main.backlog-close" "refused teardown published a close marker"
+    [ "$(tasks-axi show unlanded-on-main --file "$W_HOME/data/backlog.md" | sed -n 's/^  state: *//p' | head -1)" = in_flight ] || fail "refused teardown closed the backlog row"
+    [ "$(cat "$W_PROJ/image.png")" = 'precious main image' ] || fail "teardown changed ignored product data"
+    [ "$(git -C "$W_PROJ" rev-parse fm/unlanded-on-main)" = "$tip" ] || fail "teardown changed the unlanded branch"
+    out=$(run_teardown "$W_HOME" "$W_FAKEBIN" unlanded-on-main --force) || fail "explicit force no longer completes cleanup: $out"
+    assert_absent "$W_HOME/state/unlanded-on-main.meta" "force retained task metadata"
+    [ "$(git -C "$W_PROJ" rev-parse fm/unlanded-on-main)" = "$tip" ] || fail "force deleted the unlanded in-place branch"
+    [ "$(cat "$W_PROJ/image.png")" = 'precious main image' ] || fail "force changed ignored product data"
+  done
+  pass "teardown checks the in-place task branch from main, even with published HEAD, and preserves force"
+}
+
 test_project_mode_workspace_query
 test_brief_in_place_scaffolds
 test_spawn_refuses_flag_without_declaration
@@ -1157,3 +1188,5 @@ test_primary_hook_exclusions_from_linked_cwd
 test_close_replay_preserves_live_owner
 
 test_spawned_owner_teardown_boundaries
+
+test_teardown_checks_task_branch_from_main

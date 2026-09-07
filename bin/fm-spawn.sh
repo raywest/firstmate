@@ -237,9 +237,9 @@
 # because Claude's interactive workspace-trust dialog gates a fresh worktree and
 # firstmate cannot answer it. That helper's header owns the structural scope test
 # and every refusal; a failed registration stops this spawn rather than launching
-# a worker that would wedge on the dialog. Workspace hook ownership receipts
-# live in state/<id>.workspace-hooks.json (bin/fm-workspace-hooks.py); installation
-# refuses pre-existing unowned files, and cleanup preserves edited replacements.
+# a worker that would wedge on the dialog. In-place workspace hook receipts
+# live in state/<id>.workspace-hooks.json (bin/fm-workspace-hooks.py); in-place
+# installation refuses unowned files, and cleanup preserves edited replacements.
 # A --secondmate launch never runs it,
 # so a claude secondmate home keeps its own one-time trust decision.
 # Publishing the record and moving this home's backlog item to In flight are one
@@ -996,8 +996,8 @@ clear_relaunch_harness_wiring() {
   fi
   while IFS= read -r path; do
     [ -n "$path" ] || continue
-    case "$path" in
-      "$wt"/*) python3 "$FM_ROOT/bin/fm-workspace-hooks.py" remove "$state" "$id" "$wt" "${path#"$wt"/}" || return 1 ;;
+    case "$IN_PLACE:$path" in
+      "1:$wt"/*) python3 "$FM_ROOT/bin/fm-workspace-hooks.py" remove "$state" "$id" "$wt" "${path#"$wt"/}" || return 1 ;;
       *) rm -f -- "$path" || return 1 ;;
     esac
   done <<EOF
@@ -2827,6 +2827,15 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+write_workspace_hook() {
+  local rel=$1
+  if [ "$IN_PLACE" -eq 1 ]; then
+    python3 "$FM_ROOT/bin/fm-workspace-hooks.py" install "$STATE_REAL" "$ID" "$WT" "$rel"
+  else
+    mkdir -p "$(dirname "$WT/$rel")" || return 1
+    cat > "$WT/$rel"
+  fi
+}
 if [ "$RELAUNCH" -eq 1 ]; then
   # Retire the previous incarnation's per-task harness wiring before arming the
   # new one. Without this, a harness switch would leave the old adapter's hook
@@ -2905,7 +2914,7 @@ if [ "$KIND" != secondmate ]; then
       j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
-      python3 "$FM_ROOT/bin/fm-workspace-hooks.py" install "$STATE_REAL" "$ID" "$WT" .claude/settings.local.json <<EOF
+      write_workspace_hook .claude/settings.local.json <<EOF
 {"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
 EOF
       exclude_path '.claude/settings.local.json'
@@ -2945,7 +2954,7 @@ EOF
       fi
       ;;
     opencode*)
-      python3 "$FM_ROOT/bin/fm-workspace-hooks.py" install "$STATE_REAL" "$ID" "$WT" .opencode/plugins/fm-busy-state.js <<EOF
+      write_workspace_hook .opencode/plugins/fm-busy-state.js <<EOF
 // Firstmate semantic busy-state events + turn-end notification; written by
 // fm-spawn under the contract owned by bin/fm-busy-lib.sh.
 // Semantic state comes from OpenCode's session.status events: busy and retry
@@ -3085,7 +3094,7 @@ EOF
       chmod +x "$GROK_HOOKS_DIR/fm-turn-end.sh"
       hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-turn-end.sh")")
       printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" > "$GROK_HOOKS_DIR/fm-turn-end.json"
-      printf 'token=%s\n' "${auth_file##*/}" | python3 "$FM_ROOT/bin/fm-workspace-hooks.py" install "$STATE_REAL" "$ID" "$WT" .fm-grok-turnend
+      printf 'token=%s\n' "${auth_file##*/}" | write_workspace_hook .fm-grok-turnend
       exclude_path '.fm-grok-turnend'
       ;;
     muse*)
@@ -3151,7 +3160,7 @@ EOF
       umask "$old_umask"
       printf '%s\n' "$TURNEND" > "$auth_file"
       printf '%s\n' "${auth_file##*/}" > "$STATE/$ID.kimi-turnend-token"
-      printf 'token=%s\n' "${auth_file##*/}" | python3 "$FM_ROOT/bin/fm-workspace-hooks.py" install "$STATE_REAL" "$ID" "$WT" .fm-kimi-turnend
+      printf 'token=%s\n' "${auth_file##*/}" | write_workspace_hook .fm-kimi-turnend
       exclude_path '.fm-kimi-turnend'
       ;;
   esac

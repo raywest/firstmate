@@ -303,10 +303,20 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   local dir out rc gen_before gen_after
   dir=$(new_case same rl1)
   add_ship_task "$dir" rl1 claude
+  mkdir -p "$dir/wt/.claude"
+  printf '{"hooks":{}}\n' > "$dir/wt/.claude/settings.local.json"
+  [ ! -e "$dir/home/state/rl1.workspace-hooks.json" ] || fail "legacy worker fixture has an ownership receipt"
   gen_before=$("$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" rl1)
   printf 'busy_gen=%s\n' "$gen_before" >> "$dir/home/state/rl1.meta"
   out=$(run_control "$dir" rl1 relaunch --note "stopped mid-refactor"); rc=$?
   expect_code 0 "$rc" "a same-harness relaunch should succeed"$'\n'"$out"
+  [ ! -e "$dir/home/state/rl1.workspace-hooks.json" ] || fail "isolated relaunch created an in-place receipt"
+  python3 - "$dir/wt/.claude/settings.local.json" <<'PYTEST' || fail "legacy relaunch did not install replacement hooks"
+import json, sys
+with open(sys.argv[1]) as stream:
+    settings = json.load(stream)
+assert settings['hooks']['Stop'][0]['hooks'][0]['type'] == 'command'
+PYTEST
   assert_contains "$out" "relaunched rl1 harness=claude from=claude" "the outcome should name the transition"
   [ "$(meta_field "$dir" rl1 window)" = "fmses:fm-rl1" ] \
     || fail "the endpoint must be reused, not recreated"
@@ -480,7 +490,7 @@ test_harness_switch_moves_the_record_and_clears_prior_wiring() {
   add_ship_task "$dir" rl4 claude
   # Wiring the previous claude incarnation left in the worktree.
   mkdir -p "$dir/wt/.claude"
-  printf '{"hooks":{}}\n' | python3 "$ROOT/bin/fm-workspace-hooks.py" install "$dir/home/state" rl4 "$dir/wt" .claude/settings.local.json
+  printf '{"hooks":{}}\n' > "$dir/wt/.claude/settings.local.json"
   printf 'codex' > "$dir/fake/becomes"
   out=$(run_control "$dir" rl4 relaunch --harness codex --note "switching runtime"); rc=$?
   expect_code 0 "$rc" "a harness switch should succeed"$'\n'"$out"
@@ -520,7 +530,7 @@ test_harness_switch_resolves_a_prefixed_recorded_harness() {
   printf 'fm.abcdefabcdef\n' > "$dir/home/state/rl32.grok-turnend-token"
   auth="$dir/grokhome/hooks/fm-turn-end.d/fm.abcdefabcdef"
   printf '%s\n' "$dir/home/state/rl32.turn-ended" > "$auth"
-  printf 'token=fm.abcdefabcdef\n' | python3 "$ROOT/bin/fm-workspace-hooks.py" install "$dir/home/state" rl32 "$dir/wt" .fm-grok-turnend
+  printf 'token=fm.abcdefabcdef\n' > "$dir/wt/.fm-grok-turnend"
 
   out=$(run_control "$dir" rl32 relaunch --harness claude --note "switching runtime"); rc=$?
   expect_code 0 "$rc" "relaunch should resolve a prefixed recorded harness"$'\n'"$out"
@@ -621,16 +631,19 @@ test_prior_harness_turnend_registry_entry_is_cleared() {
   pass "fm-control relaunch: the retired incarnation's global turn-end token is revoked"
 }
 
-test_unowned_wiring_refuses_replacement_arm() {
-  local dir hook out rc
+test_wiring_removal_failure_refuses_before_replacement_arm() {
+  local dir hook out rc real_rm
   dir=$(new_case wiring-failure rl29)
   add_ship_task "$dir" rl29 claude
   hook="$dir/wt/.claude/settings.local.json"
   mkdir -p "${hook%/*}"
   printf '{}\n' > "$hook"
-  out=$(run_control "$dir" rl29 relaunch --note "retry after wiring cleanup"); rc=$?
-  expect_code 1 "$rc" "an unowned prior hook must fail closed"$'\n'"$out"
-  assert_contains "$out" "without task ownership" \
+  real_rm=$(command -v rm)
+  make_rm_failure_stub "$dir"
+  out=$(FM_REAL_RM="$real_rm" FM_FAKE_RM_FAIL_PATH="$hook" \
+    run_control "$dir" rl29 relaunch --note "retry after wiring cleanup"); rc=$?
+  expect_code 1 "$rc" "an undeletable prior hook must fail closed"$'\n'"$out"
+  assert_contains "$out" "could not retire claude wiring" \
     "the failure should identify prior wiring cleanup"
   [ -e "$hook" ] || fail "the fixture should retain the undeletable prior hook"
   assert_no_grep "encode launch-brief" "$dir/fake/literal" \
@@ -859,7 +872,7 @@ test_prefixed_prior_harness_wiring_is_still_retired() {
   printf 'fm.abcdefabcdef\n' > "$dir/home/state/rl30.grok-turnend-token"
   auth="$dir/grokhome/hooks/fm-turn-end.d/fm.abcdefabcdef"
   printf '%s\n' "$dir/home/state/rl30.turn-ended" > "$auth"
-  printf 'token=fm.abcdefabcdef\n' | python3 "$ROOT/bin/fm-workspace-hooks.py" install "$dir/home/state" rl30 "$dir/wt" .fm-grok-turnend
+  printf 'token=fm.abcdefabcdef\n' > "$dir/wt/.fm-grok-turnend"
   printf 'zsh' > "$dir/fake/command"
   run_spawn "$dir" rl30 --relaunch --harness claude >/dev/null
   [ ! -e "$auth" ] \
@@ -1505,7 +1518,7 @@ test_same_harness_relaunch_keeps_the_profile_axes
 test_explicit_model_wins_over_the_recorded_one
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared
-test_unowned_wiring_refuses_replacement_arm
+test_wiring_removal_failure_refuses_before_replacement_arm
 test_turnend_auth_paths_are_owned_by_the_control_adapter
 test_secondmate_relaunch_picks_up_the_configured_harness_pin
 test_secondmate_relaunch_ignores_invalid_configured_effort_before_stop
