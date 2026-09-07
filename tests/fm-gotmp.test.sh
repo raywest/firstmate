@@ -113,6 +113,7 @@ fm_tasks_axi_compatible() { return 1; }
 fm_backlog_backend_manual() { return 1; }
 SH
   ln -s "$ROOT/bin/fm-backlog-transition-lib.sh" "$fake/bin/fm-backlog-transition-lib.sh"
+  ln -s "$ROOT/bin/fm-in-place-owner-lib.sh" "$fake/bin/fm-in-place-owner-lib.sh"
   # Meta with a nonexistent worktree so the dirty/treehouse blocks skip.
   cat > "$fake/state/$id.meta" <<META
 window=fakeses:fm-$id
@@ -130,7 +131,7 @@ META
 # --- fm-teardown side (real subprocess) ---
 
 test_teardown_removes_tasktmp_dir() {
-  local id=td-rm-z2
+  local id=td-rm-z2 out
   local task_tmp="$TMP_ROOT/fm-$id"
   mkdir -p "$task_tmp/gotmp"
   printf 'leftover\n' > "$task_tmp/gotmp/build-artifact"
@@ -139,8 +140,8 @@ test_teardown_removes_tasktmp_dir() {
   # Sanity: dir + contents exist before teardown.
   [ -d "$task_tmp/gotmp" ] || fail "precondition: gotmp missing before teardown"
   # Run the REAL teardown against the fake root.
-  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
-    || fail "teardown exited non-zero with a valid tasktmp"
+  out=$(FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" 2>&1) \
+    || fail "teardown exited non-zero with a valid tasktmp: $out"
   [ ! -e "$task_tmp" ] \
     || fail "teardown did not remove the tasktmp dir ($task_tmp still exists)"
   pass "fm-teardown removes the dir pointed to by tasktmp= in meta"
@@ -203,6 +204,7 @@ fm_tasks_axi_compatible() { return 1; }
 fm_backlog_backend_manual() { return 1; }
 SH
   ln -s "$ROOT/bin/fm-backlog-transition-lib.sh" "$fake/bin/fm-backlog-transition-lib.sh"
+  ln -s "$ROOT/bin/fm-in-place-owner-lib.sh" "$fake/bin/fm-in-place-owner-lib.sh"
   # No tasktmp= line at all.
   cat > "$fake/state/$id.meta" <<META
 window=fakeses:fm-$id

@@ -19,7 +19,7 @@ It does not replace `secondmate-provisioning`, which owns project clones inside 
 
 ## Preconditions and registry
 
-Projects live flat under `projects/`, and `data/projects.md` is the private fleet registry.
+Project clones live flat under `projects/`, and `data/projects.md` is the private fleet registry, including projects covered by the in-place declaration below.
 Use the registry format and parser contract owned by the header of `bin/fm-project-mode.sh`.
 Keep each registry description useful for identifying the project, but keep delivery posture, captain-private state, and detailed project knowledge in their existing designated homes.
 Do not turn the registry into project documentation.
@@ -52,10 +52,17 @@ The optional `+yolo` posture changes merge authority only and does not change th
 Default it off for every project and every posture, and enable it only on the captain's explicit instruction.
 `AGENTS.md` section 7 owns the merge-authority contract.
 
+## In-place workspace declaration
+
+Use the optional `+in-place` declaration defined by `bin/fm-project-mode.sh` only on the captain's explicit instruction for a specifically named project, because it trades scratch-copy protection for direct work in the real directory.
+`bin/fm-spawn.sh`'s header owns the launch contract and routes directory ownership to `bin/fm-in-place-owner-lib.sh`.
+`bin/fm-teardown.sh` and `bin/fm-merge-local.sh` read the task's recorded workspace for their in-place cleanup and landing behavior.
+A declared in-place project needs no clone under `projects/` at all - the spawn takes the real directory - so when declaring one, tell the captain any existing clone of it is now unused and remove it only through the ordinary removal preflight on his explicit instruction.
+
 ## Add or clone an existing project
 
-Confirm the source URL, local project name, delivery posture, and autonomy posture, stating the resolved default for each rather than asking the captain to invent one.
-Clone into `projects/<name>` and add the registry entry only after the destination is known to be unused.
+Confirm the source URL or existing real directory, local project name, delivery posture, and autonomy posture, stating the resolved default for each rather than asking the captain to invent one.
+For an existing project approved for in-place work, register its real directory under the declaration above; otherwise clone into `projects/<name>` and add the registry entry only after the destination is known to be unused.
 A `no-mistakes` or `no-mistakes-prod-only` project must have an `origin` remote and must complete the initialization procedure below, because a conditional policy's product-facing work runs the pipeline while its internal-only work still takes the direct PR.
 A `direct-PR` project needs an `origin` remote but skips no-mistakes initialization.
 A `local-only` project may have no remote and skips no-mistakes initialization.
@@ -75,7 +82,7 @@ The captain's request to create that local project authorizes this local initial
 Run no-mistakes initialization only for `no-mistakes` and `no-mistakes-prod-only` projects:
 
 ```sh
-cd projects/<name> && no-mistakes init && no-mistakes doctor
+cd <project-directory> && no-mistakes init && no-mistakes doctor
 ```
 
 Initialization configures the local gate and does not vendor a no-mistakes skill into the project.
@@ -89,4 +96,4 @@ First obtain the captain's explicit removal decision, then inspect the current d
 If any dependency or unlanded work exists, stop and report it before changing anything.
 Never issue a raw removal command from Firstmate.
 Once that preflight confirms none of the above and the captain's approval is concrete, AGENTS.md hard rule 1's captain-approved project operation exception authorizes firstmate to remove the clone directly and update its registry entry to match.
-When a clone has already been removed through an approved removal, or the registry is provably stale because no clone exists, remove its registry line so navigation matches reality.
+When a clone has already been removed through an approved removal, or the registry is provably stale because no clone exists, remove its registry line so navigation matches reality, except for a declared in-place project whose real directory remains registered.

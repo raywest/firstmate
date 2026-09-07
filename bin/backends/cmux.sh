@@ -628,6 +628,26 @@ fm_backend_cmux_kill() {  # <target> [unused] [expected-label]
   fm_backend_cmux_cli close-workspace --workspace "$wsid" >/dev/null 2>&1 || true
 }
 
+fm_backend_cmux_endpoint_confirmed_gone() {
+  local target=$1 label=${2:-} wins ids wid wss title=
+  fm_backend_cmux_parse_target "$target" || return 1
+  [ -z "$label" ] || title=$(fm_backend_cmux_scoped_title "$label")
+  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 1
+  printf '%s' "$wins" | jq -e 'type == "array" and all(.[]; (.id | type == "string") and (.id | length > 0))' >/dev/null 2>&1 || return 1
+  ids=$(printf '%s' "$wins" | jq -r '.[].id') || return 1
+  while IFS= read -r wid; do
+    [ -n "$wid" ] || continue
+    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || return 1
+    printf '%s' "$wss" | jq -e --arg id "$FM_BACKEND_CMUX_WORKSPACE" --arg title "$title" '
+      (.workspaces | type == "array") and
+      all(.workspaces[]; (.id | type == "string") and (.title | type == "string") and
+        .id != $id and ($title == "" or .title != $title))
+    ' >/dev/null 2>&1 || return 1
+  done <<EOF
+$ids
+EOF
+}
+
 # fm_backend_cmux_list_live: recovery/orphan discovery. Lists every workspace
 # whose title is scoped to this firstmate home, by TITLE - never by trusting a
 # stored uuid, since workspace ids do NOT survive an app relaunch (finding #5).

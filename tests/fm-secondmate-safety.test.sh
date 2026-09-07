@@ -2414,12 +2414,15 @@ test_force_teardown_refuses_symlinked_descendant_state() {
   IFS='|' read -r home subhome <<EOF
 $rec
 EOF
+  # Keep supervision diagnostics local to this fixture, independent of the
+  # checkout branch and the runner's watcher state.
+  make_firstmate_git_root "$home"
   mkdir -p "$subhome/state-target"
   ln -s state-target "$subhome/state"
   err="$TMP_ROOT/taskset-state-symlink.err"
   fakebin=$(make_fake_tmux "$TMP_ROOT/taskset-state-symlink-fake")
   log="$TMP_ROOT/taskset-state-symlink-fake/tmux.log"
-  if PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+  if PATH="$fakebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_FAKE_TMUX_LOG="$log" \
     FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/taskset-state-symlink-fake/pane.txt" \
     "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err"; then
     fail "forced teardown accepted a symlinked descendant state path"
@@ -2430,7 +2433,9 @@ EOF
   [ -e "$home/state/domain.meta" ] || fail "symlinked state-path refusal removed parent metadata"
   grep -F 'kill-window' "$log" >/dev/null && fail "symlinked state-path refusal killed a window"
   grep -F "$(basename "$subhome")" "$err" >/dev/null || fail "symlinked state-path refusal did not name the descendant home: $(cat "$err")"
-  grep -F 'symbolic-link state path' "$err" >/dev/null || fail "symlinked state-path refusal did not explain the concrete problem: $(cat "$err")"
+  # Ownership preflight now rejects the symlink before descendant locking.
+  [ "$(cat "$err")" = "REFUSED: state directory is not a real directory at $subhome/state" ] \
+    || fail "symlinked state-path refusal did not explain the concrete problem: $(cat "$err")"
   pass "forced teardown refuses a symlinked descendant state path"
 }
 

@@ -43,7 +43,8 @@
 # `state/<id>.backlog-close` first, and removes it once the close lands.
 # The writer and replay share one complete-record validator, and teardown stages
 # that record before destructive cleanup, so it never publishes or acts on a close
-# replay would reject. The validator pins the data path to this home's configured
+# replay would reject. In-place publication timing and release follow
+# bin/fm-in-place-owner-lib.sh. The validator pins the data path to this home's configured
 # root before any recovery mutation, then re-runs exactly that close.
 # `tasks-axi done` on an already-closed task backfills links
 # without moving the close date, so replay is idempotent. Spawn needs no marker:
@@ -53,6 +54,13 @@
 # records the deliverable and reopens the row instead of closing it, and never
 # closes a row that reads as an open captain call. An answer that closed the row
 # first simply retires the record.
+
+# The /dev/null source boundary prevents ShellCheck's extended analysis from
+# folding the ownership library into every consumer, which can exhaust analysis
+# time and memory. fm-lint.sh lints bin/fm-in-place-owner-lib.sh independently;
+# the runtime source operation is unchanged.
+# shellcheck source=/dev/null
+. "$(dirname "${BASH_SOURCE[0]}")/fm-in-place-owner-lib.sh"
 
 # Set by fm_backlog_transition_applies for a return-1 exemption.
 # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
@@ -191,6 +199,7 @@ fm_backlog_transition_applies() {  # <config-dir> <data-dir> <kind>
   fi
   file=$(fm_backlog_file "$data")
   if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+    # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
     FM_BACKLOG_TRANSITION_SKIP="this home keeps no backlog at $file"
     return 1
   fi
@@ -470,7 +479,14 @@ fm_backlog_record_remove() {
   if [ -e "$path" ] || [ -L "$path" ]; then
     fm_backlog_record_present "$path" "$label" "$root" || return 1
   fi
-  if ! rm -f "$path" 2>/dev/null || [ -e "$path" ] || [ -L "$path" ]; then
+  case "$path" in
+    *.meta) fm_in_place_owner_remove "$path" "$root" "$label" || return 1 ;;
+    *) rm -f "$path" 2>/dev/null || {
+         FM_BACKLOG_TRANSITION_ERROR="$label could not be removed at $path"
+         return 1
+       } ;;
+  esac
+  if [ -e "$path" ] || [ -L "$path" ]; then
     FM_BACKLOG_TRANSITION_ERROR="$label could not be removed at $path"
     return 1
   fi
@@ -484,6 +500,9 @@ fm_backlog_record_publish() {
   if [ -e "$target" ] || [ -L "$target" ]; then
     fm_backlog_record_present "$target" "$label target" "$root" || return 1
   fi
+  case "$target" in
+    *.meta) fm_in_place_owner_publish "$source" "$target" "$root" || return 1 ;;
+  esac
   if ! mv -f "$source" "$target" 2>/dev/null || ! fm_backlog_record_present "$target" "$label" "$root"; then
     [ -n "$FM_BACKLOG_TRANSITION_ERROR" ] \
       || FM_BACKLOG_TRANSITION_ERROR="$label publication failed at $target"
@@ -550,6 +569,7 @@ fm_backlog_dispatch_transition() {
 
 fm_backlog_dispatch_rollback() {
   local meta=$1 busy_script=$2 state=$3 id=$4 gen=$5 failed=0
+  fm_in_place_owner_check "$meta" "$state" || return 1
   fm_backlog_record_remove "$meta" "provisional task record" "$state" || failed=1
   if [ -n "$gen" ]; then
     "$busy_script" retire "$state" "$id" --gen "$gen" >/dev/null 2>&1 || failed=1
@@ -824,6 +844,7 @@ fm_backlog_close_marker_write() {  # <state-dir> <id> <data-dir> <spawn-gen> [fl
   local state=$1 id=$2 data=$3 spawn_gen=$4 marker tmp
   fm_backlog_directory_present "$state" "state directory" || return 1
   shift 4
+  fm_in_place_owner_check "$state/$id.meta" "$state" || return 1
   marker=$(fm_backlog_close_marker_path "$state" "$id") || return 1
   tmp="$state/.$id.backlog-close.${BASHPID:-$$}"
   fm_backlog_close_marker_stage "$tmp" "$id" "$data" "$spawn_gen" "$state" 0 "$@" || return 1
@@ -856,7 +877,7 @@ fm_backlog_close_marker_clear() {  # <state-dir> <id>
 # any meta or backlog mutation.
 fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data-dir>
   local state=$1 marker=$2 marker_name expected_id
-  local id data marker_spawn_gen meta meta_spawn_gen row_state cleanup_incomplete mode
+  local id data marker_spawn_gen meta meta_spawn_gen row_state cleanup_incomplete mode recovery_record
   local args=() mode_flags=()
   FM_BACKLOG_CLOSE_REPLAY_RESULT=noop
   fm_backlog_directory_present "$state" "state directory" || return 1
@@ -878,12 +899,13 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
     args[1]="local main"
   fi
   meta="$state/$id.meta"
-  if [ -e "$meta" ] || [ -L "$meta" ]; then
-    if ! fm_backlog_record_present "$meta" "task record" "$state"; then
+  recovery_record=$(fm_in_place_owner_recovery_record "$meta" "$state") || return 1
+  if [ -e "$recovery_record" ] || [ -L "$recovery_record" ]; then
+    if ! fm_backlog_record_present "$recovery_record" "task record" "$state"; then
       FM_BACKLOG_TRANSITION_ERROR="unsafe interrupted task record at $meta"
       return 1
     fi
-    fm_backlog_meta_spawn_gen "$meta" "$state" || return 1
+    fm_backlog_meta_spawn_gen "$recovery_record" "$state" || return 1
     meta_spawn_gen=$FM_BACKLOG_META_SPAWN_GEN
     if [ "$meta_spawn_gen" != "$marker_spawn_gen" ]; then
       fm_backlog_close_marker_remove "$marker" "$state" || return 1
@@ -894,9 +916,9 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
       "$marker_spawn_gen" "${mode_flags[@]+"${mode_flags[@]}"}" "${args[@]+"${args[@]}"}" \
       || return 1
     cleanup_incomplete=1
-    fm_backlog_atomic_transition remove "$meta" "the interrupted task record" "$state" \
-      || return 1
   fi
+  fm_backlog_atomic_transition remove "$meta" "the interrupted task record" "$state" \
+    || return 1
   if fm_backlog_row_probe "$data" "$id"; then
     row_state=$FM_BACKLOG_ROW_STATE
     if [ "${row_state%% *}" != "done" ] && [ "$FM_BACKLOG_ROW_HOLD_KIND" = captain ]; then
@@ -944,8 +966,10 @@ fm_backlog_close_marker_replay() {  # <state-dir> <marker-path> <authorized-data
         FM_BACKLOG_CLOSE_REPLAY_RESULT=retained
       fi
     elif [ "$cleanup_incomplete" = 1 ]; then
+      # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
       FM_BACKLOG_CLOSE_REPLAY_RESULT=closed_incomplete
     else
+      # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
       FM_BACKLOG_CLOSE_REPLAY_RESULT=closed
     fi
     return 0

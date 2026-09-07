@@ -22,7 +22,7 @@ Verified as a CREWMATE and SCOUT adapter only; `../../../../../bin/fm-spawn.sh` 
 
 ## Trust, and why the two documented options are not equivalent
 
-Every task worktree is a path Gemini has never seen, so an unhandled launch refuses outright:
+A fresh task worktree is a path Gemini has never seen, so an unhandled launch refuses outright:
 `Gemini CLI is not running in a trusted directory. To proceed, either use --skip-trust, set the GEMINI_CLI_TRUST_WORKSPACE=true environment variable, or trust this directory in interactive mode.`
 Headless, that refusal exits 55.
 

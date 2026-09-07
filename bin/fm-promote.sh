@@ -4,8 +4,12 @@
 # state/<task-id>.meta so fm-teardown.sh applies the full ship-task teardown protection
 # again. Promotion also writes the crewmate's ship instructions to
 # data/<task-id>/ship-instructions.md and prints the fm-send.sh command that
-# delivers them. Those instructions carry the scratch-state inventory, the clean
-# default-branch base, the fm/<task-id> branch, and - rendered from
+# delivers them. Those instructions select setup from the recorded workspace:
+# isolated scouts inventory scratch state and carry over only intended changes;
+# in-place scouts verify the real directory, report tracked edits, and use a
+# protected default-branch checkout without discarding product files. Both
+# variants require the fm/<task-id> branch, a reproduced bug's regression test,
+# and - rendered from
 # bin/fm-dod-lib.sh, the single owner an ordinary ship brief also uses - the
 # mode-specific Definition of done, so a promoted worker receives exactly the same
 # delivery contract as a briefed one, including the no-mistakes mode's ask-user
@@ -165,6 +169,26 @@ if [ "$MODE" = no-mistakes ]; then
 fi
 mkdir -p "$DATA/$ID"
 [ ! -d "$INSTRUCTIONS" ] || { echo "error: ship instructions path is a directory: $INSTRUCTIONS" >&2; exit 1; }
+# Preserve the recorded workspace when selecting the header's promotion setup.
+PROMOTE_WORKSPACE=$(grep '^workspace=' "$META" | cut -d= -f2- || true)
+if [ "$PROMOTE_WORKSPACE" = in-place ]; then
+  IFS= read -r -d '' PROMOTION_SETUP_STEPS <<EOF || true
+1. **Verify location before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the REAL project directory you were launched in. If either does not, stop and escalate to firstmate.
+2. This directory, including everything gitignored in it, is the captain's product; there is no scratch copy. NEVER run \`git clean\` or \`git reset --hard\`, and never delete untracked files.
+3. Inspect \`git status\`; your scout contract left the tree as you found it, so report any uncommitted tracked changes to firstmate before proceeding. If you are not on the default branch, switch with \`git checkout --no-overwrite-ignore <default-branch>\`, substituting the actual default branch name. If checkout fails, including an ignored-file collision, STOP, append \`blocked: protected default-branch checkout failed\` to the status file, and report the collision or failure to firstmate; do not force the checkout or remove the conflicting files. Once safely on the default branch, create your branch: \`git checkout -b fm/$ID\`.
+4. Implement only the intended fix changes on that branch.
+5. If you reproduced a bug, turn that reproduction into a regression test.
+EOF
+else
+  IFS= read -r -d '' PROMOTION_SETUP_STEPS <<EOF || true
+1. **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from. If either does not resolve to the worktree you were launched in, stop and escalate to firstmate.
+2. Inventory this worktree's scratch state with \`git status\` and \`git log\` before changing anything.
+3. Return to a clean default-branch base, then create your branch: \`git checkout -b fm/$ID\`.
+4. Carry over only the intended fix changes. Leave scratch commits, debug edits, and experiment files behind.
+5. If you reproduced a bug, turn that reproduction into a regression test.
+EOF
+fi
+PROMOTION_SETUP_STEPS=${PROMOTION_SETUP_STEPS%$'\n'}
 TMP="$DATA/$ID/.ship-instructions.md.${BASHPID:-$$}"
 {
   cat <<EOF
@@ -177,11 +201,7 @@ EOF
   cat <<EOF
 
 ## Firstmate spec
-1. **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from. If either does not resolve to the worktree you were launched in, stop and escalate to firstmate.
-2. Inventory this worktree's scratch state with \`git status\` and \`git log\` before changing anything.
-3. Return to a clean default-branch base, then create your branch: \`git checkout -b fm/$ID\`.
-4. Carry over only the intended fix changes. Leave scratch commits, debug edits, and experiment files behind.
-5. If you reproduced a bug, turn that reproduction into a regression test.
+$PROMOTION_SETUP_STEPS
 6. These ship instructions supersede the scout delivery rules and report-based Definition of done. Everything else in your original instructions carries over unchanged: the status protocol; the instruction inbox and its acknowledgement; the escalation rules, including ask-user; and every safety rule.
 $PROMOTION_ASK_USER_BLOCK
 7. Treat the scout-time Firstmate spec and any unmarked legacy \`# Task\` text as investigation context, not captain intent or ship-time instructions.
