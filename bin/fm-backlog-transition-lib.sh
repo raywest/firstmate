@@ -474,7 +474,7 @@ fm_backlog_record_remove() {
     fm_backlog_record_present "$path" "$label" "$root" || return 1
   fi
   case "$path" in
-    *.meta) fm_in_place_owner_remove "$path" "$root" || return 1 ;;
+    *.meta) fm_in_place_owner_remove "$path" "$root" "$label" || return 1 ;;
     *) rm -f "$path" 2>/dev/null || {
          FM_BACKLOG_TRANSITION_ERROR="$label could not be removed at $path"
          return 1

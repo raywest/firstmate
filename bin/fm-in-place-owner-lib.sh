@@ -161,7 +161,7 @@ fm_in_place_owner_publish() {
 }
 
 fm_in_place_owner_remove() {
-  local meta=$1 state=$2 owned="$2/.in-place-owners/${1##*/}" lock acquired=0 rc=0
+  local meta=$1 state=$2 label=${3:-task record} owned="$2/.in-place-owners/${1##*/}" lock acquired=0 rc=0
   fm_in_place_owner_directory "$state" || return 1
   fm_in_place_owner_load_backend || return 1
   if [ -e "$owned" ] || [ "$(fm_meta_get "$meta" workspace)" = in-place ]; then
@@ -181,7 +181,7 @@ fm_in_place_owner_remove() {
   if fm_in_place_owner_check "$meta" "$state"; then
     if ! rm -f "$meta" || [ -e "$meta" ] || [ -L "$meta" ] \
         || ! rm -f "$owned" || [ -e "$owned" ] || [ -L "$owned" ]; then
-      FM_BACKLOG_TRANSITION_ERROR="could not remove in-place task records for $meta"
+      FM_BACKLOG_TRANSITION_ERROR="$label could not be removed completely for $meta"
       rc=1
     fi
   else
