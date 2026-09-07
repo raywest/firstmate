@@ -1,0 +1,164 @@
+In-place lifecycle: real Firstmate CLI, Git, and tasks-axi; simulated tmux transport.
+Fixture project has no remote and no clone under the Firstmate home.
+
+Product hashes before launch:
+59decb809a30a3296bda0a50f6ae426d2e3a2fd3ceee53c2725b5e4182aecf04  assets/1.dat
+e6409430fbcd76e540687602fd156023027a59f9e7022260f1d3b762b1d673fd  assets/10.dat
+d8b5b27e5be36fb7d57987fd7154fda30199c54160b2c3c85389231a71ddf87f  assets/11.dat
+d7b1ea75663b50d6e8b1df8370ac039ef831f6d52d7d5ba4bf3f26c7c0ebaf56  assets/12.dat
+85eae6b48035dad7f54043eb6614791595b389f1b0da9712d97e2828f54bf11c  assets/13.dat
+0e18d15b697f46b3392f5832b79a9aebd87ee52adbdf223f518d86f52bea513b  assets/14.dat
+77689798ecb81dd7902701ee0adfe87350afba3c09554e586673dd71bf71c4bb  assets/15.dat
+6da809854576fe206c2853a42c57e84d5cc0c9ed72810d111d6f32fbac07411e  assets/16.dat
+b9d08ff68dbf611d6140cf451bd301de10390792c0adb295305185c190d3d769  assets/17.dat
+b9d077fb44f8a43815992537afa6a81068622dfefb961a427f1882f278dce852  assets/18.dat
+b1f00a35a641a0e7db590e5e5088957a5f250901d3fdeb1d80cebb95e84fabf6  assets/19.dat
+733b3de3dd65266176f9dc452424c74d6ee9c52daaa2aaee846852a15781b157  assets/2.dat
+0e01808cfb8ad60a59d47472db93be56d6ed6cf46392c2106f91f44a3b0d2423  assets/20.dat
+ab3ce84cb05a1540e36e66a47e13c0f317902914a73208c90149982b994f0abf  assets/21.dat
+213627bf042ee01e46fdf50a5cf6ca778014690b014bd3cd95554f7465831e98  assets/22.dat
+ceb2f46b5771642ddff57f4a2a6ac0a8b82a6da0b78b7336221675b3aa31e85b  assets/23.dat
+f8ef7bebbc57494cc19306f994b896a7bf761d605acea305a688c567c9d977ea  assets/24.dat
+5d7e3fd40e3ec6339d149a8c4f85339cc2a1027139805cb395fb42ec324b5c8a  assets/25.dat
+46f906a53de3228b74ef353406d65d3203b6ef5c1423491655418de419a57cd3  assets/26.dat
+dde995286c33656e318f805b1f6248189b4ee21e6fcf7f462e1226a2a01a1b27  assets/27.dat
+b99b53fee0644ea32a331d98ee5990e5fb6098a864c094211a1faec383eb870d  assets/28.dat
+c85db65b6db4c75962b25e418911596b49a3dc8607cf484a5bf8ced32fdc079f  assets/29.dat
+ef084aa72d5f8f7e5aed0901435ab83ed6fd8999e5894892d0f00e4dc9d12f68  assets/3.dat
+6ae870027f9fc6f4aed0e5c9276e340ee2ff2f95fffc107ffc8915cacd2a8aab  assets/30.dat
+f4fb2d413c638e2395b51f73e384773ea7c735ee6edcf9104caa0dd86e050d0b  assets/31.dat
+e20e78e0efd71c6f8cb8b0bec581348f73705168e2b466befcf5a16b5e8635a8  assets/32.dat
+cf643c048f4c278b4f491818d62ab0329dd8d7bfe784cd2d332cd5c7478f3545  assets/33.dat
+2bc3927d80e437c928b748159628b90e817309b2d42ad0994d60271e9de3f64b  assets/34.dat
+9628de5d5583411f031783192ffea12097bca9ff34a26261967802b15b9f5fcc  assets/35.dat
+98e0b48519a50bb081c6b809f4f3a54b15ae10eda180badb3ac37963a1b5d8c5  assets/36.dat
+fc5318c39eed6824d44f3a770991877eb56d2e661f45d5505f270e5b28d31e17  assets/37.dat
+94d0c3d4d206f2499cbb3a86acf5e4be2a303adc0bbd860640944677ffeee7d5  assets/38.dat
+400eb7751b887056e5e361aea8e002404ac3bcc617c5ee339b32c97bff45ac6b  assets/39.dat
+59ecd80ba24606a33ee5d882a69b1e62eda5eac7496f7260f5f40443a905d442  assets/4.dat
+db2477f2fbcd2112812645961a6c0d5b58b426c3c098b75d16e4eb8f609d8f35  assets/40.dat
+d1d2ef41d55422acd16e859b04ca448411ff69b8c27fd61caaca6b94c1514872  assets/41.dat
+b9dc3176c8132745f2e6629131137ca9f8db5419186fc6490c913bc2a73b871f  assets/42.dat
+021acdd99a4f7cedcdc8c8853818a5e4f41a5b06554061015bc7e2e4418ce8a7  assets/43.dat
+390687916d8780a6aec1678c504c122e359673516079b249c36b3c3316a48718  assets/44.dat
+cd97929181d3c4ef2662e3c36c53e47a9504e4ab970dc723a341d0cabee4a6b4  assets/45.dat
+7ad09eaefe604db175bb3fa047a8b70b5be174a8b0b54a104b47ab7487b29840  assets/5.dat
+fa3191bf98649e97b8fce585da4b70577c97a6ff7384695d551bb314700d6d1d  assets/6.dat
+80260121486575528f5b86b8238b20e14b7c255f0a35d0329c57c35c35b0ce2d  assets/7.dat
+382f0a9494b40859270d94732efeed7280e7e8771025d8897c45dcde74d7586a  assets/8.dat
+aaac9e1abc6d24a986f48eb5bdaac83b284a4ac6fd02abaf71368891fcdd4bd4  assets/9.dat
+d3f811ac3f1c1fce6c8daf19a49ed1d4339f525a811d54852334dc9275510d2d  ignored.dat
+
+$ fm-spawn.sh lifecycle <project> --mode local-only --yolo off --in-place
+spawned lifecycle harness=codex kind=ship mode=local-only yolo=off workspace=in-place window=firstmate:fm-lifecycle worktree=/private/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T/fm-in-place-workspace.PAU2TQ/lifecycle/volume/proj
+
+Persisted task metadata:
+window=firstmate:fm-lifecycle
+endpoint_task_id=lifecycle
+worktree=/private/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T/fm-in-place-workspace.PAU2TQ/lifecycle/volume/proj
+project=/private/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T/fm-in-place-workspace.PAU2TQ/lifecycle/volume/proj
+harness=codex
+kind=ship
+mode=local-only
+yolo=off
+workspace=in-place
+tasktmp=/tmp/fm-lifecycle
+model=default
+effort=default
+spawn_gen=s1788809699.59815.22844
+
+$ fm-spawn.sh lifecycle <project> --mode local-only --yolo off --in-place
+error: task 'lifecycle' already occupies '/private/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T/fm-in-place-workspace.PAU2TQ/lifecycle/volume/proj'; an in-place project takes one worker at a time within one firstmate home (two homes pointing at the same directory are not coordinated) - finish and clean up that task first
+
+$ fm-spawn.sh competitor <project> --mode local-only --yolo off --in-place
+error: task 'lifecycle' already occupies '/private/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T/fm-in-place-workspace.PAU2TQ/lifecycle/volume/proj'; an in-place project takes one worker at a time within one firstmate home (two homes pointing at the same directory are not coordinated) - finish and clean up that task first
+
+$ fm-teardown.sh lifecycle (before landing)
+WARNING: watcher still down (same stale episode; last beat: 4s ago, grace 300s) - full banner already printed this episode.
+REFUSED: local-only worktree /private/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T/fm-in-place-workspace.PAU2TQ/lifecycle/volume/proj has work not yet merged into main and not on any remote.
+commits not yet on main:
+3850851 deliver in-place feature
+Merge the branch into local main first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force.
+
+$ fm-merge-local.sh lifecycle
+WARNING: watcher still down (same stale episode; last beat: 4s ago, grace 300s) - full banner already printed this episode.
+merged fm/lifecycle into local main (a88743c -> 3850851) in /private/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T/fm-in-place-workspace.PAU2TQ/lifecycle/volume/proj
+
+$ fm-teardown.sh lifecycle
+WARNING: watcher still down (same stale episode; last beat: 5s ago, grace 300s) - full banner already printed this episode.
+teardown lifecycle complete (window firstmate:fm-lifecycle, worktree /private/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T/fm-in-place-workspace.PAU2TQ/lifecycle/volume/proj)
+Backlog: lifecycle is closed in /private/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T/fm-in-place-workspace.PAU2TQ/lifecycle/home/data/backlog.md. Run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+
+$ tasks-axi show lifecycle --file <home>/data/backlog.md
+task:
+  id: lifecycle
+  title: Teardown marker regression
+  state: done
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: ship
+  repo: "-"
+  priority: "-"
+  created: "-"
+  closed: 2026-09-07
+  deps: none
+  links: none
+  body: local main
+
+Product hashes after cleanup (identical):
+59decb809a30a3296bda0a50f6ae426d2e3a2fd3ceee53c2725b5e4182aecf04  assets/1.dat
+e6409430fbcd76e540687602fd156023027a59f9e7022260f1d3b762b1d673fd  assets/10.dat
+d8b5b27e5be36fb7d57987fd7154fda30199c54160b2c3c85389231a71ddf87f  assets/11.dat
+d7b1ea75663b50d6e8b1df8370ac039ef831f6d52d7d5ba4bf3f26c7c0ebaf56  assets/12.dat
+85eae6b48035dad7f54043eb6614791595b389f1b0da9712d97e2828f54bf11c  assets/13.dat
+0e18d15b697f46b3392f5832b79a9aebd87ee52adbdf223f518d86f52bea513b  assets/14.dat
+77689798ecb81dd7902701ee0adfe87350afba3c09554e586673dd71bf71c4bb  assets/15.dat
+6da809854576fe206c2853a42c57e84d5cc0c9ed72810d111d6f32fbac07411e  assets/16.dat
+b9d08ff68dbf611d6140cf451bd301de10390792c0adb295305185c190d3d769  assets/17.dat
+b9d077fb44f8a43815992537afa6a81068622dfefb961a427f1882f278dce852  assets/18.dat
+b1f00a35a641a0e7db590e5e5088957a5f250901d3fdeb1d80cebb95e84fabf6  assets/19.dat
+733b3de3dd65266176f9dc452424c74d6ee9c52daaa2aaee846852a15781b157  assets/2.dat
+0e01808cfb8ad60a59d47472db93be56d6ed6cf46392c2106f91f44a3b0d2423  assets/20.dat
+ab3ce84cb05a1540e36e66a47e13c0f317902914a73208c90149982b994f0abf  assets/21.dat
+213627bf042ee01e46fdf50a5cf6ca778014690b014bd3cd95554f7465831e98  assets/22.dat
+ceb2f46b5771642ddff57f4a2a6ac0a8b82a6da0b78b7336221675b3aa31e85b  assets/23.dat
+f8ef7bebbc57494cc19306f994b896a7bf761d605acea305a688c567c9d977ea  assets/24.dat
+5d7e3fd40e3ec6339d149a8c4f85339cc2a1027139805cb395fb42ec324b5c8a  assets/25.dat
+46f906a53de3228b74ef353406d65d3203b6ef5c1423491655418de419a57cd3  assets/26.dat
+dde995286c33656e318f805b1f6248189b4ee21e6fcf7f462e1226a2a01a1b27  assets/27.dat
+b99b53fee0644ea32a331d98ee5990e5fb6098a864c094211a1faec383eb870d  assets/28.dat
+c85db65b6db4c75962b25e418911596b49a3dc8607cf484a5bf8ced32fdc079f  assets/29.dat
+ef084aa72d5f8f7e5aed0901435ab83ed6fd8999e5894892d0f00e4dc9d12f68  assets/3.dat
+6ae870027f9fc6f4aed0e5c9276e340ee2ff2f95fffc107ffc8915cacd2a8aab  assets/30.dat
+f4fb2d413c638e2395b51f73e384773ea7c735ee6edcf9104caa0dd86e050d0b  assets/31.dat
+e20e78e0efd71c6f8cb8b0bec581348f73705168e2b466befcf5a16b5e8635a8  assets/32.dat
+cf643c048f4c278b4f491818d62ab0329dd8d7bfe784cd2d332cd5c7478f3545  assets/33.dat
+2bc3927d80e437c928b748159628b90e817309b2d42ad0994d60271e9de3f64b  assets/34.dat
+9628de5d5583411f031783192ffea12097bca9ff34a26261967802b15b9f5fcc  assets/35.dat
+98e0b48519a50bb081c6b809f4f3a54b15ae10eda180badb3ac37963a1b5d8c5  assets/36.dat
+fc5318c39eed6824d44f3a770991877eb56d2e661f45d5505f270e5b28d31e17  assets/37.dat
+94d0c3d4d206f2499cbb3a86acf5e4be2a303adc0bbd860640944677ffeee7d5  assets/38.dat
+400eb7751b887056e5e361aea8e002404ac3bcc617c5ee339b32c97bff45ac6b  assets/39.dat
+59ecd80ba24606a33ee5d882a69b1e62eda5eac7496f7260f5f40443a905d442  assets/4.dat
+db2477f2fbcd2112812645961a6c0d5b58b426c3c098b75d16e4eb8f609d8f35  assets/40.dat
+d1d2ef41d55422acd16e859b04ca448411ff69b8c27fd61caaca6b94c1514872  assets/41.dat
+b9dc3176c8132745f2e6629131137ca9f8db5419186fc6490c913bc2a73b871f  assets/42.dat
+021acdd99a4f7cedcdc8c8853818a5e4f41a5b06554061015bc7e2e4418ce8a7  assets/43.dat
+390687916d8780a6aec1678c504c122e359673516079b249c36b3c3316a48718  assets/44.dat
+cd97929181d3c4ef2662e3c36c53e47a9504e4ab970dc723a341d0cabee4a6b4  assets/45.dat
+7ad09eaefe604db175bb3fa047a8b70b5be174a8b0b54a104b47ab7487b29840  assets/5.dat
+fa3191bf98649e97b8fce585da4b70577c97a6ff7384695d551bb314700d6d1d  assets/6.dat
+80260121486575528f5b86b8238b20e14b7c255f0a35d0329c57c35c35b0ce2d  assets/7.dat
+382f0a9494b40859270d94732efeed7280e7e8771025d8897c45dcde74d7586a  assets/8.dat
+aaac9e1abc6d24a986f48eb5bdaac83b284a4ac6fd02abaf71368891fcdd4bd4  assets/9.dat
+d3f811ac3f1c1fce6c8daf19a49ed1d4339f525a811d54852334dc9275510d2d  ignored.dat
+
+$ git -C <project> log -1 --format=%h:%s main
+3850851:deliver in-place feature
+
+$ fm-spawn.sh replacement <project> --mode local-only --yolo off --in-place
+spawned replacement harness=codex kind=ship mode=local-only yolo=off workspace=in-place window=firstmate:fm-replacement worktree=/private/var/folders/md/6d3x0xmj0rd3sxvq647l2jnh0000gn/T/fm-in-place-workspace.PAU2TQ/lifecycle/volume/proj
