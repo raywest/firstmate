@@ -43,7 +43,8 @@
 # `state/<id>.backlog-close` first, and removes it once the close lands.
 # The writer and replay share one complete-record validator, and teardown stages
 # that record before destructive cleanup, so it never publishes or acts on a close
-# replay would reject. The validator pins the data path to this home's configured
+# replay would reject. In-place publication timing and release follow
+# bin/fm-in-place-owner-lib.sh. The validator pins the data path to this home's configured
 # root before any recovery mutation, then re-runs exactly that close.
 # `tasks-axi done` on an already-closed task backfills links
 # without moving the close date, so replay is idempotent. Spawn needs no marker:
@@ -54,15 +55,10 @@
 # closes a row that reads as an open captain call. An answer that closed the row
 # first simply retires the record.
 
-# The /dev/null source boundary below is load-bearing, not laziness: it is the
-# same independently-linted-AST boundary fm-backend.sh's adapters use. With the
-# real path, shellcheck 0.11.0's extended --external-sources analysis of
-# bin/fm-teardown.sh (which sources this file) crosses a termination cliff -
-# teardown alone already costs ~50s, and folding this lib's AST in on top made
-# the analysis diverge (>35min, unbounded memory) in the pipeline, locally,
-# and in CI, which pin the same version. fm-lint.sh still lints
-# bin/fm-in-place-owner-lib.sh as its own file, so no coverage is lost;
-# only the cross-file fold into every consumer is pruned.
+# The /dev/null source boundary prevents ShellCheck's extended analysis from
+# folding the ownership library into every consumer, which can exhaust analysis
+# time and memory. fm-lint.sh lints bin/fm-in-place-owner-lib.sh independently;
+# the runtime source operation is unchanged.
 # shellcheck source=/dev/null
 . "$(dirname "${BASH_SOURCE[0]}")/fm-in-place-owner-lib.sh"
 

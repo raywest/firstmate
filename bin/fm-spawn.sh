@@ -163,13 +163,13 @@
 #   secondmate receives the primary's read-only shared captain-preference file
 #   (fm-config-inherit-lib.sh). A successful launch clears pending inherited
 #   config reread generations because the new agent reads the converged files.
-#   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
+#   --scout records kind=scout in the task's meta (report deliverable;
 #   see AGENTS.md task lifecycle); --secondmate records kind=secondmate and launches in a
 #   provisioned firstmate home; the default is kind=ship.
 #   Before a secondmate launch, the home is fast-forwarded to the primary's
 #   default-branch commit when safe: directly for a local home, or through the
 #   configured host for a remote home. Skipped syncs warn and launch unchanged.
-#   Ship/scout spawns refuse to launch unless the resolved task path is a real
+#   Isolated ship/scout spawns refuse unless the resolved task path is a real
 #   git worktree root distinct from the primary project checkout.
 #   Inherited Git repository-selection overrides are cleared at script entry
 #   so discovery, validation, and refresh use the explicit project/worktree
@@ -182,7 +182,7 @@
 #   FM_SPAWN_SETTLE_POLLS and FM_SPAWN_SETTLE_POLL_INTERVAL shorten that budget.
 #   Exhaustion reports that no settled worktree of the primary was observed,
 #   names the endpoint to inspect, and stops before publishing task metadata.
-#   Before a fresh ship or scout worker starts, its clean task worktree fetches
+#   Before a fresh isolated ship or scout starts, its clean task worktree fetches
 #   origin, resolves the current remote default branch, and resets to its tip.
 #   An unreachable origin, unresolved default branch, or non-clean worktree
 #   refuses the spawn rather than risking a PR based on stale history.
@@ -198,7 +198,7 @@
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
-#   source of truth; shared --scout/--harness/--model/--effort/--backend/--mode/--yolo
+#   source of truth; shared --scout/--in-place/--harness/--model/--effort/--backend/--mode/--yolo
 #   applies to every pair. A ship batch therefore carries one delivery contract, and each
 #   pair still checks it against its own brief; a batch spanning modes is two invocations.
 #   If config/crew-dispatch.json exists, shared --harness is required for crewmate
