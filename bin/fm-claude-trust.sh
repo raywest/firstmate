@@ -3,9 +3,18 @@
 # ship/scout spawn is about to launch a claude crewmate into, so the worker
 # reaches its brief instead of wedging on the trust dialog.
 #
-# Usage: fm-claude-trust.sh <worktree> <project>
+# Usage: fm-claude-trust.sh [--in-place] <worktree> <project>
 #   <worktree>  the isolated task worktree this spawn launches into
 #   <project>   the primary checkout that worktree belongs to
+#   --in-place  the spawn is a declared in-place launch (bin/fm-spawn.sh's
+#               --in-place contract): <worktree> and <project> must resolve to
+#               the SAME directory, which must be a git worktree root. The
+#               linked-worktree requirement is replaced by that exact-identity
+#               requirement - nothing but the declared project directory itself
+#               is ever registered, so this stays a scope test rather than a
+#               loosening: a subdirectory, an unrelated checkout, a home or
+#               config directory, and a mismatch between the two arguments are
+#               all still refused.
 # Prints one line naming what it registered; refuses loudly on anything else.
 #
 # WHY THIS EXISTS. Claude Code gates a folder it has never seen behind an
@@ -69,7 +78,12 @@ unset CDPATH \
   GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_CONFIG GIT_CONFIG_GLOBAL \
   GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT
 
-[ "$#" -eq 2 ] || { echo "usage: fm-claude-trust.sh <worktree> <project>" >&2; exit 2; }
+IN_PLACE=0
+if [ "${1:-}" = --in-place ]; then
+  IN_PLACE=1
+  shift
+fi
+[ "$#" -eq 2 ] || { echo "usage: fm-claude-trust.sh [--in-place] <worktree> <project>" >&2; exit 2; }
 WT_ARG=$1
 PROJ_ARG=$2
 
@@ -129,17 +143,26 @@ WT_TOP=$(git -C "$WT_REAL" rev-parse --show-toplevel 2>/dev/null) || true
 WT_TOP_REAL=$(real_dir "$WT_TOP") || true
 [ "$WT_TOP_REAL" = "$WT_REAL" ] || refuse "'$WT_REAL' is not a worktree root (its root is '${WT_TOP_REAL:-unresolvable}')"
 
-WT_GIT_DIR=$(git -C "$WT_REAL" rev-parse --absolute-git-dir 2>/dev/null) || true
-[ -n "$WT_GIT_DIR" ] || refuse "'$WT_REAL' has no resolvable git directory"
-WT_GIT_DIR=$(real_dir "$WT_GIT_DIR") || true
-[ -n "$WT_GIT_DIR" ] || refuse "'$WT_REAL' has an unresolvable git directory"
-WT_COMMON=$(common_dir_of "$WT_REAL") || true
-[ -n "$WT_COMMON" ] || refuse "'$WT_REAL' has no resolvable git common directory"
-[ "$WT_GIT_DIR" != "$WT_COMMON" ] || refuse "'$WT_REAL' is a primary checkout, not an isolated worktree"
+if [ "$IN_PLACE" -eq 1 ]; then
+  # In-place scope: the one directory a declared in-place spawn may trust is the
+  # project directory itself, so the two arguments must be the same resolved
+  # path (a primary checkout is expected here, not refused). Everything above -
+  # accessible directory, not home, not the config dir, a git worktree root -
+  # still holds.
+  [ "$WT_REAL" = "$PROJ_REAL" ] || refuse "--in-place requires the worktree and project to be the same directory (got '$WT_REAL' and '$PROJ_REAL')"
+else
+  WT_GIT_DIR=$(git -C "$WT_REAL" rev-parse --absolute-git-dir 2>/dev/null) || true
+  [ -n "$WT_GIT_DIR" ] || refuse "'$WT_REAL' has no resolvable git directory"
+  WT_GIT_DIR=$(real_dir "$WT_GIT_DIR") || true
+  [ -n "$WT_GIT_DIR" ] || refuse "'$WT_REAL' has an unresolvable git directory"
+  WT_COMMON=$(common_dir_of "$WT_REAL") || true
+  [ -n "$WT_COMMON" ] || refuse "'$WT_REAL' has no resolvable git common directory"
+  [ "$WT_GIT_DIR" != "$WT_COMMON" ] || refuse "'$WT_REAL' is a primary checkout, not an isolated worktree"
 
-PROJ_COMMON=$(common_dir_of "$PROJ_REAL") || true
-[ -n "$PROJ_COMMON" ] || refuse "project '$PROJ_REAL' is not inside a git repository"
-[ "$WT_COMMON" = "$PROJ_COMMON" ] || refuse "'$WT_REAL' is not a worktree of project '$PROJ_REAL'"
+  PROJ_COMMON=$(common_dir_of "$PROJ_REAL") || true
+  [ -n "$PROJ_COMMON" ] || refuse "project '$PROJ_REAL' is not inside a git repository"
+  [ "$WT_COMMON" = "$PROJ_COMMON" ] || refuse "'$WT_REAL' is not a worktree of project '$PROJ_REAL'"
+fi
 
 # The store write needs node, and a missing interpreter refuses like every other
 # failure here. Degrading instead would launch a worker straight into the dialog

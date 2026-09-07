@@ -15,6 +15,16 @@
 #   - <name> - <desc> (added <date>)                  -> no-mistakes off  (legacy default)
 #   - <name> [<mode>] - <desc> (added <date>)          -> <mode> off
 #   - <name> [<mode> +yolo] - <desc> (added <date>)    -> <mode> on
+# The bracket annotation may additionally carry `+in-place`: the captain's
+# standing declaration that this project's workers run directly in the
+# project's real directory (its work location is outside projects/, e.g. a
+# volume), with no scratch worktree. It never changes the two-word default
+# output; query it with --workspace, which prints exactly one word:
+#   in-place   the registry line carries +in-place
+#   isolated   every other case, including an absent registry or project
+# bin/fm-spawn.sh cross-checks this declaration against its explicit
+# --in-place flag and refuses a mismatch in either direction, so the
+# declaration alone never changes how any task is launched.
 #
 # Registered modes:
 #   no-mistakes            full pipeline -> PR -> configured merge authority (default)
@@ -33,8 +43,9 @@
 # conditional policy apart from a flat mode sees "no-mistakes-prod-only" itself.
 #
 # An unknown/missing project or unknown mode falls back to "no-mistakes off" and warns
-# to stderr, so a typo never silently drops the gate.
-# Usage: fm-project-mode.sh [--raw] <project-name>
+# to stderr, so a typo never silently drops the gate. --workspace has the same
+# fail-closed shape: anything unparseable reads as "isolated", never "in-place".
+# Usage: fm-project-mode.sh [--raw|--workspace] <project-name>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,40 +54,65 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 REG="$DATA/projects.md"
 RAW=0
+WORKSPACE=0
 if [ "${1:-}" = "--raw" ]; then
   RAW=1
   shift
+elif [ "${1:-}" = "--workspace" ]; then
+  WORKSPACE=1
+  shift
 fi
-NAME=${1:?usage: fm-project-mode.sh [--raw] <project-name>}
+NAME=${1:?usage: fm-project-mode.sh [--raw|--workspace] <project-name>}
 
 if [ ! -f "$REG" ]; then
+  if [ "$WORKSPACE" -eq 1 ]; then
+    echo "isolated"
+    exit 0
+  fi
   echo "warn: no registry at $REG; defaulting $NAME to no-mistakes off" >&2
   echo "no-mistakes off"
   exit 0
 fi
 
-# awk emits "<mode> <yolo>" (one line) or nothing if the project is absent.
+# awk emits "<mode> <yolo> <workspace>" (one line) or nothing if the project is
+# absent. Any leading +token is a flag rather than a mode, so a flags-only
+# annotation keeps the default mode.
 parsed=$(awk -v n="$NAME" '
   $1=="-" && $2==n {
-    mode="no-mistakes"; yolo="off";
+    mode="no-mistakes"; yolo="off"; workspace="isolated";
     if ($3 ~ /^\[/) {
       s="";
       for (i=3; i<=NF; i++) { s = s (s==""?"":" ") $i; if ($i ~ /\]$/) break }
       gsub(/^\[|\]$/, "", s);           # strip the surrounding brackets
       k = split(s, a, " ");
-      if (a[1] != "" && a[1] != "+yolo") mode = a[1];
-      for (j=1; j<=k; j++) if (a[j]=="+yolo") yolo="on";
+      if (a[1] != "" && a[1] !~ /^\+/) mode = a[1];
+      for (j=1; j<=k; j++) {
+        if (a[j]=="+yolo") yolo="on";
+        if (a[j]=="+in-place") workspace="in-place";
+      }
     }
-    print mode, yolo; exit
+    print mode, yolo, workspace; exit
   }
 ' "$REG")
 
 if [ -z "$parsed" ]; then
+  if [ "$WORKSPACE" -eq 1 ]; then
+    echo "isolated"
+    exit 0
+  fi
   echo "warn: project \"$NAME\" not in registry; defaulting to no-mistakes off" >&2
   echo "no-mistakes off"
   exit 0
 fi
 
+if [ "$WORKSPACE" -eq 1 ]; then
+  case "${parsed##* }" in
+    in-place) echo "in-place" ;;
+    *) echo "isolated" ;;
+  esac
+  exit 0
+fi
+parsed=${parsed% *}
 mode=${parsed%% *}
 yolo=${parsed##* }
 case "$mode" in

@@ -52,6 +52,14 @@ The optional `+yolo` posture changes merge authority only and does not change th
 Default it off for every project and every posture, and enable it only on the captain's explicit instruction.
 `AGENTS.md` section 7 owns the merge-authority contract.
 
+## In-place workspace declaration
+
+The optional `+in-place` registry token declares that a project's workers run directly in its real directory, with no scratch worktree and no isolation assertion, because the real work location is outside `projects/` (a volume or fileserver, say) and the directory itself is the product.
+Never default it on: declare it only on the captain's explicit instruction for a specifically named project, because it trades the scratch-copy protection for direct work in the real directory.
+`bin/fm-spawn.sh`'s header owns the launch contract: the declaration, the spawn's explicit `--in-place` flag, and a brief scaffolded with `fm-brief.sh --in-place` must all agree, the directory takes exactly one worker at a time, and the spawn never fetches or resets it.
+`bin/fm-teardown.sh` and `bin/fm-merge-local.sh` read the task's recorded workspace for their in-place cleanup and landing behavior.
+A declared in-place project needs no clone under `projects/` at all - the spawn takes the real directory - so when declaring one, tell the captain any existing clone of it is now unused and remove it only through the ordinary removal preflight on his explicit instruction.
+
 ## Add or clone an existing project
 
 Confirm the source URL, local project name, delivery posture, and autonomy posture, stating the resolved default for each rather than asking the captain to invent one.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--in-place] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--in-place] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -23,6 +23,33 @@
 #   notice is printed and the spawn continues.
 #   no-mistakes-prod-only is a registry policy rather than a task mode and is
 #   refused as a flag value.
+#   --in-place launches the worker directly in the project's real directory:
+#   no scratch worktree is created, `treehouse get` is never sent, and the
+#   base is never fetched or reset. It is legal only for a ship or scout spawn
+#   of a project whose data/projects.md entry carries the captain's standing
+#   +in-place declaration (bin/fm-project-mode.sh --workspace), and only with
+#   a brief scaffolded by bin/fm-brief.sh --in-place; a mismatch on either
+#   axis - flag without declaration, declaration without flag, flag without
+#   the brief's "Workspace contract: in-place" line, or that line without the
+#   flag - refuses before any endpoint exists, so the isolation assertion is
+#   exactly as strict as before wherever the three records do not all agree.
+#   The project directory must be a resolvable git worktree root outside this
+#   firstmate home, outside the firstmate repo, and outside this home's
+#   projects/ clone root (an in-place project's real work location is
+#   elsewhere by definition; clones under projects/ keep scratch copies).
+#   Exactly one live worker may own an in-place directory: while any task
+#   record in this home names that directory as its worktree, a second
+#   in-place spawn of it is refused (checked under the same task-set lock a
+#   fresh spawn already holds through publication, so two concurrent spawns
+#   cannot both pass). The launched pane is verified to be sitting in the
+#   project directory before the brief is delivered, the task's meta records
+#   workspace=in-place (absent means isolated, keeping every other task's
+#   meta byte-identical), and bin/fm-teardown.sh, bin/fm-merge-local.sh, and
+#   bin/fm-promote.sh read that record for their in-place behavior.
+#   --relaunch re-reads it from the existing record, so the flag itself is
+#   refused there; backend=orca is refused because its terminal is bound to
+#   an Orca-managed worktree id and cannot host a worker in a directory Orca
+#   does not own. --secondmate is unrelated to this flag and refuses it.
 #        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded endpoint and worktree instead of creating either. It is
@@ -228,7 +255,7 @@
 # items), on a config/backlog-backend=manual home, and in a home that keeps no
 # data/backlog.md. An automatic-backend home with a backlog but no compatible
 # tasks-axi refuses before creating any lifecycle state.
-# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
+# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] [workspace=in-place] window=<backend-target> worktree=<path>
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
 # success line and state/<id>.meta omit them.
@@ -360,6 +387,8 @@ BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
 TRACEPARENT_SET=0
+IN_PLACE=0
+IN_PLACE_SET=0
 RELAUNCH=0
 POS=()
 want_value=
@@ -385,6 +414,7 @@ for a in "$@"; do
     --scout) KIND=scout; KIND_SET=1 ;;
     --secondmate) KIND=secondmate; KIND_SET=1 ;;
     --relaunch) RELAUNCH=1 ;;
+    --in-place) IN_PLACE=1; IN_PLACE_SET=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --model) want_value=model ;;
@@ -437,6 +467,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   [ "$KIND_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded kind; --scout/--secondmate cannot override it" >&2; exit 1; }
   [ "$MODE_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded delivery mode; --mode cannot override it" >&2; exit 1; }
   [ "$YOLO_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded yolo posture; --yolo cannot override it" >&2; exit 1; }
+  [ "$IN_PLACE_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded workspace; --in-place cannot override it" >&2; exit 1; }
 else
   # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
   # firstmate's per-task decision, so they are required and closed-set validated
@@ -471,6 +502,10 @@ else
       echo "error: --yolo applies only to ship spawns; a scout delivers a report and a secondmate records its own fixed posture" >&2
       exit 1
     }
+  fi
+  if [ "$IN_PLACE" -eq 1 ] && [ "$KIND" = secondmate ]; then
+    echo "error: --in-place applies only to ship and scout spawns; a secondmate home is its own workspace" >&2
+    exit 1
   fi
 fi
 
@@ -999,6 +1034,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   # spanning several modes is two invocations rather than a silent mixed dispatch.
   [ "$MODE_SET" -eq 0 ] || shared_args+=(--mode "$MODE")
   [ "$YOLO_SET" -eq 0 ] || shared_args+=(--yolo "$YOLO")
+  [ "$IN_PLACE_SET" -eq 0 ] || shared_args+=(--in-place)
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -1119,6 +1155,10 @@ if [ "$RELAUNCH" -eq 0 ]; then
     echo "error: backend=cmux does not support --secondmate spawns yet" >&2
     exit 1
   fi
+  if [ "$BACKEND" = orca ] && [ "$IN_PLACE" -eq 1 ]; then
+    echo "error: backend=orca cannot host an in-place worker: its terminal is bound to an Orca-managed worktree id, and an in-place task runs in a directory Orca does not own; select another backend" >&2
+    exit 1
+  fi
   if [ "$BACKEND" = orca ]; then
     fm_backend_orca_runtime_check || exit 1
   fi
@@ -1183,6 +1223,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
   [ -n "$KIND" ] || KIND=ship
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
+  RELAUNCH_WORKSPACE=$(fm_meta_get "$RELAUNCH_META" workspace)
+  [ "$RELAUNCH_WORKSPACE" != in-place ] || IN_PLACE=1
   RELAUNCH_WT=$(fm_meta_get "$RELAUNCH_META" worktree)
   [ -n "$RELAUNCH_WT" ] && [ -d "$RELAUNCH_WT" ] || {
     echo "error: task $ID's recorded worktree '${RELAUNCH_WT:-none}' is missing; refusing to relaunch without the local copy its work lives in" >&2
@@ -1885,6 +1927,24 @@ else
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
+
+# In-place declaration agreement (fresh ship/scout only; a relaunch re-reads
+# the task's own record instead). The captain's standing +in-place declaration
+# in data/projects.md and this spawn's explicit --in-place flag must both be
+# present or both absent: the flag without the declaration is an accident this
+# refusal makes impossible, and the declaration without the flag would
+# otherwise quietly hand a declared in-place project a scratch copy again.
+if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
+  REGISTRY_WORKSPACE=$("$FM_ROOT/bin/fm-project-mode.sh" --workspace "$(basename "$PROJ_ABS")" 2>/dev/null) || REGISTRY_WORKSPACE=isolated
+  if [ "$IN_PLACE" -eq 1 ] && [ "$REGISTRY_WORKSPACE" != in-place ]; then
+    echo "error: --in-place is not declared for project '$(basename "$PROJ_ABS")' in data/projects.md; add +in-place to its registry annotation (the captain's standing declaration) before spawning in place" >&2
+    exit 1
+  fi
+  if [ "$IN_PLACE" -eq 0 ] && [ "$REGISTRY_WORKSPACE" = in-place ]; then
+    echo "error: project '$(basename "$PROJ_ABS")' is declared +in-place in data/projects.md; pass --in-place (with a brief scaffolded by fm-brief.sh --in-place), or remove the declaration if this project should use scratch copies again" >&2
+    exit 1
+  fi
+fi
 [ -f "$BRIEF" ] || { echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2; exit 1; }
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   if fm_brief_task_placeholders_present "$BRIEF"; then
@@ -1955,6 +2015,27 @@ if [ "$KIND" = ship ]; then
   fi
 fi
 
+# Brief/spawn workspace agreement, the same drift contract as the delivery-mode
+# check above but for both ship and scout: an in-place spawn must hand the
+# worker in-place instructions (fm-brief.sh --in-place records the fixed
+# "Workspace contract: in-place" line), and in-place instructions must never be
+# launched into a scratch copy where their real-directory rules would be wrong.
+if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; }; then
+  if grep -qxF 'Workspace contract: in-place' "$BRIEF"; then
+    BRIEF_WORKSPACE=in-place
+  else
+    BRIEF_WORKSPACE=isolated
+  fi
+  if [ "$IN_PLACE" -eq 1 ] && [ "$BRIEF_WORKSPACE" != in-place ]; then
+    echo "error: workspace mismatch for $ID: this spawn passed --in-place but $BRIEF carries no 'Workspace contract: in-place' line; re-scaffold it with fm-brief.sh --in-place so the worker's instructions match the launch" >&2
+    exit 1
+  fi
+  if [ "$IN_PLACE" -eq 0 ] && [ "$BRIEF_WORKSPACE" = in-place ]; then
+    echo "error: workspace mismatch for $ID: $BRIEF says 'Workspace contract: in-place' but this spawn did not pass --in-place; correct the flag or re-scaffold the brief" >&2
+    exit 1
+  fi
+fi
+
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
@@ -2004,6 +2085,42 @@ spawn_candidate_is_primary_worktree() {  # <resolved-path>
   common=$(spawn_git_common_dir_real "$path") || return 1
   [ "$common" = "$PROJ_COMMON_DIR_REAL" ]
 }
+
+# In-place launch preconditions, all checked before any endpoint or record
+# exists so a refusal costs nothing to unwind. The single-worker rule runs
+# under the task-set lock a fresh spawn already holds through publication
+# (fm_task_set_lock_path), so two concurrent spawns cannot both pass it, and it
+# tests record EXISTENCE rather than liveness: a dead worker's record still
+# owns the directory until its cleanup runs, because its unlanded work lives
+# there.
+if [ "$IN_PLACE" -eq 1 ] && [ "$RELAUNCH" -eq 0 ]; then
+  in_place_top=$(git -C "$PROJ_ABS_REAL" rev-parse --show-toplevel 2>/dev/null) || in_place_top=
+  if [ -z "$in_place_top" ] || [ "$(real_path_or_raw "$in_place_top")" != "$PROJ_ABS_REAL" ]; then
+    echo "error: in-place project directory '$PROJ_ABS' is not a git worktree root (its root is '${in_place_top:-none}'); an in-place worker needs the repository root itself" >&2
+    exit 1
+  fi
+  in_place_home_real=$(real_path_or_raw "$FM_HOME")
+  in_place_root_real=$(real_path_or_raw "$FM_ROOT")
+  in_place_projects_real=$(real_path_or_raw "$PROJECTS")
+  for in_place_forbidden in "$in_place_home_real" "$in_place_root_real" "$in_place_projects_real"; do
+    if [ "$PROJ_ABS_REAL" = "$in_place_forbidden" ] || path_is_ancestor_of "$in_place_forbidden" "$PROJ_ABS_REAL"; then
+      echo "error: in-place project directory '$PROJ_ABS' resolves inside '$in_place_forbidden' (this firstmate home, its repo, or its projects/ clone root); an in-place project's real work location is elsewhere by definition, and clones under projects/ keep scratch copies" >&2
+      exit 1
+    fi
+  done
+  for in_place_meta in "$STATE"/*.meta; do
+    [ -e "$in_place_meta" ] || continue
+    [ "$in_place_meta" != "$STATE/$ID.meta" ] || continue
+    in_place_other_wt=$(fm_meta_get "$in_place_meta" worktree)
+    [ -n "$in_place_other_wt" ] || continue
+    if [ "$in_place_other_wt" = "$PROJ_ABS" ] \
+       || [ "$(real_path_or_raw "$in_place_other_wt")" = "$PROJ_ABS_REAL" ]; then
+      in_place_other_id=$(basename "$in_place_meta" .meta)
+      echo "error: task '$in_place_other_id' already occupies '$PROJ_ABS' as its working directory; an in-place project takes one worker at a time - finish and clean up that task first" >&2
+      exit 1
+    fi
+  done
+fi
 
 # Session-provider container-ensure + task creation. tmux stays exactly as P1
 # left it (same session-name / new-window sequence, see bin/backends/tmux.sh);
@@ -2599,7 +2716,23 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: task $ID's endpoint is in '${relaunch_seen:-unknown}', not its recorded worktree '$WT'; refusing to relaunch an agent outside the copy holding its work" >&2
     exit 1
   fi
-  [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
+  [ "$KIND" = secondmate ] || [ "$IN_PLACE" -eq 1 ] || validate_spawn_worktree "relaunch" "$T"
+elif [ "$IN_PLACE" -eq 1 ]; then
+  # In-place launch: no scratch copy is acquired and `treehouse get` is never
+  # sent - the endpoint was created with the project directory as its cwd, and
+  # what must be proven is that its shell is actually sitting there before the
+  # brief is delivered, mirroring the relaunch adoption check above.
+  in_place_seen=
+  for _ in $(seq 1 10); do
+    in_place_seen=$(spawn_current_path "$WT_TARGET" || true)
+    [ -z "$in_place_seen" ] || [ "$(real_path_or_raw "$in_place_seen")" != "$PROJ_ABS_REAL" ] || break
+    sleep 0.5
+  done
+  if [ -z "$in_place_seen" ] || [ "$(real_path_or_raw "$in_place_seen")" != "$PROJ_ABS_REAL" ]; then
+    echo "error: the endpoint for in-place task $ID is in '${in_place_seen:-unknown}', not the project directory '$PROJ_ABS'; refusing to launch a worker outside the directory it was declared to work in; inspect window $T" >&2
+    exit 1
+  fi
+  WT="$PROJ_ABS"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
@@ -2646,7 +2779,10 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
 
   validate_spawn_worktree "treehouse get" "$T"
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
+# An in-place directory is the captain's real work location: never fetch it,
+# never reset it, and take it exactly as it stands (the brief's own first step
+# has the worker inspect and report pre-existing tracked changes).
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$IN_PLACE" -eq 0 ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
 fi
 
@@ -2664,7 +2800,9 @@ fi
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
-      if ! "$FM_ROOT/bin/fm-claude-trust.sh" "$WT" "$PROJ_ABS" >/dev/null; then
+      CLAUDE_TRUST_ARGS=()
+      [ "$IN_PLACE" -eq 0 ] || CLAUDE_TRUST_ARGS+=(--in-place)
+      if ! "$FM_ROOT/bin/fm-claude-trust.sh" "${CLAUDE_TRUST_ARGS[@]+"${CLAUDE_TRUST_ARGS[@]}"}" "$WT" "$PROJ_ABS" >/dev/null; then
         echo "error: could not pre-register Claude workspace trust for $WT; refusing to launch a claude worker that would wedge on the trust dialog; inspect window $T" >&2
         exit 1
       fi
@@ -3089,7 +3227,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo workspace tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -3104,6 +3242,9 @@ preserve_relaunch_meta() {
   echo "kind=$KIND"
   [ -z "$MODE" ] || echo "mode=$MODE"
   [ -z "$YOLO" ] || echo "yolo=$YOLO"
+  # workspace= is written only for an in-place task, so every isolated task's
+  # meta stays byte-identical (absent workspace= means isolated).
+  [ "$IN_PLACE" -eq 0 ] || echo "workspace=in-place"
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
@@ -3394,4 +3535,5 @@ fi
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
+[ "$IN_PLACE" -eq 0 ] || SPAWN_DELIVERY="$SPAWN_DELIVERY workspace=in-place"
 echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"

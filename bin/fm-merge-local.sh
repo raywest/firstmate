@@ -9,6 +9,16 @@
 # auto-approves), and only as a clean fast-forward - it refuses a diverged branch
 # and tells you to have the crewmate rebase. See AGENTS.md prime directives,
 # project management, and task lifecycle.
+#
+# For a task whose record carries workspace=in-place (bin/fm-spawn.sh's
+# --in-place contract), the project directory IS the directory the worker
+# committed in, so its checkout is legitimately sitting on the task branch
+# rather than the default branch. In that one case this script checks out the
+# default branch first (refused unless the tree is clean and the move is a pure
+# fast-forward), then performs the same ff-only merge, leaving the project on
+# its merged default branch. This is the honest replacement for the old
+# practice of rewriting task records so the standard path would accept the real
+# work location.
 # Usage: fm-merge-local.sh <task-id>
 set -eu
 
@@ -29,6 +39,7 @@ META="$STATE/$ID.meta"
 
 PROJ=$(grep '^project=' "$META" | cut -d= -f2-)
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
+WORKSPACE=$(grep '^workspace=' "$META" | cut -d= -f2- || true)
 [ "$MODE" = local-only ] || { echo "error: task $ID is mode=$MODE, not local-only; merge PR tasks with bin/fm-pr-merge.sh <id> <PR url> after approval" >&2; exit 1; }
 
 default_branch() {
@@ -53,9 +64,19 @@ git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { e
 DEFAULT=$(default_branch) || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
 
 # The project's main checkout must be on its default branch and clean, so the
-# fast-forward lands predictably (firstmate never writes here otherwise).
+# fast-forward lands predictably (firstmate never writes here otherwise). An
+# in-place task's project directory is the worker's own working directory, so
+# sitting on the task branch itself is the expected ready state there; any
+# OTHER branch is still a refusal.
 cur=$(git -C "$PROJ" symbolic-ref --short HEAD 2>/dev/null || echo "")
-[ "$cur" = "$DEFAULT" ] || { echo "error: $PROJ is on '$cur', expected default branch '$DEFAULT'; cannot merge safely" >&2; exit 1; }
+if [ "$WORKSPACE" = in-place ]; then
+  case "$cur" in
+    "$DEFAULT"|"$BRANCH") ;;
+    *) echo "error: $PROJ is on '$cur', expected default branch '$DEFAULT' or the task branch '$BRANCH'; cannot merge safely" >&2; exit 1 ;;
+  esac
+else
+  [ "$cur" = "$DEFAULT" ] || { echo "error: $PROJ is on '$cur', expected default branch '$DEFAULT'; cannot merge safely" >&2; exit 1; }
+fi
 if [ -n "$(git -C "$PROJ" status --porcelain 2>/dev/null | head -1)" ]; then
   echo "error: $PROJ has a dirty working tree; refusing to merge into it" >&2
   exit 1
@@ -66,6 +87,17 @@ if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
   echo "REFUSED: $BRANCH is not a fast-forward of $DEFAULT (it has diverged)." >&2
   echo "Have the crewmate rebase $BRANCH onto $DEFAULT, then retry." >&2
   exit 1
+fi
+
+# In-place landing from the task branch: switch to the default branch first.
+# The tree is clean and the move is a pure fast-forward (both proven above), so
+# the checkout only rewinds the tree to a state the merge below restores; a
+# checkout that still fails leaves the project exactly where the worker did.
+if [ "$cur" = "$BRANCH" ] && [ "$cur" != "$DEFAULT" ]; then
+  git -C "$PROJ" checkout --quiet "$DEFAULT" || {
+    echo "error: could not check out '$DEFAULT' in $PROJ; nothing was merged" >&2
+    exit 1
+  }
 fi
 
 before=$(git -C "$PROJ" rev-parse --short "$DEFAULT")

@@ -12,9 +12,18 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--in-place] [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --scout [--in-place] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
+#   --in-place scaffolds for a project whose registry entry declares +in-place
+#   (bin/fm-project-mode.sh owns that declaration): the worker runs directly in
+#   the project's real directory with no scratch copy. The Setup section
+#   replaces the worktree-isolation assertion with the in-place location
+#   assertion, forbids git clean/reset and any worktree creation (gitignored
+#   files in that directory are the captain's product data), and records the
+#   fixed machine-readable line "Workspace contract: in-place" that
+#   bin/fm-spawn.sh checks against its own explicit --in-place flag, refusing a
+#   mismatch in either direction. Refused on --secondmate scaffolds.
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
 #   --secondmate writes a persistent secondmate charter. The project list
@@ -116,6 +125,7 @@ fi
 KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
+IN_PLACE=0
 MODE=
 MODE_SET=0
 POS=()
@@ -137,6 +147,7 @@ for a in "$@"; do
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
+    --in-place) IN_PLACE=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
@@ -175,6 +186,11 @@ fi
 
 if [ "$NO_PROJECTS" -eq 1 ] && [ "$KIND" != secondmate ]; then
   echo "error: --no-projects applies only to --secondmate charters" >&2
+  exit 1
+fi
+
+if [ "$IN_PLACE" -eq 1 ] && [ "$KIND" = secondmate ]; then
+  echo "error: --in-place applies only to ship and scout briefs; a secondmate home is its own workspace" >&2
   exit 1
 fi
 
@@ -351,6 +367,28 @@ EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
 
 if [ "$KIND" = scout ]; then
+if [ "$IN_PLACE" -eq 1 ]; then
+IFS= read -r -d '' SCOUT_SETUP <<EOF || true
+# Setup
+Workspace contract: in-place
+You are working directly in the REAL project directory of $REPO - there is no scratch copy, and nothing here is discarded at cleanup.
+This is a SCOUT task: the deliverable is a written report, not a PR.
+This directory is NOT a laboratory: gitignored files here are the captain's product data. Make no commits, never run \`git clean\`, \`git reset\`, or \`git checkout\` over existing files, create no worktrees or clones, and leave the tree exactly as you found it.
+Scratch files and experiments belong under /tmp, never in this directory.
+The report is the only deliverable, so anything worth keeping must be in it.
+EOF
+SCOUT_RULE2='2. Treat this directory as read-only except where the task explicitly says otherwise; the only files you may write outside it are the report and the status file below.'
+else
+IFS= read -r -d '' SCOUT_SETUP <<EOF || true
+# Setup
+You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
+This is a SCOUT task: the deliverable is a written report, not a PR.
+The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
+The report is the only thing that survives, so anything worth keeping must be in it.
+EOF
+SCOUT_RULE2='2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.'
+fi
+SCOUT_SETUP=${SCOUT_SETUP%$'\n'}
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
@@ -358,15 +396,11 @@ $TASK_SECTION
 
 $HERDR_SECTION
 
-# Setup
-You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
-This is a SCOUT task: the deliverable is a written report, not a PR.
-The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
-The report is the only thing that survives, so anything worth keeping must be in it.
+$SCOUT_SETUP
 
 # Rules
 1. Never push to any remote and never open a PR.
-2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+$SCOUT_RULE2
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
@@ -400,7 +434,11 @@ Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-li
 When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
-echo "scaffolded: $BRIEF (scout; replace {TASK} and {FIRSTMATE_SPEC})"
+if [ "$IN_PLACE" -eq 1 ]; then
+  echo "scaffolded: $BRIEF (scout, in-place; replace {TASK} and {FIRSTMATE_SPEC})"
+else
+  echo "scaffolded: $BRIEF (scout; replace {TASK} and {FIRSTMATE_SPEC})"
+fi
 exit 0
 fi
 
@@ -426,13 +464,28 @@ case "$MODE" in
 esac
 DOD=$(fm_dod_block "$MODE" "$ID") || exit 1
 
-cat > "$BRIEF" <<EOF
-You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+if [ "$IN_PLACE" -eq 1 ]; then
+# The in-place variant renumbers the optional no-mistakes step behind its two
+# fixed steps; the isolated variant has one fixed step, so SETUP2 stays "2.".
+[ -z "$SETUP2" ] || SETUP2=${SETUP2/
+2. /
+3. }
+IFS= read -r -d '' SHIP_SETUP <<EOF || true
+# Setup
+Workspace contract: in-place
+You are working directly in the REAL project directory of $REPO - there is no scratch copy.
+This directory, including everything gitignored in it, is the captain's product; nothing here is disposable.
 
-$TASK_SECTION
+**Verify location before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the project directory you were launched in.
+If they do not, STOP - do not branch or commit - append \`blocked: not launched in the declared project directory\` to the status file and stop.
 
-$HERDR_SECTION
-
+1. First action: inspect \`git status\`. Untracked and gitignored files are normal here and never a blocker, but if uncommitted changes to TRACKED files that you did not create are present, STOP - they may be the captain's own work in progress - and append \`blocked: project directory has pre-existing uncommitted tracked changes\` to the status file.
+2. Check out the default branch if the directory is not already on it, then create your branch: \`git checkout -b fm/$ID\`$SETUP2
+EOF
+# shellcheck disable=SC2016  # single quotes are deliberate: the backtick-wrapped git commands are literal brief text for the reading agent.
+SHIP_RULE2='2. Stay inside this directory; modify nothing outside it. NEVER run `git clean` or `git reset --hard`, delete untracked files, or create worktrees or clones of this repo: gitignored content here is the captain'\''s product data.'
+else
+IFS= read -r -d '' SHIP_SETUP <<EOF || true
 # Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
 
@@ -441,10 +494,23 @@ The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
 
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
+EOF
+SHIP_RULE2='2. Stay inside this worktree; modify nothing outside it.'
+fi
+SHIP_SETUP=${SHIP_SETUP%$'\n'}
+
+cat > "$BRIEF" <<EOF
+You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+
+$TASK_SECTION
+
+$HERDR_SECTION
+
+$SHIP_SETUP
 
 # Rules
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.
+$SHIP_RULE2
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
@@ -483,4 +549,8 @@ Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced 
 
 $DOD
 EOF
-echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC})"
+if [ "$IN_PLACE" -eq 1 ]; then
+  echo "scaffolded: $BRIEF (ship, mode=$MODE, in-place; replace {TASK} and {FIRSTMATE_SPEC})"
+else
+  echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC})"
+fi

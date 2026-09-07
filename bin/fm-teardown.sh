@@ -62,6 +62,15 @@
 # Orca tasks use the same safety checks, then close the recorded terminal and
 # remove the recorded worktree through `orca worktree rm`; teardown never guesses
 # an Orca target from ambient CLI state.
+# In-place tasks (workspace=in-place in meta, bin/fm-spawn.sh --in-place) ran
+# directly in the project's real directory: the same dirty and landed-work
+# refusals apply (an unreachable directory refuses too, because the work's
+# durable location cannot be inspected), but cleanup then removes only the
+# task's own hook files and the safely-landed task branch - it never returns,
+# resets, detaches, or process-sweeps the directory itself, and even --force
+# never deletes an unlanded branch there. The record cross-check near the top
+# of the script refuses in BOTH directions when workspace= and the recorded
+# worktree/project identity disagree.
 # A Herdr presentation journal never authorizes cleanup. Teardown still closes
 # only the exact task pane from ordinary endpoint metadata and never calls
 # `workspace close`. It retires the non-authoritative journal only when a
@@ -763,7 +772,44 @@ BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
-T_ORCA=
+# workspace=in-place (bin/fm-spawn.sh --in-place): the task ran directly in the
+# project's real directory. Cleanup then has no scratch copy to return: hook
+# files are removed, the landed task branch is deleted only when it is safely
+# contained in the checked-out branch, and the directory itself - the captain's
+# product, gitignored content included - is never reset, cleaned, returned, or
+# swept for processes (only the task's own temp root is). The record and the
+# directory identity must agree in BOTH directions before anything destructive
+# runs: an in-place record whose worktree is not its project directory is
+# corrupt, and an ordinary record whose worktree IS its project directory
+# must never reach the scratch-copy return path, which would hard-reset a real
+# checkout.
+WORKSPACE=$(fm_meta_get "$META" workspace)
+IN_PLACE=0
+[ "$WORKSPACE" != in-place ] || IN_PLACE=1
+teardown_real_path_or_raw() {  # <path>
+  local real
+  if real=$(CDPATH='' cd -- "$1" 2>/dev/null && pwd -P); then
+    printf '%s\n' "$real"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+TEARDOWN_WT_REAL=$(teardown_real_path_or_raw "$WT")
+TEARDOWN_PROJ_REAL=$(teardown_real_path_or_raw "$PROJ")
+if [ "$IN_PLACE" -eq 1 ]; then
+  if [ "$TEARDOWN_META_KIND" = secondmate ] || [ "$BACKEND" = orca ]; then
+    echo "error: task $ID's record is corrupt: workspace=in-place cannot combine with kind=secondmate or backend=orca; refusing cleanup" >&2
+    exit 1
+  fi
+  if [ -z "$WT" ] || [ "$TEARDOWN_WT_REAL" != "$TEARDOWN_PROJ_REAL" ]; then
+    echo "error: task $ID's record is corrupt: workspace=in-place but its worktree '${WT:-none}' does not resolve to its project directory '$PROJ'; refusing cleanup" >&2
+    exit 1
+  fi
+elif [ "$TEARDOWN_META_KIND" != secondmate ] && [ -n "$WT" ] && [ -d "$WT" ] \
+    && [ "$TEARDOWN_WT_REAL" = "$TEARDOWN_PROJ_REAL" ]; then
+  echo "error: task $ID's recorded worktree resolves to its project directory '$PROJ' but the record does not say workspace=in-place; refusing to run scratch-copy cleanup against a real checkout" >&2
+  exit 1
+fi
 [ "$BACKEND" != orca ] || T_ORCA=$T
 if [ "${FM_TEARDOWN_GUARD_DONE:-0}" != 1 ]; then
   "$FM_ROOT/bin/fm-guard.sh" || true
@@ -2734,6 +2780,17 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
+# An in-place ship's directory is the durable location of the work itself, so
+# an unreachable directory (an unmounted volume, say) means the landed-work
+# test CANNOT run - refuse rather than closing the record blind. A scratch-copy
+# task tolerates the missing directory because a missing scratch copy has
+# nothing left to protect.
+if [ "$IN_PLACE" -eq 1 ] && [ "$KIND" = ship ] && [ "$FORCE" != "--force" ] && [ ! -d "$WT" ]; then
+  echo "REFUSED: in-place task $ID's project directory is unreachable at $WT (volume unmounted?)." >&2
+  echo "Cannot verify dirty or unlanded work; restore the directory or get explicit OK, then --force." >&2
+  exit 1
+fi
+
 if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   if validate_worktree_teardown_safety; then
     :
@@ -2797,7 +2854,14 @@ fi
 # not by task-worktree cleanup.
 if [ "$KIND" != secondmate ]; then
   conclude_task_no_mistakes_run "$WT"
-  reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
+  if [ "$IN_PLACE" -eq 1 ]; then
+    # The captain's own shells and tools legitimately live in an in-place
+    # directory, so only the task's own temp root is swept; the agent itself
+    # dies with its endpoint below.
+    reap_task_worktree_processes worktree "$TASK_TMP"
+  else
+    reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
+  fi
 fi
 
 # Fix 3 (see script header): sweep remote job workers abandoned by an already
@@ -2823,6 +2887,34 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   fi
   [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
+elif [ "$IN_PLACE" -eq 1 ] && [ "$KIND" != secondmate ]; then
+  # In-place cleanup: there is no scratch copy to return, and the directory is
+  # the captain's real checkout, so nothing here may detach its HEAD, reset it,
+  # or delete whatever branch happens to be checked out. Only the task's own
+  # per-task hook files are removed, and the task branch is deleted only when
+  # it is provably contained in the checked-out branch (the state an approved
+  # local merge leaves behind) and is not itself checked out; anything else is
+  # left in place with a note rather than touched.
+  if [ -d "$WT" ]; then
+    rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
+      "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
+    in_place_branch="fm/$ID"
+    in_place_cur=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
+    if git -C "$WT" rev-parse --verify --quiet "refs/heads/$in_place_branch" >/dev/null; then
+      if [ "$in_place_cur" = "$in_place_branch" ]; then
+        echo "note: task branch $in_place_branch is still checked out in $WT; leaving it for the captain" >&2
+      elif git -C "$WT" merge-base --is-ancestor "$in_place_branch" HEAD 2>/dev/null; then
+        git -C "$WT" branch -d "$in_place_branch" >/dev/null 2>&1 \
+          || echo "note: could not delete landed task branch $in_place_branch in $WT; leaving it in place" >&2
+      else
+        echo "note: task branch $in_place_branch is not contained in the checked-out branch of $WT; leaving it in place" >&2
+      fi
+    fi
+    if [ "$KIND" = scout ] \
+       && [ -n "$(git -C "$WT" status --porcelain 2>/dev/null | head -1)" ]; then
+      echo "warning: in-place scout $ID left uncommitted changes in $WT; nothing was discarded - review them by hand" >&2
+    fi
+  fi
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
   if [ "$branch" != "HEAD" ]; then
