@@ -480,7 +480,7 @@ This directory, including everything gitignored in it, is the captain's product;
 If they do not, STOP - do not branch or commit - append \`blocked: not launched in the declared project directory\` to the status file and stop.
 
 1. First action: inspect \`git status\`. Untracked and gitignored files are normal here and do not block landing or cleanup; uncommitted tracked changes still block completion. If uncommitted changes to TRACKED files that you did not create are present, STOP - they may be the captain's own work in progress - and append \`blocked: project directory has pre-existing uncommitted tracked changes\` to the status file.
-2. Check out the default branch if the directory is not already on it, then create your branch: \`git checkout -b fm/$ID\`$SETUP2
+2. If the directory is not on the default branch, switch with \`git checkout --no-overwrite-ignore <default-branch>\`, substituting the actual default branch name. If checkout fails, including an ignored-file collision, STOP, append \`blocked: protected default-branch checkout failed\` to the status file, and report the collision or failure to firstmate; do not force the checkout or remove the conflicting files. Once safely on the default branch, create your branch: \`git checkout -b fm/$ID\`$SETUP2
 EOF
 # shellcheck disable=SC2016  # single quotes are deliberate: the backtick-wrapped git commands are literal brief text for the reading agent.
 SHIP_RULE2='2. Stay inside this directory; modify nothing outside it. NEVER run `git clean` or `git reset --hard`, delete untracked files, or create worktrees or clones of this repo: gitignored content here is the captain'\''s product data.'

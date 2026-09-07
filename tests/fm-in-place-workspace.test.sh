@@ -747,10 +747,26 @@ test_in_place_scout_tracked_changes() {
   pass "in-place scouts refuse tracked edits, allow untracked files and force, and isolated scouts keep their exemption"
 }
 
+replay_test_close_marker() {
+  FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" FM_DATA_OVERRIDE="$1/data" bash -c '
+    . "$1/bin/fm-wake-lib.sh"
+    . "$1/bin/fm-tasks-axi-lib.sh"
+    . "$1/bin/fm-backlog-transition-lib.sh"
+    fm_backlog_close_marker_replay "$2/state" "$2/state/$3.backlog-close" "$2/data"
+  ' _ "$ROOT" "$1" "$2"
+}
+
+add_test_in_flight_item() {
+  printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$1/data/backlog.md"
+  tasks-axi add "$2" 'Teardown marker regression' --kind ship --file "$1/data/backlog.md" >/dev/null || fail "could not add marker fixture"
+  tasks-axi start "$2" --file "$1/data/backlog.md" >/dev/null || fail "could not start marker fixture"
+}
+
 test_direct_teardown_retains_unconfirmed_endpoint() {
-  local out mode
+  local out mode real_tasks
   make_teardown_case endpoint-retained endpoint-retained
   run_merge_local "$W_HOME" endpoint-retained >/dev/null || fail "could not land endpoint fixture"
+  add_test_in_flight_item "$W_HOME" endpoint-retained
   mv "$W_FAKEBIN/tmux" "$W_FAKEBIN/tmux-base"
   cat > "$W_FAKEBIN/tmux" <<'SH'
 #!/usr/bin/env bash
@@ -773,10 +789,27 @@ SH
       && fail "teardown released a $mode endpoint"
     assert_contains "$out" "endpoint termination" "teardown did not refuse unconfirmed termination"
     assert_present "$W_HOME/state/endpoint-retained.meta" "teardown released directory ownership"
+    assert_absent "$W_HOME/state/endpoint-retained.backlog-close" "unconfirmed termination published a replayable close marker"
+    replay_test_close_marker "$W_HOME" endpoint-retained || fail "recovery failed without a close marker"
+    assert_present "$W_HOME/state/endpoint-retained.meta" "recovery released a live directory's ownership"
+    [ "$(tasks-axi show endpoint-retained --file "$W_HOME/data/backlog.md" | sed -n 's/^  state: *//p' | head -1)" = in_flight ] \
+      || fail "recovery closed a live worker's backlog item"
   done
-  out=$(FM_TEST_ENDPOINT_MODE=gone run_teardown "$W_HOME" "$W_FAKEBIN" endpoint-retained) || fail "confirmed absence could not complete teardown: $out"
+  real_tasks=$(command -v tasks-axi)
+  cat > "$W_FAKEBIN/tasks-axi" <<SH
+#!/usr/bin/env bash
+[ "\${1:-}" != done ] || exit 1
+exec "$real_tasks" "\$@"
+SH
+  chmod +x "$W_FAKEBIN/tasks-axi"
+  out=$(FM_TEST_ENDPOINT_MODE=gone run_teardown "$W_HOME" "$W_FAKEBIN" endpoint-retained) && fail "failing backlog close reported success"
   assert_absent "$W_HOME/state/endpoint-retained.meta" "confirmed absence did not release ownership"
-  pass "direct teardown retains ownership on live and unreadable endpoints, including under force"
+  assert_present "$W_HOME/state/endpoint-retained.backlog-close" "confirmed termination lost its replayable close marker"
+  replay_test_close_marker "$W_HOME" endpoint-retained || fail "recovery failed after confirmed termination"
+  assert_absent "$W_HOME/state/endpoint-retained.backlog-close" "recovery left a completed close marker"
+  [ "$(tasks-axi show endpoint-retained --file "$W_HOME/data/backlog.md" | sed -n 's/^  state: *//p' | head -1)" = done ] \
+    || fail "recovery did not finish the confirmed worker's backlog close"
+  pass "termination must be confirmed before publishing a close marker that recovery can replay"
 }
 
 test_cmux_teardown_confirms_child_home_close() {
@@ -867,6 +900,48 @@ SH
   pass "Zellij termination requires a valid successful inventory omitting the exact pane"
 }
 
+test_isolated_close_marker_precedes_scratch_cleanup() {
+  local out wt
+  make_teardown_case isolated-marker isolated-marker
+  git -C "$W_PROJ" checkout -q main
+  wt="$TMP_ROOT/isolated-marker/scratch"
+  git -C "$W_PROJ" worktree add -q "$wt" fm/isolated-marker
+  fm_write_meta "$W_HOME/state/isolated-marker.meta" "window=firstmate:fm-isolated-marker" \
+    "endpoint_task_id=isolated-marker" "worktree=$wt" "project=$W_PROJ" "kind=ship" \
+    "mode=local-only" "spawn_gen=isolated-marker-test"
+  add_test_in_flight_item "$W_HOME" isolated-marker
+  run_merge_local "$W_HOME" isolated-marker >/dev/null || fail "could not land isolated fixture"
+  cat > "$W_FAKEBIN/treehouse" <<SH
+#!/usr/bin/env bash
+[ ! -f "$W_HOME/state/isolated-marker.backlog-close" ] || touch "$W_HOME/marker-before-return"
+exit 17
+SH
+  chmod +x "$W_FAKEBIN/treehouse"
+  out=$(run_teardown "$W_HOME" "$W_FAKEBIN" isolated-marker) && fail "failed scratch cleanup reported success"
+  assert_present "$W_HOME/marker-before-return" "isolated cleanup changed its marker publication ordering"
+  assert_present "$W_HOME/state/isolated-marker.backlog-close" "isolated cleanup lost recovery evidence"
+  pass "isolated tasks still publish the recovery marker before scratch cleanup"
+}
+
+test_generated_in_place_checkout_instructions() {
+  local rec file out
+  rec=$(make_world protected-setup '[local-only +in-place]')
+  read_world "$rec"
+  scaffold_brief "$W_HOME" protected-ship --mode local-only --in-place
+  scaffold_brief "$W_HOME" protected-promotion --scout --in-place
+  fm_write_meta "$W_HOME/state/protected-promotion.meta" "kind=scout" "workspace=in-place" \
+    "worktree=$W_PROJ" "project=$W_PROJ" "window=firstmate:fm-protected-promotion"
+  out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$W_HOME" "$ROOT/bin/fm-promote.sh" protected-promotion --mode local-only --yolo off) \
+    || fail "could not generate in-place promotion instructions: $out"
+  for file in "$W_HOME/data/protected-ship/brief.md" "$W_HOME/data/protected-promotion/ship-instructions.md"; do
+    assert_grep 'git checkout --no-overwrite-ignore <default-branch>' "$file" "generated setup omitted the protected checkout command"
+    assert_grep 'If checkout fails, including an ignored-file collision, STOP' "$file" "generated setup omitted the collision refusal"
+    assert_grep 'blocked: protected default-branch checkout failed' "$file" "generated setup omitted its blocked status"
+    assert_grep 'report the collision or failure to firstmate' "$file" "generated setup omitted reporting the collision"
+  done
+  pass "generated ship and promotion setup instruct protected checkout with stop-and-report on collisions"
+}
+
 # --- claude trust -----------------------------------------------------------
 
 test_claude_trust_in_place_scope() {
@@ -924,3 +999,6 @@ test_direct_teardown_retains_unconfirmed_endpoint
 test_cmux_teardown_confirms_child_home_close
 
 test_zellij_endpoint_confirmation
+
+test_isolated_close_marker_precedes_scratch_cleanup
+test_generated_in_place_checkout_instructions

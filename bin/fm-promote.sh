@@ -174,7 +174,7 @@ if [ "$PROMOTE_WORKSPACE" = in-place ]; then
   IFS= read -r -d '' PROMOTION_SETUP_STEPS <<EOF || true
 1. **Verify location before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the REAL project directory you were launched in. If either does not, stop and escalate to firstmate.
 2. This directory, including everything gitignored in it, is the captain's product; there is no scratch copy. NEVER run \`git clean\` or \`git reset --hard\`, and never delete untracked files.
-3. Inspect \`git status\`; your scout contract left the tree as you found it, so report any uncommitted tracked changes to firstmate before proceeding. Then check out the default branch if you are not on it and create your branch: \`git checkout -b fm/$ID\`.
+3. Inspect \`git status\`; your scout contract left the tree as you found it, so report any uncommitted tracked changes to firstmate before proceeding. If you are not on the default branch, switch with \`git checkout --no-overwrite-ignore <default-branch>\`, substituting the actual default branch name. If checkout fails, including an ignored-file collision, STOP, append \`blocked: protected default-branch checkout failed\` to the status file, and report the collision or failure to firstmate; do not force the checkout or remove the conflicting files. Once safely on the default branch, create your branch: \`git checkout -b fm/$ID\`.
 4. Implement only the intended fix changes on that branch.
 5. If you reproduced a bug, turn that reproduction into a regression test.
 EOF

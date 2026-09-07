@@ -12,7 +12,8 @@
 # record being removed, the intended transition is recorded in
 # state/<id>.backlog-close first, so a process killed between the halves leaves
 # the next session start enough to finish it; a landed transition removes that
-# record. A transition that fails is fatal and loud, preserves its pending-close
+# record. In-place tasks publish that marker only after confirmed endpoint
+# termination. A transition that fails is fatal and loud, preserves its pending-close
 # record, and is retried by the next session start. The transition is skipped on a
 # config/backlog-backend=manual home and in a home that keeps no
 # data/backlog.md; those cases print the manual follow-up. An automatic-backend
@@ -2873,6 +2874,13 @@ if [ "$BACKEND" = herdr ]; then
   TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
 fi
 
+teardown_record_pending_close() {
+  fm_backlog_close_marker_write "$STATE" "$ID" "$DATA" "$META_SPAWN_GEN" \
+    "${BACKLOG_TRANSITION_FLAGS[@]+"${BACKLOG_TRANSITION_FLAGS[@]}"}" \
+    "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" \
+    || { echo "error: the pending backlog $BACKLOG_TRANSITION for $ID could not be recorded ($FM_BACKLOG_TRANSITION_ERROR); retaining every durable task record" >&2; exit 1; }
+}
+
 BACKLOG_CLOSED=0
 BACKLOG_TRANSITION=$TEARDOWN_BACKLOG_TRANSITION
 BACKLOG_TRANSITION_FLAGS=()
@@ -2885,10 +2893,9 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
   }
   BACKLOG_CLOSED=1
   META_SPAWN_GEN=$TEARDOWN_META_SPAWN_GEN
-  fm_backlog_close_marker_write "$STATE" "$ID" "$DATA" "$META_SPAWN_GEN" \
-    "${BACKLOG_TRANSITION_FLAGS[@]+"${BACKLOG_TRANSITION_FLAGS[@]}"}" \
-    "${BACKLOG_DONE_ARGS[@]+"${BACKLOG_DONE_ARGS[@]}"}" \
-    || { echo "error: the pending backlog $BACKLOG_TRANSITION for $ID could not be recorded ($FM_BACKLOG_TRANSITION_ERROR); retaining every durable task record" >&2; exit 1; }
+  if [ "$IN_PLACE" -eq 0 ]; then
+    teardown_record_pending_close
+  fi
 else
   if [ "$CLEANUP_RECOVERY" = orca ]; then
     BACKLOG_SKIP_REASON="Orca cleanup recovery is not a launched backlog worker"
@@ -3060,6 +3067,9 @@ fi
 if [ "$IN_PLACE" -eq 1 ] && ! fm_backend_endpoint_confirmed_gone "$BACKEND" "$T" "fm-$ID"; then
   echo "REFUSED: endpoint termination for in-place task $ID is not confirmed; preserving directory ownership records" >&2
   exit 1
+fi
+if [ "$IN_PLACE" -eq 1 ] && [ "$BACKLOG_CLOSED" = 1 ]; then
+  teardown_record_pending_close
 fi
 if [ "$KIND" != secondmate ]; then
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
